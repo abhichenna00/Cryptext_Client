@@ -3,30 +3,13 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useParams } from 'react-router-dom'
+import { profileApi, conversationsApi } from '../api'
+import type { Message } from '../api'
 import { useWebSocket, WebSocketMessage } from '../hooks/useWebSocket'
 import { ArrowLeft, ArrowDown, Send } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import '../styles/DirectMessagePage.css'
-
-interface Message {
-  id: string
-  conversation_id: string
-  sender_id: string
-  content: string
-  timestamp: number
-}
-
-interface ConversationResult {
-  success: boolean
-  conversation_id: string | null
-  error: string | null
-}
-
-interface MessageResult {
-  success: boolean
-  error: string | null
-}
 
 interface ProfileInfo {
   user_id: string
@@ -51,7 +34,6 @@ const STATUS_LABELS: Record<Status, string> = {
   offline: 'Offline',
 }
 
-// Avatar component with status
 interface AvatarProps {
   src?: string | null
   fallback: string
@@ -62,12 +44,7 @@ interface AvatarProps {
 }
 
 function Avatar({ src, fallback, size = 'md', status, showStatus = false, className = '' }: AvatarProps) {
-  const sizeClasses = {
-    sm: 'avatar-sm',
-    md: 'avatar-md',
-    lg: 'avatar-lg'
-  }
-
+  const sizeClasses = { sm: 'avatar-sm', md: 'avatar-md', lg: 'avatar-lg' }
   const statusColor = STATUS_COLORS[(status as Status) || 'offline']
 
   return (
@@ -78,16 +55,12 @@ function Avatar({ src, fallback, size = 'md', status, showStatus = false, classN
         <span className="avatar-fallback">{fallback.charAt(0).toUpperCase()}</span>
       )}
       {showStatus && (
-        <div
-          className="status-indicator"
-          style={{ backgroundColor: statusColor }}
-        />
+        <div className="status-indicator" style={{ backgroundColor: statusColor }} />
       )}
     </div>
   )
 }
 
-// Date separator component
 function DateSeparator({ timestamp }: { timestamp: number }) {
   const formatDate = (ts: number) => {
     const date = new Date(ts)
@@ -95,17 +68,9 @@ function DateSeparator({ timestamp }: { timestamp: number }) {
     const yesterday = new Date(today)
     yesterday.setDate(yesterday.getDate() - 1)
 
-    if (date.toDateString() === today.toDateString()) {
-      return 'Today'
-    } else if (date.toDateString() === yesterday.toDateString()) {
-      return 'Yesterday'
-    } else {
-      return date.toLocaleDateString('en-US', {
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric'
-      })
-    }
+    if (date.toDateString() === today.toDateString()) return 'Today'
+    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday'
+    return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
   }
 
   return (
@@ -140,39 +105,22 @@ export default function DirectMessagePage() {
   const userIdRef = useRef<string | null>(null)
   const isAtBottomRef = useRef(true)
 
-  // Keep refs in sync
-  useEffect(() => {
-    conversationIdRef.current = conversationId
-  }, [conversationId])
+  useEffect(() => { conversationIdRef.current = conversationId }, [conversationId])
+  useEffect(() => { userIdRef.current = userId }, [userId])
+  useEffect(() => { isAtBottomRef.current = isAtBottom }, [isAtBottom])
 
-  useEffect(() => {
-    userIdRef.current = userId
-  }, [userId])
-
-  useEffect(() => {
-    isAtBottomRef.current = isAtBottom
-  }, [isAtBottom])
-
-  // Handle incoming WebSocket messages
   const handleWsMessage = useCallback((data: WebSocketMessage) => {
     if (data.action === 'new_message') {
       const newMsg = data.message as Message
-
-      // Only process messages for this conversation
       if (newMsg.conversation_id !== conversationIdRef.current) return
 
       setMessages((prev) => {
-        if (prev.some((m) => m.id === newMsg.id)) {
-          return prev
-        }
+        if (prev.some((m) => m.id === newMsg.id)) return prev
         return [...prev, newMsg]
       })
 
-      // Mark as read if from partner
       if (newMsg.sender_id !== userIdRef.current && conversationIdRef.current) {
-        invoke('mark_conversation_read', {
-          conversationId: conversationIdRef.current,
-        })
+        conversationsApi.markRead(conversationIdRef.current)
       }
 
       if (isAtBottomRef.current) {
@@ -181,19 +129,13 @@ export default function DirectMessagePage() {
     }
   }, [])
 
-  // Connect to WebSocket
-  const { isConnected } = useWebSocket({
-    onMessage: handleWsMessage,
-  })
+  const { isConnected } = useWebSocket({ onMessage: handleWsMessage })
 
-  useEffect(() => {
-    initializeChat()
-  }, [friendId])
+  useEffect(() => { initializeChat() }, [friendId])
 
   useEffect(() => {
     if (messages.length > previousMessageCount.current) {
       const newCount = messages.length - previousMessageCount.current
-
       if (!isAtBottom && previousMessageCount.current > 0) {
         setNewMessageCount(prev => prev + newCount)
       }
@@ -203,15 +145,10 @@ export default function DirectMessagePage() {
 
   const handleScroll = useCallback(() => {
     if (!messagesContainerRef.current) return
-
     const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current
     const atBottom = scrollHeight - scrollTop - clientHeight < 50
-
     setIsAtBottom(atBottom)
-
-    if (atBottom) {
-      setNewMessageCount(0)
-    }
+    if (atBottom) setNewMessageCount(0)
   }, [])
 
   const scrollToBottom = () => {
@@ -227,6 +164,7 @@ export default function DirectMessagePage() {
     }
 
     try {
+      // get_user_id stays as a Tauri command (auth lives in Rust)
       const id = await invoke<string | null>('get_user_id')
       if (!id) {
         navigate('/')
@@ -236,10 +174,7 @@ export default function DirectMessagePage() {
 
       await loadProfiles(id)
 
-      const result = await invoke<ConversationResult>('get_or_create_dm_conversation', {
-        otherUserId: friendId,
-      })
-
+      const result = await conversationsApi.getOrCreateDm(friendId)
       if (!result.success || !result.conversation_id) {
         setError(result.error || 'Failed to load conversation')
         setLoading(false)
@@ -248,10 +183,7 @@ export default function DirectMessagePage() {
 
       setConversationId(result.conversation_id)
       await loadMessages(result.conversation_id)
-
-      await invoke('mark_conversation_read', {
-        conversationId: result.conversation_id,
-      })
+      await conversationsApi.markRead(result.conversation_id)
     } catch (err) {
       console.error('Failed to initialize chat:', err)
       setError(err instanceof Error ? err.message : String(err))
@@ -262,18 +194,11 @@ export default function DirectMessagePage() {
 
   const loadProfiles = async (currentUserId: string) => {
     if (!friendId) return
-
     try {
-      const profiles = await invoke<ProfileInfo[]>('get_profiles_by_ids', {
-        userIds: [friendId, currentUserId],
-      })
-
+      const profiles = await profileApi.getByIds([friendId, currentUserId])
       profiles.forEach(profile => {
-        if (profile.user_id === friendId) {
-          setPartnerProfile(profile)
-        } else if (profile.user_id === currentUserId) {
-          setMyProfile(profile)
-        }
+        if (profile.user_id === friendId) setPartnerProfile(profile)
+        else if (profile.user_id === currentUserId) setMyProfile(profile)
       })
     } catch (err) {
       console.error('Failed to load profiles:', err)
@@ -283,12 +208,9 @@ export default function DirectMessagePage() {
 
   const loadMessages = async (convId: string) => {
     try {
-      const data = await invoke<Message[]>('get_messages', {
-        conversationId: convId,
-      })
+      const data = await conversationsApi.getMessages(convId)
       setMessages(data)
       setError(null)
-
       setTimeout(() => scrollToBottom(), 100)
     } catch (err) {
       console.error('Failed to load messages:', err)
@@ -316,11 +238,7 @@ export default function DirectMessagePage() {
     setTimeout(() => scrollToBottom(), 100)
 
     try {
-      const result = await invoke<MessageResult>('send_message', {
-        conversationId,
-        content: messageContent,
-      })
-
+      const result = await conversationsApi.sendMessage(conversationId, messageContent)
       if (!result.success) {
         setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id))
         setError(result.error || 'Failed to send message')
@@ -338,75 +256,43 @@ export default function DirectMessagePage() {
     }
   }
 
-  const formatTime = (timestamp: number) => {
-    const date = new Date(timestamp)
-    return date.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true
-    })
-  }
+  const formatTime = (timestamp: number) =>
+    new Date(timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
 
-  const getProfile = (senderId: string): ProfileInfo | null => {
-    if (senderId === userId) return myProfile
-    return partnerProfile
-  }
+  const getProfile = (senderId: string): ProfileInfo | null =>
+    senderId === userId ? myProfile : partnerProfile
 
   const isNewDay = (msg: Message, index: number): boolean => {
     if (index === 0) return true
-
     const prevMsg = messages[index - 1]
-    const prevDate = new Date(prevMsg.timestamp).toDateString()
-    const currDate = new Date(msg.timestamp).toDateString()
-
-    return prevDate !== currDate
+    return new Date(prevMsg.timestamp).toDateString() !== new Date(msg.timestamp).toDateString()
   }
 
   const shouldShowHeader = (msg: Message, index: number): boolean => {
     if (isNewDay(msg, index)) return true
-
     const prevMsg = messages[index - 1]
     if (prevMsg.sender_id !== msg.sender_id) return true
-
-    const timeDiff = msg.timestamp - prevMsg.timestamp
-    if (timeDiff > 5 * 60 * 1000) return true
-
-    return false
+    return msg.timestamp - prevMsg.timestamp > 5 * 60 * 1000
   }
 
   const partnerStatus = (partnerProfile?.status as Status) || 'offline'
 
   if (loading) {
-    return (
-      <div className="dm-page">
-        <div className="dm-loading">Loading...</div>
-      </div>
-    )
+    return <div className="dm-page"><div className="dm-loading">Loading...</div></div>
   }
 
   if (!friendId) {
-    return (
-      <div className="dm-page">
-        <div className="dm-error">Invalid conversation</div>
-      </div>
-    )
+    return <div className="dm-page"><div className="dm-error">Invalid conversation</div></div>
   }
 
   return (
     <div className="dm-page">
-      {/* Header */}
       <header className="dm-header">
         <Button variant="ghost" size="icon" onClick={() => navigate('/home')}>
           <ArrowLeft className="h-4 w-4" />
         </Button>
         <div className="dm-header-info">
-          <Avatar
-            src={partnerProfile?.avatar_url}
-            fallback={partnerProfile?.nickname || 'U'}
-            size="md"
-            status={partnerProfile?.status}
-            showStatus
-          />
+          <Avatar src={partnerProfile?.avatar_url} fallback={partnerProfile?.nickname || 'U'} size="md" status={partnerProfile?.status} showStatus />
           <div className="dm-header-details">
             <h1>{partnerProfile?.nickname || 'Unknown User'}</h1>
             <span className="dm-header-status">
@@ -417,29 +303,13 @@ export default function DirectMessagePage() {
         </div>
       </header>
 
-      {/* Error banner */}
-      {error && (
-        <div className="dm-error-banner">
-          {error}
-        </div>
-      )}
+      {error && <div className="dm-error-banner">{error}</div>}
 
-      {/* Messages */}
-      <main
-        ref={messagesContainerRef}
-        onScroll={handleScroll}
-        className="dm-messages"
-      >
+      <main ref={messagesContainerRef} onScroll={handleScroll} className="dm-messages">
         {messages.length === 0 ? (
           <div className="dm-messages-empty">
             <div className="dm-empty-avatar">
-              <Avatar
-                src={partnerProfile?.avatar_url}
-                fallback={partnerProfile?.nickname || 'U'}
-                size="lg"
-                status={partnerProfile?.status}
-                showStatus
-              />
+              <Avatar src={partnerProfile?.avatar_url} fallback={partnerProfile?.nickname || 'U'} size="lg" status={partnerProfile?.status} showStatus />
             </div>
             <h2>{partnerProfile?.nickname || 'Unknown User'}</h2>
             <p>This is the beginning of your direct message history with <strong>{partnerProfile?.nickname}</strong>.</p>
@@ -452,20 +322,11 @@ export default function DirectMessagePage() {
 
             return (
               <div key={msg.id}>
-                {showDateSeparator && (
-                  <DateSeparator timestamp={msg.timestamp} />
-                )}
-                <div
-                  className={`dm-message ${showHeader ? 'dm-message-with-header' : 'dm-message-grouped'}`}
-                >
+                {showDateSeparator && <DateSeparator timestamp={msg.timestamp} />}
+                <div className={`dm-message ${showHeader ? 'dm-message-with-header' : 'dm-message-grouped'}`}>
                   {showHeader ? (
                     <>
-                      <Avatar
-                        src={profile?.avatar_url}
-                        fallback={profile?.nickname || 'U'}
-                        size="md"
-                        className="dm-message-avatar"
-                      />
+                      <Avatar src={profile?.avatar_url} fallback={profile?.nickname || 'U'} size="md" className="dm-message-avatar" />
                       <div className="dm-message-body">
                         <div className="dm-message-header">
                           <span className="dm-message-author">{profile?.nickname || 'Unknown'}</span>
@@ -492,17 +353,13 @@ export default function DirectMessagePage() {
         <div ref={messagesEndRef} />
       </main>
 
-      {/* New messages alert */}
       {newMessageCount > 0 && (
         <div className="dm-new-messages" onClick={scrollToBottom}>
-          <span>
-            {newMessageCount} new message{newMessageCount > 1 ? 's' : ''} below
-          </span>
+          <span>{newMessageCount} new message{newMessageCount > 1 ? 's' : ''} below</span>
           <ArrowDown className="h-4 w-4" />
         </div>
       )}
 
-      {/* Footer - Input */}
       <footer className="dm-input-container">
         <Input
           type="text"
@@ -518,12 +375,7 @@ export default function DirectMessagePage() {
           className="dm-input"
           disabled={sending}
         />
-        <Button
-          onClick={sendMessage}
-          size="icon"
-          disabled={sending || !newMessage.trim()}
-          className="dm-send-button"
-        >
+        <Button onClick={sendMessage} size="icon" disabled={sending || !newMessage.trim()} className="dm-send-button">
           <Send className="h-4 w-4" />
         </Button>
       </footer>

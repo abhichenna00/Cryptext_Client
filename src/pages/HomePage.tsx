@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { invoke } from '@tauri-apps/api/core'
+import { profileApi, friendsApi, conversationsApi } from '../api'
+import type { FriendWithProfile, FriendRequest, ConversationWithDetails } from '../api'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Button } from '../components/ui/button'
@@ -20,57 +21,6 @@ import {
 import { MessageCircle, MoreVertical, Plus, Check, X } from 'lucide-react'
 import '../styles/HomePage.css'
 
-interface FriendWithProfile {
-  friend_id: string
-  username: string
-  nickname: string
-  created_at: string
-  is_online?: boolean
-  avatar_url?: string | null
-  status?: string | null
-}
-
-interface FriendRequestWithProfile {
-  id: string
-  from_user_id: string
-  to_user_id: string
-  status: string
-  created_at: string
-  from_username?: string
-  from_nickname?: string
-  from_avatar_url?: string | null
-  from_status?: string | null
-  to_username?: string
-  to_nickname?: string
-  to_avatar_url?: string | null
-  to_status?: string | null
-}
-
-interface ConversationWithDetails {
-  conversation_id: string
-  conversation_type: string
-  name: string | null
-  other_user_id: string | null
-  other_user_nickname: string | null
-  other_user_avatar_url?: string | null
-  other_user_status?: string | null
-  last_message: string | null
-  last_message_time: number | null
-  has_unread: boolean
-}
-
-interface ProfileInfo {
-  user_id: string
-  nickname: string
-  avatar_url: string | null
-  status: string | null
-}
-
-interface FriendsResult {
-  success: boolean
-  error?: string
-}
-
 type FriendsTab = 'online' | 'all' | 'pending'
 type Status = 'online' | 'idle' | 'dnd' | 'offline'
 
@@ -81,7 +31,6 @@ const STATUS_COLORS: Record<Status, string> = {
   offline: '#6b7280',
 }
 
-// Avatar component with status indicator
 interface AvatarProps {
   src?: string | null
   fallback: string
@@ -92,12 +41,7 @@ interface AvatarProps {
 }
 
 function Avatar({ src, fallback, size = 'md', status, showStatus = false, className = '' }: AvatarProps) {
-  const sizeClasses = {
-    sm: 'avatar-sm',
-    md: 'avatar-md',
-    lg: 'avatar-lg'
-  }
-
+  const sizeClasses = { sm: 'avatar-sm', md: 'avatar-md', lg: 'avatar-lg' }
   const statusColor = STATUS_COLORS[(status as Status) || 'offline']
 
   return (
@@ -108,10 +52,7 @@ function Avatar({ src, fallback, size = 'md', status, showStatus = false, classN
         <span className="avatar-fallback">{fallback.charAt(0).toUpperCase()}</span>
       )}
       {showStatus && (
-        <div 
-          className="status-indicator" 
-          style={{ backgroundColor: statusColor }}
-        />
+        <div className="status-indicator" style={{ backgroundColor: statusColor }} />
       )}
     </div>
   )
@@ -122,15 +63,14 @@ export default function HomePage() {
   const [username, setUsername] = useState<string>('')
   const [friends, setFriends] = useState<FriendWithProfile[]>([])
   const [recentChats, setRecentChats] = useState<ConversationWithDetails[]>([])
-  const [incomingRequests, setIncomingRequests] = useState<FriendRequestWithProfile[]>([])
-  const [outgoingRequests, setOutgoingRequests] = useState<FriendRequestWithProfile[]>([])
+  const [incomingRequests, setIncomingRequests] = useState<FriendRequest[]>([])
+  const [outgoingRequests, setOutgoingRequests] = useState<FriendRequest[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [friendsTab, setFriendsTab] = useState<FriendsTab>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
 
-  // Add Friend Dialog state
   const [searchUsername, setSearchUsername] = useState('')
   const [addFriendLoading, setAddFriendLoading] = useState(false)
   const [addFriendError, setAddFriendError] = useState<string | null>(null)
@@ -142,88 +82,19 @@ export default function HomePage() {
 
   const loadData = async () => {
     try {
-      // Load profile
-      const profile = await invoke<{ username: string } | null>('get_profile')
-      if (profile) {
-        setUsername(profile.username)
-      }
-
-      // Load friends
-      const friendsData = await invoke<FriendWithProfile[]>('get_friends')
-
-      // Load friend requests
-      const [incoming, outgoing] = await Promise.all([
-        invoke<FriendRequestWithProfile[]>('get_incoming_friend_requests'),
-        invoke<FriendRequestWithProfile[]>('get_outgoing_friend_requests'),
+      const [profile, friendsData, incoming, outgoing, conversations] = await Promise.all([
+        profileApi.get(),
+        friendsApi.getAll(),
+        friendsApi.getIncomingRequests(),
+        friendsApi.getOutgoingRequests(),
+        conversationsApi.getAll().catch(() => [] as ConversationWithDetails[]),
       ])
 
-      // Load recent conversations
-      let conversations: ConversationWithDetails[] = []
-      try {
-        conversations = await invoke<ConversationWithDetails[]>('get_conversations')
-      } catch (convErr) {
-        console.log('No conversations yet or failed to load:', convErr)
-      }
-
-      // Collect all unique user IDs that need profile fetching
-      const userIds = new Set<string>()
-      
-      friendsData.forEach(f => userIds.add(f.friend_id))
-      incoming.forEach(r => userIds.add(r.from_user_id))
-      outgoing.forEach(r => userIds.add(r.to_user_id))
-      conversations.forEach(c => {
-        if (c.other_user_id) userIds.add(c.other_user_id)
-      })
-
-      // Fetch all profiles at once
-      let profilesMap = new Map<string, ProfileInfo>()
-      if (userIds.size > 0) {
-        try {
-          const profiles = await invoke<ProfileInfo[]>('get_profiles_by_ids', {
-            userIds: Array.from(userIds)
-          })
-          profiles.forEach(p => profilesMap.set(p.user_id, p))
-        } catch (err) {
-          console.error('Failed to fetch profiles:', err)
-        }
-      }
-
-      // Merge profile data into friends
-      const friendsWithProfiles = friendsData.map(f => ({
-        ...f,
-        avatar_url: profilesMap.get(f.friend_id)?.avatar_url || null,
-        status: profilesMap.get(f.friend_id)?.status || null,
-      }))
-
-      // Merge profile data into incoming requests
-      const incomingWithProfiles = incoming.map(r => ({
-        ...r,
-        from_avatar_url: profilesMap.get(r.from_user_id)?.avatar_url || null,
-        from_status: profilesMap.get(r.from_user_id)?.status || null,
-      }))
-
-      // Merge profile data into outgoing requests
-      const outgoingWithProfiles = outgoing.map(r => ({
-        ...r,
-        to_avatar_url: profilesMap.get(r.to_user_id)?.avatar_url || null,
-        to_status: profilesMap.get(r.to_user_id)?.status || null,
-      }))
-
-      // Merge profile data into conversations
-      const conversationsWithProfiles = conversations.map(c => ({
-        ...c,
-        other_user_avatar_url: c.other_user_id 
-          ? profilesMap.get(c.other_user_id)?.avatar_url || null 
-          : null,
-        other_user_status: c.other_user_id
-          ? profilesMap.get(c.other_user_id)?.status || null
-          : null,
-      }))
-
-      setFriends(friendsWithProfiles)
-      setIncomingRequests(incomingWithProfiles)
-      setOutgoingRequests(outgoingWithProfiles)
-      setRecentChats(conversationsWithProfiles)
+      if (profile) setUsername(profile.username)
+      setFriends(friendsData)
+      setIncomingRequests(incoming)
+      setOutgoingRequests(outgoing)
+      setRecentChats(conversations)
     } catch (err) {
       console.error('Failed to load data:', err)
       setError(err instanceof Error ? err.message : String(err))
@@ -232,71 +103,48 @@ export default function HomePage() {
     }
   }
 
-  // Filter friends based on search query and tab
   const filteredFriends = useMemo(() => {
     let filtered = friends
-
-    // Filter by tab - now using actual status
     if (friendsTab === 'online') {
-      filtered = filtered.filter((friend) => 
-        friend.status === 'online' || friend.status === 'idle' || friend.status === 'dnd'
+      filtered = filtered.filter(f =>
+        f.status === 'online' || f.status === 'idle' || f.status === 'dnd'
       )
     }
-
-    // Filter by search query
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase()
       filtered = filtered.filter(
-        (friend) =>
-          friend.nickname.toLowerCase().includes(query) ||
-          friend.username.toLowerCase().includes(query)
+        f => f.nickname.toLowerCase().includes(query) || f.username.toLowerCase().includes(query)
       )
     }
-
     return filtered
   }, [friends, searchQuery, friendsTab])
 
-  // Count online friends (online, idle, or dnd - not offline/invisible)
-  const onlineFriendsCount = useMemo(() => {
-    return friends.filter((friend) => 
-      friend.status === 'online' || friend.status === 'idle' || friend.status === 'dnd'
-    ).length
-  }, [friends])
+  const onlineFriendsCount = useMemo(() =>
+    friends.filter(f => f.status === 'online' || f.status === 'idle' || f.status === 'dnd').length,
+    [friends]
+  )
 
-  // Total pending requests
   const pendingCount = incomingRequests.length + outgoingRequests.length
-
-  const handleCreateChat = () => {
-    console.log('Create chat clicked')
-  }
 
   const handleSendFriendRequest = async () => {
     if (!searchUsername.trim()) {
       setAddFriendError('Please enter a username')
       return
     }
-
     setAddFriendLoading(true)
     setAddFriendError(null)
     setAddFriendSuccess(null)
-
     try {
-      const result = await invoke<FriendsResult>('send_friend_request', {
-        toUsername: searchUsername.trim(),
-      })
-
+      const result = await friendsApi.sendRequest(searchUsername.trim())
       if (result.success) {
         setAddFriendSuccess(`Friend request sent to ${searchUsername}!`)
         setSearchUsername('')
         loadData()
-        setTimeout(() => {
-          setAddFriendSuccess(null)
-        }, 1500)
+        setTimeout(() => setAddFriendSuccess(null), 1500)
       } else {
         setAddFriendError(result.error || 'Failed to send friend request')
       }
     } catch (err) {
-      console.error('Failed to send friend request:', err)
       setAddFriendError(err instanceof Error ? err.message : String(err))
     } finally {
       setAddFriendLoading(false)
@@ -306,14 +154,10 @@ export default function HomePage() {
   const handleAcceptRequest = async (requestId: string) => {
     setActionLoading(true)
     try {
-      const result = await invoke<FriendsResult>('accept_friend_request', { requestId })
-      if (result.success) {
-        loadData()
-      } else {
-        setError(result.error || 'Failed to accept request')
-      }
+      const result = await friendsApi.acceptRequest(requestId)
+      if (result.success) loadData()
+      else setError(result.error || 'Failed to accept request')
     } catch (err) {
-      console.error('Failed to accept friend request:', err)
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setActionLoading(false)
@@ -323,14 +167,10 @@ export default function HomePage() {
   const handleDeclineRequest = async (requestId: string) => {
     setActionLoading(true)
     try {
-      const result = await invoke<FriendsResult>('decline_friend_request', { requestId })
-      if (result.success) {
-        loadData()
-      } else {
-        setError(result.error || 'Failed to decline request')
-      }
+      const result = await friendsApi.declineRequest(requestId)
+      if (result.success) loadData()
+      else setError(result.error || 'Failed to decline request')
     } catch (err) {
-      console.error('Failed to decline friend request:', err)
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setActionLoading(false)
@@ -340,14 +180,10 @@ export default function HomePage() {
   const handleCancelRequest = async (requestId: string) => {
     setActionLoading(true)
     try {
-      const result = await invoke<FriendsResult>('cancel_friend_request', { requestId })
-      if (result.success) {
-        loadData()
-      } else {
-        setError(result.error || 'Failed to cancel request')
-      }
+      const result = await friendsApi.cancelRequest(requestId)
+      if (result.success) loadData()
+      else setError(result.error || 'Failed to cancel request')
     } catch (err) {
-      console.error('Failed to cancel friend request:', err)
       setError(err instanceof Error ? err.message : String(err))
     } finally {
       setActionLoading(false)
@@ -361,18 +197,12 @@ export default function HomePage() {
   }
 
   const getChatDisplayName = (chat: ConversationWithDetails): string => {
-    if (chat.conversation_type === 'direct') {
-      return chat.other_user_nickname || 'Unknown'
-    }
+    if (chat.conversation_type === 'direct') return chat.other_user_nickname || 'Unknown'
     return chat.name || 'Group Chat'
   }
 
   if (loading) {
-    return (
-      <div className="home-page">
-        <div className="home-loading">Loading...</div>
-      </div>
-    )
+    return <div className="home-page"><div className="home-loading">Loading...</div></div>
   }
 
   return (
@@ -386,11 +216,7 @@ export default function HomePage() {
         <div className="recent-chats-panel">
           <div className="panel-header">
             <h2 className="panel-title">Recent Chats</h2>
-            <button
-              className="panel-action-button"
-              onClick={handleCreateChat}
-              title="Create Chat"
-            >
+            <button className="panel-action-button" title="Create Chat">
               <Plus size={16} />
             </button>
           </div>
@@ -432,25 +258,13 @@ export default function HomePage() {
           <div className="panel-header">
             <h2 className="panel-title">Friends</h2>
             <ButtonGroup>
-              <Button
-                variant={friendsTab === 'online' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setFriendsTab('online')}
-              >
+              <Button variant={friendsTab === 'online' ? 'default' : 'outline'} size="sm" onClick={() => setFriendsTab('online')}>
                 Online ({onlineFriendsCount})
               </Button>
-              <Button
-                variant={friendsTab === 'all' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setFriendsTab('all')}
-              >
+              <Button variant={friendsTab === 'all' ? 'default' : 'outline'} size="sm" onClick={() => setFriendsTab('all')}>
                 All ({friends.length})
               </Button>
-              <Button
-                variant={friendsTab === 'pending' ? 'default' : 'outline'}
-                size="sm"
-                onClick={() => setFriendsTab('pending')}
-              >
+              <Button variant={friendsTab === 'pending' ? 'default' : 'outline'} size="sm" onClick={() => setFriendsTab('pending')}>
                 Pending ({pendingCount})
               </Button>
             </ButtonGroup>
@@ -467,14 +281,9 @@ export default function HomePage() {
                     Enter the username of the person you want to add as a friend.
                   </DialogDescription>
                 </DialogHeader>
-                
                 <div className="add-friend-dialog-content">
-                  {addFriendError && (
-                    <p className="add-friend-dialog-error">{addFriendError}</p>
-                  )}
-                  {addFriendSuccess && (
-                    <p className="add-friend-dialog-success">{addFriendSuccess}</p>
-                  )}
+                  {addFriendError && <p className="add-friend-dialog-error">{addFriendError}</p>}
+                  {addFriendSuccess && <p className="add-friend-dialog-success">{addFriendSuccess}</p>}
                   <Input
                     type="text"
                     placeholder="Username"
@@ -484,12 +293,8 @@ export default function HomePage() {
                     disabled={addFriendLoading}
                   />
                 </div>
-
                 <DialogFooter>
-                  <Button
-                    onClick={handleSendFriendRequest}
-                    disabled={addFriendLoading || !searchUsername.trim()}
-                  >
+                  <Button onClick={handleSendFriendRequest} disabled={addFriendLoading || !searchUsername.trim()}>
                     {addFriendLoading ? 'Sending...' : 'Send Request'}
                   </Button>
                 </DialogFooter>
@@ -497,7 +302,6 @@ export default function HomePage() {
             </Dialog>
           </div>
 
-          {/* Search - only show for online/all tabs */}
           {friendsTab !== 'pending' && (
             <div className="home-search">
               <input
@@ -512,48 +316,27 @@ export default function HomePage() {
 
           {error && <p className="home-error">{error}</p>}
 
-          {/* Pending Requests Tab */}
           {friendsTab === 'pending' ? (
             <ScrollArea className="friends-list-container">
               <div className="friends-list">
-                {/* Incoming Requests */}
                 {incomingRequests.length > 0 && (
                   <>
-                    <div className="requests-section-header">
-                      Incoming ({incomingRequests.length})
-                    </div>
+                    <div className="requests-section-header">Incoming ({incomingRequests.length})</div>
                     {incomingRequests.map((request, index) => (
                       <div key={request.id}>
                         <div className="friend-row">
                           <div className="friend-row-left">
-                            <Avatar
-                              src={request.from_avatar_url}
-                              fallback={request.from_nickname || 'U'}
-                              size="sm"
-                              status={request.from_status}
-                              showStatus
-                              className="friend-avatar"
-                            />
+                            <Avatar src={request.from_avatar_url} fallback={request.from_nickname || 'U'} size="sm" status={request.from_status} showStatus className="friend-avatar" />
                             <div className="friend-info">
                               <span className="friend-name">{request.from_nickname || 'Unknown'}</span>
                               <span className="friend-username">@{request.from_username || 'unknown'}</span>
                             </div>
                           </div>
                           <div className="friend-row-actions">
-                            <button
-                              className="friend-action-icon accept"
-                              onClick={() => handleAcceptRequest(request.id)}
-                              disabled={actionLoading}
-                              title="Accept"
-                            >
+                            <button className="friend-action-icon accept" onClick={() => handleAcceptRequest(request.id)} disabled={actionLoading} title="Accept">
                               <Check size={18} />
                             </button>
-                            <button
-                              className="friend-action-icon decline"
-                              onClick={() => handleDeclineRequest(request.id)}
-                              disabled={actionLoading}
-                              title="Decline"
-                            >
+                            <button className="friend-action-icon decline" onClick={() => handleDeclineRequest(request.id)} disabled={actionLoading} title="Decline">
                               <X size={18} />
                             </button>
                           </div>
@@ -564,41 +347,23 @@ export default function HomePage() {
                   </>
                 )}
 
-                {/* Separator between sections */}
-                {incomingRequests.length > 0 && outgoingRequests.length > 0 && (
-                  <div className="requests-divider" />
-                )}
+                {incomingRequests.length > 0 && outgoingRequests.length > 0 && <div className="requests-divider" />}
 
-                {/* Outgoing Requests */}
                 {outgoingRequests.length > 0 && (
                   <>
-                    <div className="requests-section-header">
-                      Outgoing ({outgoingRequests.length})
-                    </div>
+                    <div className="requests-section-header">Outgoing ({outgoingRequests.length})</div>
                     {outgoingRequests.map((request, index) => (
                       <div key={request.id}>
                         <div className="friend-row">
                           <div className="friend-row-left">
-                            <Avatar
-                              src={request.to_avatar_url}
-                              fallback={request.to_nickname || 'U'}
-                              size="sm"
-                              status={request.to_status}
-                              showStatus
-                              className="friend-avatar"
-                            />
+                            <Avatar src={request.to_avatar_url} fallback={request.to_nickname || 'U'} size="sm" status={request.to_status} showStatus className="friend-avatar" />
                             <div className="friend-info">
                               <span className="friend-name">{request.to_nickname || 'Unknown'}</span>
                               <span className="friend-username">@{request.to_username || 'unknown'}</span>
                             </div>
                           </div>
                           <div className="friend-row-actions">
-                            <button
-                              className="friend-action-icon decline"
-                              onClick={() => handleCancelRequest(request.id)}
-                              disabled={actionLoading}
-                              title="Cancel Request"
-                            >
+                            <button className="friend-action-icon decline" onClick={() => handleCancelRequest(request.id)} disabled={actionLoading} title="Cancel Request">
                               <X size={18} />
                             </button>
                           </div>
@@ -609,14 +374,12 @@ export default function HomePage() {
                   </>
                 )}
 
-                {/* Empty state */}
                 {incomingRequests.length === 0 && outgoingRequests.length === 0 && (
                   <p className="home-empty">No pending friend requests.</p>
                 )}
               </div>
             </ScrollArea>
           ) : (
-            /* Friends List (Online/All tabs) */
             friends.length > 0 ? (
               <ScrollArea className="friends-list-container">
                 <div className="friends-list">
@@ -625,32 +388,17 @@ export default function HomePage() {
                       <div key={friend.friend_id}>
                         <div className="friend-row">
                           <div className="friend-row-left">
-                            <Avatar
-                              src={friend.avatar_url}
-                              fallback={friend.nickname}
-                              size="sm"
-                              status={friend.status}
-                              showStatus
-                              className="friend-avatar"
-                            />
+                            <Avatar src={friend.avatar_url} fallback={friend.nickname} size="sm" status={friend.status} showStatus className="friend-avatar" />
                             <div className="friend-info">
                               <span className="friend-name">{friend.nickname}</span>
                               <span className="friend-username">@{friend.username}</span>
                             </div>
                           </div>
                           <div className="friend-row-actions">
-                            <button
-                              className="friend-action-icon"
-                              onClick={() => navigate(`/chat/${friend.friend_id}`)}
-                              title="Message"
-                            >
+                            <button className="friend-action-icon" onClick={() => navigate(`/chat/${friend.friend_id}`)} title="Message">
                               <MessageCircle size={18} />
                             </button>
-                            <button
-                              className="friend-action-icon"
-                              onClick={() => {/* Future menu */}}
-                              title="More options"
-                            >
+                            <button className="friend-action-icon" title="More options">
                               <MoreVertical size={18} />
                             </button>
                           </div>
@@ -660,9 +408,7 @@ export default function HomePage() {
                     ))
                   ) : (
                     <p className="home-empty">
-                      {friendsTab === 'online' 
-                        ? 'No friends online.' 
-                        : 'No friends match your search.'}
+                      {friendsTab === 'online' ? 'No friends online.' : 'No friends match your search.'}
                     </p>
                   )}
                 </div>

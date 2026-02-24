@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { profileApi } from '../api'
 import { Input } from "@/components/ui/input"
 import { Button } from '@/components/ui/button'
 import {
@@ -13,18 +14,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Circle, ChevronDown } from 'lucide-react'
 import '../styles/ProfilePage.css'
-
-interface ProfileData {
-  username: string
-  nickname: string
-  avatar_url: string | null
-  status: string | null
-}
-
-interface PlaceholderProfile {
-  username: string
-  nickname: string
-}
 
 type Status = 'online' | 'idle' | 'dnd' | 'offline'
 
@@ -52,12 +41,10 @@ export default function ProfilePage() {
   const [uploadingImage, setUploadingImage] = useState(false)
   const [initialLoading, setInitialLoading] = useState(true)
   const [isNewUser, setIsNewUser] = useState(true)
-  const [userId, setUserId] = useState<string | null>(null)
 
-  // Generate new random placeholder names
   const generatePlaceholder = async () => {
     try {
-      const placeholder = await invoke<PlaceholderProfile>('generate_placeholder_profile')
+      const placeholder = await profileApi.generatePlaceholder()
       setUsername(placeholder.username)
       setNickname(placeholder.nickname)
     } catch (err) {
@@ -68,16 +55,14 @@ export default function ProfilePage() {
   useEffect(() => {
     const loadProfile = async () => {
       try {
+        // get_user_id stays as a Tauri command (auth lives in Rust)
         const id = await invoke<string | null>('get_user_id')
-
         if (!id) {
           navigate('/')
           return
         }
 
-        setUserId(id)
-
-        const profile = await invoke<ProfileData | null>('get_profile')
+        const profile = await profileApi.get()
 
         if (profile) {
           setIsNewUser(false)
@@ -88,7 +73,6 @@ export default function ProfilePage() {
           setStatus((profile.status as Status) || 'online')
         } else {
           setIsNewUser(true)
-          // Generate placeholder data for new users
           await generatePlaceholder()
         }
       } catch (err) {
@@ -112,8 +96,7 @@ export default function ProfilePage() {
       return
     }
 
-    const maxSize = 5 * 1024 * 1024
-    if (file.size > maxSize) {
+    if (file.size > 5 * 1024 * 1024) {
       setError('Image must be less than 5MB')
       return
     }
@@ -122,30 +105,23 @@ export default function ProfilePage() {
     setError(null)
 
     const reader = new FileReader()
-    reader.onloadend = () => {
-      setAvatarPreview(reader.result as string)
-    }
+    reader.onloadend = () => setAvatarPreview(reader.result as string)
     reader.readAsDataURL(file)
   }
 
   const handleRemoveImage = () => {
     setSelectedFile(null)
     setAvatarPreview(avatarUrl)
-    if (fileInputRef.current) {
-      fileInputRef.current.value = ''
-    }
+    if (fileInputRef.current) fileInputRef.current.value = ''
   }
 
   const handleStatusChange = async (newStatus: Status) => {
     const oldStatus = status
     setStatus(newStatus)
 
-    // If editing existing profile, update status immediately
     if (!isNewUser) {
       try {
-        const result = await invoke<{ success: boolean; error?: string }>('update_status', {
-          status: newStatus,
-        })
+        const result = await profileApi.updateStatus(newStatus)
         if (!result.success) {
           setStatus(oldStatus)
           setError(result.error || 'Failed to update status')
@@ -157,47 +133,6 @@ export default function ProfilePage() {
     }
   }
 
-  const uploadImage = async (): Promise<string | null> => {
-    if (!selectedFile || !userId) return avatarUrl
-
-    setUploadingImage(true)
-    try {
-      const base64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onloadend = () => {
-          const base64String = reader.result as string
-          const base64Data = base64String.split(',')[1]
-          resolve(base64Data)
-        }
-        reader.onerror = reject
-        reader.readAsDataURL(selectedFile)
-      })
-
-      const extension = selectedFile.name.split('.').pop() || 'png'
-      const contentType = selectedFile.type
-
-      const result = await invoke<{ success: boolean; url?: string; error?: string }>(
-        'upload_profile_image',
-        {
-          imageData: base64,
-          fileName: `avatar.${extension}`,
-          contentType,
-        }
-      )
-
-      if (!result.success || !result.url) {
-        throw new Error(result.error || 'Failed to upload image')
-      }
-
-      return result.url
-    } catch (err) {
-      console.error('Failed to upload image:', err)
-      throw err
-    } finally {
-      setUploadingImage(false)
-    }
-  }
-
   const handleSave = async () => {
     setError(null)
 
@@ -206,41 +141,32 @@ export default function ProfilePage() {
       return
     }
 
-    if (!userId) {
-      setError('User not authenticated')
-      return
-    }
-
     setLoading(true)
 
     try {
       let finalAvatarUrl = avatarUrl
+
       if (selectedFile) {
-        finalAvatarUrl = await uploadImage()
+        setUploadingImage(true)
+        try {
+          const result = await profileApi.uploadAvatar(selectedFile)
+          if (!result.success || !result.url) throw new Error(result.error || 'Upload failed')
+          finalAvatarUrl = result.url
+        } finally {
+          setUploadingImage(false)
+        }
       }
 
       if (isNewUser) {
-        const result = await invoke<{ success: boolean; error?: string }>('create_profile', {
-          username: username.trim(),
-          nickname: nickname.trim(),
-          avatarUrl: finalAvatarUrl,
-        })
-
+        const result = await profileApi.create(username.trim(), nickname.trim(), finalAvatarUrl)
         if (!result.success) {
           setError(result.error || 'Failed to create profile')
           setLoading(false)
           return
         }
-
-        // Set initial status for new user
-        await invoke('update_status', { status })
+        await profileApi.updateStatus(status)
       } else {
-        const result = await invoke<{ success: boolean; error?: string }>('update_profile', {
-          username: username.trim(),
-          nickname: nickname.trim(),
-          avatarUrl: finalAvatarUrl,
-        })
-
+        const result = await profileApi.update(username.trim(), nickname.trim(), finalAvatarUrl)
         if (!result.success) {
           setError(result.error || 'Failed to update profile')
           setLoading(false)
@@ -262,15 +188,12 @@ export default function ProfilePage() {
   }
 
   const isSaveDisabled = !username.trim() || !nickname.trim() || loading || uploadingImage
-
   const currentStatus = STATUS_OPTIONS.find(s => s.value === status) || STATUS_OPTIONS[0]
 
   if (initialLoading) {
     return (
       <div className="profile-container">
-        <div className="profile-card">
-          <p>Loading...</p>
-        </div>
+        <div className="profile-card"><p>Loading...</p></div>
       </div>
     )
   }
@@ -278,14 +201,11 @@ export default function ProfilePage() {
   return (
     <div className="profile-container">
       <div className="profile-card">
-        {/* Header */}
         <div className="profile-card-header">
           <h2>{isNewUser ? 'Complete Your Profile' : 'Edit Profile'}</h2>
         </div>
 
-        {/* Content */}
         <div className="profile-card-content">
-          {/* Avatar Section */}
           <div className="avatar-section">
             <div className="avatar-wrapper">
               <div className="avatar-preview">
@@ -297,10 +217,7 @@ export default function ProfilePage() {
                   </div>
                 )}
               </div>
-              <div
-                className="status-indicator-large"
-                style={{ backgroundColor: currentStatus.color }}
-              />
+              <div className="status-indicator-large" style={{ backgroundColor: currentStatus.color }} />
             </div>
             <div className="avatar-buttons">
               <input
@@ -311,54 +228,31 @@ export default function ProfilePage() {
                 className="file-input-hidden"
                 id="avatar-upload"
               />
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploadingImage}
-              >
+              <Button variant="secondary" size="sm" onClick={() => fileInputRef.current?.click()} disabled={uploadingImage}>
                 {avatarPreview ? 'Change' : 'Upload'}
               </Button>
               {selectedFile && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleRemoveImage}
-                  disabled={uploadingImage}
-                >
+                <Button variant="ghost" size="sm" onClick={handleRemoveImage} disabled={uploadingImage}>
                   Undo
                 </Button>
               )}
             </div>
           </div>
 
-          {/* Status Selector - Using shadcn DropdownMenu */}
           <div className="field">
             <label>Status</label>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" className="status-trigger">
-                  <Circle
-                    size={12}
-                    fill={currentStatus.color}
-                    color={currentStatus.color}
-                  />
+                  <Circle size={12} fill={currentStatus.color} color={currentStatus.color} />
                   <span className="status-label">{currentStatus.label}</span>
                   <ChevronDown size={16} className="status-chevron" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="status-menu">
                 {STATUS_OPTIONS.map((option) => (
-                  <DropdownMenuItem
-                    key={option.value}
-                    onClick={() => handleStatusChange(option.value)}
-                    className="status-menu-item"
-                  >
-                    <Circle
-                      size={12}
-                      fill={option.color}
-                      color={option.color}
-                    />
+                  <DropdownMenuItem key={option.value} onClick={() => handleStatusChange(option.value)} className="status-menu-item">
+                    <Circle size={12} fill={option.color} color={option.color} />
                     <span>{option.label}</span>
                   </DropdownMenuItem>
                 ))}
@@ -366,39 +260,23 @@ export default function ProfilePage() {
             </DropdownMenu>
           </div>
 
-          {/* Form Fields */}
           <div className="profile-fields">
             <div className="field">
               <label htmlFor="username">Username</label>
-              <Input
-                id="username"
-                placeholder="unique_username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-              />
+              <Input id="username" placeholder="unique_username" value={username} onChange={(e) => setUsername(e.target.value)} />
             </div>
-
             <div className="field">
               <label htmlFor="displayname">Display Name</label>
-              <Input
-                id="displayname"
-                placeholder="Your Name"
-                value={nickname}
-                onChange={(e) => setNickname(e.target.value)}
-              />
+              <Input id="displayname" placeholder="Your Name" value={nickname} onChange={(e) => setNickname(e.target.value)} />
             </div>
           </div>
 
-          {/* Error Message */}
           {error && <p className="error-message">{error}</p>}
         </div>
 
-        {/* Footer */}
         <div className="profile-card-footer">
           {(!isNewUser || isEditMode) && (
-            <Button variant="ghost" onClick={() => navigate('/home')}>
-              Cancel
-            </Button>
+            <Button variant="ghost" onClick={() => navigate('/home')}>Cancel</Button>
           )}
           <Button onClick={handleSave} disabled={isSaveDisabled}>
             {uploadingImage ? 'Uploading...' : loading ? 'Saving...' : 'Save'}
