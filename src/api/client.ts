@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core'
 
-const SERVER_URL = 'http://18.119.110.160:8080'
+const SERVER_URL = 'https://cryptext.duckdns.org'
 
 async function getAuthHeaders(): Promise<HeadersInit> {
   const token = await invoke<string | null>('get_auth_token')

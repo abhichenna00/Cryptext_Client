@@ -90,7 +90,8 @@ export default function HomePage() {
         conversationsApi.getAll().catch(() => [] as ConversationWithDetails[]),
       ])
 
-      if (profile) setUsername(profile.username)
+      if (profile) 
+      setUsername(username)
       setFriends(friendsData)
       setIncomingRequests(incoming)
       setOutgoingRequests(outgoing)
@@ -207,10 +208,6 @@ export default function HomePage() {
 
   return (
     <div className="home-page">
-      <div className="home-header">
-        <h1>Welcome{username ? `, ${username}` : ''}!</h1>
-      </div>
-
       <div className="home-layout">
         {/* Recent Chats Panel */}
         <div className="recent-chats-panel">

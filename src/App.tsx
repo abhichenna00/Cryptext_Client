@@ -9,6 +9,7 @@ import './App.css'
 
 import { AppSidebar } from '@/components/AppSidebar'
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
+import { profileApi } from './api'
 
 import AuthPage from './pages/AuthPage'
 import SignupPage from './pages/SignupPage'
@@ -78,22 +79,17 @@ export default function App() {
   useEffect(() => {
     const initialize = async () => {
       try {
-        // Set up deep link listener for OAuth callback (Tauri only)
+        // Set up deep link listener (Tauri only)
         if (isTauri()) {
           try {
             const { listen } = await import('@tauri-apps/api/event')
             await listen('deep-link', async (event) => {
               console.log('Deep link event received:', event.payload)
-              const url = event.payload as string
-              await handleOAuthCallback(url)
             })
 
             const { onOpenUrl } = await import('@tauri-apps/plugin-deep-link')
             await onOpenUrl(async (urls) => {
               console.log('Deep link received:', urls)
-              for (const url of urls) {
-                await handleOAuthCallback(url)
-              }
             })
           } catch (err) {
             console.log('Deep link setup skipped:', err)
@@ -105,8 +101,9 @@ export default function App() {
         setSession(currentSession)
 
         if (currentSession?.user_id) {
-          const profileExists = await invoke<boolean>('check_profile_exists')
-          setHasProfile(profileExists)
+          // Check profile existence via HTTP API
+          const profile = await profileApi.get()
+          setHasProfile(profile !== null)
         }
       } catch (error) {
         console.error('Failed to initialize:', error)
@@ -117,33 +114,9 @@ export default function App() {
       setLoading(false)
     }
 
-    // Handle OAuth callback URL — delegate token exchange to Rust backend
-    const handleOAuthCallback = async (url: string) => {
-      if (url.includes('auth/callback') || url.includes('code=')) {
-        try {
-          // Pass the full callback URL to the Rust backend.
-          // The backend extracts the authorization code and exchanges it
-          // with Cognito for tokens.
-          await invoke('handle_oauth_callback', { callbackUrl: url })
-
-          // Refresh session state after successful OAuth
-          const currentSession = await invoke<PublicSessionInfo | null>('get_session')
-          setSession(currentSession)
-
-          if (currentSession?.user_id) {
-            const profileExists = await invoke<boolean>('check_profile_exists')
-            setHasProfile(profileExists)
-          }
-        } catch (err) {
-          console.error('OAuth callback failed:', err)
-        }
-      }
-    }
-
     initialize()
   }, [])
 
-  // Function to handle sign out
   const handleSignOut = async () => {
     try {
       await invoke('sign_out')
@@ -159,7 +132,6 @@ export default function App() {
     return <div>Loading...</div>
   }
 
-  // Show sidebar only for authenticated users with a profile
   const showSidebar = !!session && hasProfile
 
   return (
@@ -189,7 +161,6 @@ export default function App() {
               }
             />
 
-            {/* New user profile setup */}
             <Route
               path="/profile"
               element={
@@ -201,7 +172,6 @@ export default function App() {
               }
             />
 
-            {/* Existing user profile editing */}
             <Route
               path="/editProfile"
               element={
@@ -224,7 +194,6 @@ export default function App() {
               }
             />
 
-            {/* Home page - default landing */}
             <Route
               path="/home"
               element={
@@ -236,7 +205,6 @@ export default function App() {
               }
             />
 
-            {/* Friends page */}
             <Route
               path="/friends"
               element={
@@ -248,7 +216,6 @@ export default function App() {
               }
             />
 
-            {/* Direct message page */}
             <Route
               path="/chat/:friendId"
               element={
