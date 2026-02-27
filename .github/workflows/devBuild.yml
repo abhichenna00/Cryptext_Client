@@ -12,38 +12,6 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-linux:
-    runs-on: self-hosted
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Rust targets
-        run: |
-          rustup update stable
-          rustup default stable
-          rustup target add x86_64-unknown-linux-gnu
-
-      - name: Install frontend dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Build Tauri app (Linux)
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri build --target x86_64-unknown-linux-gnu
-
-      - name: Upload Linux artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-linux
-          path: |
-            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/**/*.AppImage
-            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/**/*.deb
-            src-tauri/target/x86_64-unknown-linux-gnu/release/bundle/**/*.sig
-          retention-days: 7
-
   build-windows:
     runs-on: self-hosted
 
@@ -55,29 +23,26 @@ jobs:
         run: |
           rustup update stable
           rustup default stable
-          rustup target add x86_64-pc-windows-msvc
+          rustup target add x86_64-pc-windows-gnu
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri app (Windows via cargo-xwin)
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri build --runner cargo-xwin --target x86_64-pc-windows-msvc
+      - name: Build Tauri app (Windows)
+        run: pnpm tauri build --target x86_64-pc-windows-gnu
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
         with:
           name: build-windows
           path: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.sig
+            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/**/*.exe
+            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/**/*.msi
+            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/**/*.sig
           retention-days: 7
 
   create-dev-release:
-    needs: [build-linux, build-windows]
+    needs: [build-windows]
     runs-on: self-hosted
     permissions:
       contents: write
@@ -108,8 +73,6 @@ jobs:
           files: |
             artifacts/**/*.exe
             artifacts/**/*.msi
-            artifacts/**/*.AppImage
-            artifacts/**/*.deb
             artifacts/**/*.sig
           body: |
             ## Development Build
