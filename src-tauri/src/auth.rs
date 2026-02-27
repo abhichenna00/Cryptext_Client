@@ -374,7 +374,7 @@ pub async fn sync_oauth_session(
 }
 
 /// Get WebSocket URL for realtime connections
-#[command]
-pub fn get_websocket_url() -> String {
-    crate::config::websocket_url()
+#[tauri::command]
+pub async fn get_websocket_url() -> Result<String, String> {
+    crate::config::websocket_url().await
 }
