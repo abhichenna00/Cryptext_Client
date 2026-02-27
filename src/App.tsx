@@ -9,7 +9,6 @@ import './App.css'
 
 import { AppSidebar } from '@/components/AppSidebar'
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
-import { profileApi } from './api'
 
 import AuthPage from './pages/AuthPage'
 import SignupPage from './pages/SignupPage'
@@ -102,7 +101,10 @@ export default function App() {
 
         if (currentSession?.user_id) {
           // Check profile existence via HTTP API
-          const profile = await profileApi.get()
+          const exists = await invoke<boolean>('check_profile_exists')
+          setHasProfile(exists)
+
+          const profile = await invoke('get_profile')
           setHasProfile(profile !== null)
         }
       } catch (error) {
