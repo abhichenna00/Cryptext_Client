@@ -1,9 +1,6 @@
-// src/pages/ProfilePage.tsx
-
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useLocation } from 'react-router-dom'
-import { profileApi } from '../api'
 import { Input } from "@/components/ui/input"
 import { Button } from '@/components/ui/button'
 import {
@@ -16,6 +13,30 @@ import { Circle, ChevronDown } from 'lucide-react'
 import '../styles/ProfilePage.css'
 
 type Status = 'online' | 'idle' | 'dnd' | 'offline'
+
+interface ProfileData {
+  user_id: string
+  username?: string
+  nickname: string
+  avatar_url: string | null
+  status: string | null
+}
+
+interface PlaceholderProfile {
+  username: string
+  nickname: string
+}
+
+interface ProfileResult {
+  success: boolean
+  error?: string
+}
+
+interface AvatarResult {
+  success: boolean
+  url?: string
+  error?: string
+}
 
 const STATUS_OPTIONS: { value: Status; label: string; color: string }[] = [
   { value: 'online', label: 'Online', color: '#22c55e' },
@@ -44,7 +65,7 @@ export default function ProfilePage() {
 
   const generatePlaceholder = async () => {
     try {
-      const placeholder = await profileApi.generatePlaceholder()
+      const placeholder = await invoke<PlaceholderProfile>('generate_placeholder')
       setUsername(placeholder.username)
       setNickname(placeholder.nickname)
     } catch (err) {
@@ -55,14 +76,13 @@ export default function ProfilePage() {
   useEffect(() => {
     const loadProfile = async () => {
       try {
-        // get_user_id stays as a Tauri command (auth lives in Rust)
         const id = await invoke<string | null>('get_user_id')
         if (!id) {
           navigate('/')
           return
         }
 
-        const profile = await profileApi.get()
+        const profile = await invoke<ProfileData | null>('get_profile')
 
         if (profile) {
           setIsNewUser(false)
@@ -121,7 +141,7 @@ export default function ProfilePage() {
 
     if (!isNewUser) {
       try {
-        const result = await profileApi.updateStatus(newStatus)
+        const result = await invoke<ProfileResult>('update_status', { status: newStatus })
         if (!result.success) {
           setStatus(oldStatus)
           setError(result.error || 'Failed to update status')
@@ -149,7 +169,24 @@ export default function ProfilePage() {
       if (selectedFile) {
         setUploadingImage(true)
         try {
-          const result = await profileApi.uploadAvatar(selectedFile)
+          // Read file as base64
+          const base64 = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader()
+            reader.onloadend = () => {
+              const result = reader.result as string
+              resolve(result.split(',')[1])
+            }
+            reader.onerror = reject
+            reader.readAsDataURL(selectedFile)
+          })
+
+          const extension = selectedFile.name.split('.').pop() || 'png'
+          const result = await invoke<AvatarResult>('upload_avatar', {
+            imageData: base64,
+            fileName: `avatar.${extension}`,
+            contentType: selectedFile.type,
+          })
+
           if (!result.success || !result.url) throw new Error(result.error || 'Upload failed')
           finalAvatarUrl = result.url
         } finally {
@@ -158,15 +195,23 @@ export default function ProfilePage() {
       }
 
       if (isNewUser) {
-        const result = await profileApi.create(username.trim(), nickname.trim(), finalAvatarUrl)
+        const result = await invoke<ProfileResult>('create_profile', {
+          username: username.trim(),
+          nickname: nickname.trim(),
+          avatarUrl: finalAvatarUrl,
+        })
         if (!result.success) {
           setError(result.error || 'Failed to create profile')
           setLoading(false)
           return
         }
-        await profileApi.updateStatus(status)
+        await invoke('update_status', { status })
       } else {
-        const result = await profileApi.update(username.trim(), nickname.trim(), finalAvatarUrl)
+        const result = await invoke<ProfileResult>('update_profile', {
+          username: username.trim(),
+          nickname: nickname.trim(),
+          avatarUrl: finalAvatarUrl,
+        })
         if (!result.success) {
           setError(result.error || 'Failed to update profile')
           setLoading(false)

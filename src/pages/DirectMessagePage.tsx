@@ -1,10 +1,6 @@
-// src/pages/DirectMessagePage.tsx
-
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useParams } from 'react-router-dom'
-import { profileApi, conversationsApi } from '../api'
-import type { Message } from '../api'
 import { useWebSocket, WebSocketMessage } from '../hooks/useWebSocket'
 import { ArrowLeft, ArrowDown, Send } from 'lucide-react'
 import { Input } from '@/components/ui/input'
@@ -16,6 +12,25 @@ interface ProfileInfo {
   nickname: string
   avatar_url: string | null
   status: string | null
+}
+
+interface Message {
+  id: string
+  conversation_id: string
+  sender_id: string
+  content: string
+  timestamp: number
+}
+
+interface DmResult {
+  success: boolean
+  conversation_id: string | null
+  error: string | null
+}
+
+interface MessageResult {
+  success: boolean
+  error: string | null
 }
 
 type Status = 'online' | 'idle' | 'dnd' | 'offline'
@@ -120,7 +135,7 @@ export default function DirectMessagePage() {
       })
 
       if (newMsg.sender_id !== userIdRef.current && conversationIdRef.current) {
-        conversationsApi.markRead(conversationIdRef.current)
+        invoke('mark_read', { conversationId: conversationIdRef.current }).catch(console.error)
       }
 
       if (isAtBottomRef.current) {
@@ -164,7 +179,6 @@ export default function DirectMessagePage() {
     }
 
     try {
-      // get_user_id stays as a Tauri command (auth lives in Rust)
       const id = await invoke<string | null>('get_user_id')
       if (!id) {
         navigate('/')
@@ -174,7 +188,7 @@ export default function DirectMessagePage() {
 
       await loadProfiles(id)
 
-      const result = await conversationsApi.getOrCreateDm(friendId)
+      const result = await invoke<DmResult>('get_or_create_dm', { otherUserId: friendId })
       if (!result.success || !result.conversation_id) {
         setError(result.error || 'Failed to load conversation')
         setLoading(false)
@@ -183,7 +197,7 @@ export default function DirectMessagePage() {
 
       setConversationId(result.conversation_id)
       await loadMessages(result.conversation_id)
-      await conversationsApi.markRead(result.conversation_id)
+      await invoke('mark_read', { conversationId: result.conversation_id })
     } catch (err) {
       console.error('Failed to initialize chat:', err)
       setError(err instanceof Error ? err.message : String(err))
@@ -195,7 +209,9 @@ export default function DirectMessagePage() {
   const loadProfiles = async (currentUserId: string) => {
     if (!friendId) return
     try {
-      const profiles = await profileApi.getByIds([friendId, currentUserId])
+      const profiles = await invoke<ProfileInfo[]>('get_profiles_by_ids', {
+        userIds: [friendId, currentUserId],
+      })
       profiles.forEach(profile => {
         if (profile.user_id === friendId) setPartnerProfile(profile)
         else if (profile.user_id === currentUserId) setMyProfile(profile)
@@ -208,7 +224,7 @@ export default function DirectMessagePage() {
 
   const loadMessages = async (convId: string) => {
     try {
-      const data = await conversationsApi.getMessages(convId)
+      const data = await invoke<Message[]>('get_messages', { conversationId: convId })
       setMessages(data)
       setError(null)
       setTimeout(() => scrollToBottom(), 100)
@@ -238,7 +254,11 @@ export default function DirectMessagePage() {
     setTimeout(() => scrollToBottom(), 100)
 
     try {
-      const result = await conversationsApi.sendMessage(conversationId, messageContent)
+      const result = await invoke<MessageResult>('send_message', {
+        conversationId,
+        content: messageContent,
+      })
+
       if (!result.success) {
         setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id))
         setError(result.error || 'Failed to send message')

@@ -1,9 +1,8 @@
 // src/pages/HomePage.tsx
 
 import { useState, useEffect, useMemo } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { useNavigate } from 'react-router-dom'
-import { profileApi, friendsApi, conversationsApi } from '../api'
-import type { FriendWithProfile, FriendRequest, ConversationWithDetails } from '../api'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Separator } from '../components/ui/separator'
 import { Button } from '../components/ui/button'
@@ -29,6 +28,58 @@ const STATUS_COLORS: Record<Status, string> = {
   idle: '#eab308',
   dnd: '#ef4444',
   offline: '#6b7280',
+}
+
+interface ProfileData {
+  user_id: string
+  username?: string
+  nickname: string
+  avatar_url: string | null
+  status: string | null
+}
+
+interface FriendWithProfile {
+  friend_id: string
+  username: string
+  nickname: string
+  created_at: string
+  is_online?: boolean
+  avatar_url?: string | null
+  status?: string | null
+}
+
+interface FriendRequest {
+  id: string
+  from_user_id: string
+  to_user_id: string
+  status: string
+  created_at: string
+  from_username?: string
+  from_nickname?: string
+  from_avatar_url?: string | null
+  from_status?: string | null
+  to_username?: string
+  to_nickname?: string
+  to_avatar_url?: string | null
+  to_status?: string | null
+}
+
+interface ConversationWithDetails {
+  conversation_id: string
+  conversation_type: string
+  name: string | null
+  other_user_id: string | null
+  other_user_nickname: string | null
+  other_user_avatar_url?: string | null
+  other_user_status?: string | null
+  last_message: string | null
+  last_message_time: number | null
+  has_unread: boolean
+}
+
+interface FriendResult {
+  success: boolean
+  error?: string
 }
 
 interface AvatarProps {
@@ -83,15 +134,14 @@ export default function HomePage() {
   const loadData = async () => {
     try {
       const [profile, friendsData, incoming, outgoing, conversations] = await Promise.all([
-        profileApi.get(),
-        friendsApi.getAll(),
-        friendsApi.getIncomingRequests(),
-        friendsApi.getOutgoingRequests(),
-        conversationsApi.getAll().catch(() => [] as ConversationWithDetails[]),
+        invoke<ProfileData | null>('get_profile'),
+        invoke<FriendWithProfile[]>('get_friends'),
+        invoke<FriendRequest[]>('get_incoming_friend_requests'),
+        invoke<FriendRequest[]>('get_outgoing_friend_requests'),
+        invoke<ConversationWithDetails[]>('get_conversations').catch(() => [] as ConversationWithDetails[]),
       ])
 
-      if (profile) 
-      setUsername(username)
+      if (profile) setUsername(profile.username || profile.nickname)
       setFriends(friendsData)
       setIncomingRequests(incoming)
       setOutgoingRequests(outgoing)
@@ -136,7 +186,9 @@ export default function HomePage() {
     setAddFriendError(null)
     setAddFriendSuccess(null)
     try {
-      const result = await friendsApi.sendRequest(searchUsername.trim())
+      const result = await invoke<FriendResult>('send_friend_request', {
+        toUsername: searchUsername.trim(),
+      })
       if (result.success) {
         setAddFriendSuccess(`Friend request sent to ${searchUsername}!`)
         setSearchUsername('')
@@ -155,7 +207,7 @@ export default function HomePage() {
   const handleAcceptRequest = async (requestId: string) => {
     setActionLoading(true)
     try {
-      const result = await friendsApi.acceptRequest(requestId)
+      const result = await invoke<FriendResult>('accept_friend_request', { requestId })
       if (result.success) loadData()
       else setError(result.error || 'Failed to accept request')
     } catch (err) {
@@ -168,7 +220,7 @@ export default function HomePage() {
   const handleDeclineRequest = async (requestId: string) => {
     setActionLoading(true)
     try {
-      const result = await friendsApi.declineRequest(requestId)
+      const result = await invoke<FriendResult>('decline_friend_request', { requestId })
       if (result.success) loadData()
       else setError(result.error || 'Failed to decline request')
     } catch (err) {
@@ -181,7 +233,7 @@ export default function HomePage() {
   const handleCancelRequest = async (requestId: string) => {
     setActionLoading(true)
     try {
-      const result = await friendsApi.cancelRequest(requestId)
+      const result = await invoke<FriendResult>('cancel_friend_request', { requestId })
       if (result.success) loadData()
       else setError(result.error || 'Failed to cancel request')
     } catch (err) {
@@ -192,38 +244,36 @@ export default function HomePage() {
   }
 
   const handleOpenChat = (chat: ConversationWithDetails) => {
-    if (chat.conversation_type === 'direct' && chat.other_user_id) {
+    if (chat.other_user_id) {
       navigate(`/chat/${chat.other_user_id}`)
     }
   }
 
-  const getChatDisplayName = (chat: ConversationWithDetails): string => {
-    if (chat.conversation_type === 'direct') return chat.other_user_nickname || 'Unknown'
-    return chat.name || 'Group Chat'
-  }
+  const getChatDisplayName = (chat: ConversationWithDetails) =>
+    chat.other_user_nickname || chat.name || 'Unknown'
 
   if (loading) {
-    return <div className="home-page"><div className="home-loading">Loading...</div></div>
+    return <div className="home-loading">Loading...</div>
   }
 
   return (
     <div className="home-page">
       <div className="home-layout">
-        {/* Recent Chats Panel */}
+        {/* Recent Chats Sidebar */}
         <div className="recent-chats-panel">
           <div className="panel-header">
-            <h2 className="panel-title">Recent Chats</h2>
-            <button className="panel-action-button" title="Create Chat">
-              <Plus size={16} />
-            </button>
+            <h2 className="panel-title">Messages</h2>
+            <Button variant="ghost" size="icon">
+              <Plus size={18} />
+            </Button>
           </div>
           <ScrollArea className="recent-chats-list-container">
-            <div className="recent-chats-list">
+            <div className="recent-chats">
               {recentChats.length > 0 ? (
                 recentChats.map((chat) => (
                   <button
                     key={chat.conversation_id}
-                    className={`recent-chat-item ${chat.has_unread ? 'unread' : ''}`}
+                    className={`recent-chat-item ${chat.has_unread ? 'has-unread' : ''}`}
                     onClick={() => handleOpenChat(chat)}
                   >
                     <Avatar
