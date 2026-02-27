@@ -2,11 +2,12 @@
 
 mod auth;
 mod config;
+mod conversations;
+mod friends;
+mod http_client;
+mod profile;
 
-pub use auth::{
-    confirm_sign_up, get_auth_token, get_session, get_user_id, get_websocket_url,
-    refresh_session, sign_in, sign_out, sign_up, sync_oauth_session, SessionStore,
-};
+pub use auth::SessionStore;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -37,16 +38,40 @@ pub fn run() {
         }))
         .manage(SessionStore::default())
         .invoke_handler(tauri::generate_handler![
-            sign_in,
-            sign_up,
-            sign_out,
-            get_session,
-            get_auth_token,
-            get_user_id,
-            refresh_session,
-            sync_oauth_session,
-            confirm_sign_up,
-            get_websocket_url,
+            // Auth
+            auth::sign_in,
+            auth::sign_up,
+            auth::sign_out,
+            auth::get_session,
+            auth::get_auth_token,
+            auth::get_user_id,
+            auth::refresh_session,
+            auth::sync_oauth_session,
+            auth::confirm_sign_up,
+            auth::get_websocket_url,
+            // Friends
+            friends::get_friends,
+            friends::get_incoming_friend_requests,
+            friends::get_outgoing_friend_requests,
+            friends::send_friend_request,
+            friends::accept_friend_request,
+            friends::decline_friend_request,
+            friends::cancel_friend_request,
+            friends::remove_friend,
+            // Conversations
+            conversations::get_conversations,
+            conversations::get_or_create_dm,
+            conversations::get_messages,
+            conversations::send_message,
+            conversations::mark_read,
+            // Profile
+            profile::get_profile,
+            profile::get_profiles_by_ids,
+            profile::create_profile,
+            profile::update_profile,
+            profile::update_status,
+            profile::upload_avatar,
+            profile::generate_placeholder,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
