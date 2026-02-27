@@ -101,9 +101,6 @@ export default function App() {
 
         if (currentSession?.user_id) {
           // Check profile existence via HTTP API
-          const exists = await invoke<boolean>('check_profile_exists')
-          setHasProfile(exists)
-
           const profile = await invoke('get_profile')
           setHasProfile(profile !== null)
         }
