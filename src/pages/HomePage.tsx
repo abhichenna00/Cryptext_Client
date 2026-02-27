@@ -111,7 +111,7 @@ function Avatar({ src, fallback, size = 'md', status, showStatus = false, classN
 
 export default function HomePage() {
   const navigate = useNavigate()
-  const [username, setUsername] = useState<string>('')
+  const [, setUsername] = useState<string>('')
   const [friends, setFriends] = useState<FriendWithProfile[]>([])
   const [recentChats, setRecentChats] = useState<ConversationWithDetails[]>([])
   const [incomingRequests, setIncomingRequests] = useState<FriendRequest[]>([])
