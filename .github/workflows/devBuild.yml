@@ -36,6 +36,7 @@ jobs:
       - name: Bump version
         id: version
         run: |
+          export PATH="/usr/bin:$PATH"
           node -e "
             const fs = require('fs');
             const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
@@ -49,7 +50,6 @@ jobs:
               parts[2]++;
             }
             
-            // Never hit 1.0
             if (parts[0] >= 1) {
               console.error('ERROR: Version would reach 1.0. Use 1.0 only for official release.');
               process.exit(1);
@@ -59,7 +59,6 @@ jobs:
             conf.version = newVersion;
             fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2));
             
-            // Also update package.json
             const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
             pkg.version = newVersion;
             fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
@@ -71,6 +70,7 @@ jobs:
 
       - name: Commit version bump
         run: |
+          export PATH="/usr/bin:$PATH"
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add src-tauri/tauri.conf.json package.json
@@ -97,17 +97,26 @@ jobs:
         run: |
           BUNDLE_DIR="src-tauri/target/x86_64-pc-windows-gnu/release/bundle"
           
-          NSIS_ZIP=$(find "$BUNDLE_DIR/nsis" -name "*.nsis.zip" | head -1)
-          NSIS_SIG=$(find "$BUNDLE_DIR/nsis" -name "*.nsis.zip.sig" | head -1)
+          echo "All bundle files:"
+          find "$BUNDLE_DIR" -type f | sort
           
-          if [ -z "$NSIS_ZIP" ] || [ -z "$NSIS_SIG" ]; then
-            echo "ERROR: Could not find NSIS bundle or signature"
-            find "$BUNDLE_DIR" -type f | sort
+          # Look for the NSIS exe and its signature
+          SETUP_EXE=$(find "$BUNDLE_DIR/nsis" -name "*-setup.exe" | head -1)
+          SETUP_SIG=$(find "$BUNDLE_DIR/nsis" -name "*-setup.exe.sig" | head -1)
+          
+          # Fall back to nsis.zip if available
+          if [ -z "$SETUP_SIG" ]; then
+            SETUP_EXE=$(find "$BUNDLE_DIR/nsis" -name "*.nsis.zip" | head -1)
+            SETUP_SIG=$(find "$BUNDLE_DIR/nsis" -name "*.nsis.zip.sig" | head -1)
+          fi
+          
+          if [ -z "$SETUP_EXE" ] || [ -z "$SETUP_SIG" ]; then
+            echo "ERROR: Could not find installer or signature"
             exit 1
           fi
           
-          NSIS_FILENAME=$(basename "$NSIS_ZIP")
-          SIGNATURE=$(cat "$NSIS_SIG")
+          FILENAME=$(basename "$SETUP_EXE")
+          SIGNATURE=$(cat "$SETUP_SIG")
           VERSION="${{ steps.version.outputs.version }}"
           TAG="v${VERSION}"
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
@@ -120,7 +129,7 @@ jobs:
             "platforms": {
               "windows-x86_64": {
                 "signature": "${SIGNATURE}",
-                "url": "https://github.com/abhichenna00/Cryptext_Client/releases/download/${TAG}/${NSIS_FILENAME}"
+                "url": "https://github.com/abhichenna00/Cryptext_Client/releases/download/${TAG}/${FILENAME}"
               }
             }
           }
@@ -128,10 +137,6 @@ jobs:
           
           echo "Generated latest.json:"
           cat latest.json
-
-      - name: List build artifacts
-        run: |
-          find src-tauri/target/x86_64-pc-windows-gnu/release/bundle -type f | sort
 
       - name: Create release
         uses: softprops/action-gh-release@v2
@@ -141,8 +146,7 @@ jobs:
           draft: false
           prerelease: ${{ github.event.inputs.prerelease }}
           files: |
-            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*.exe
-            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*.nsis.zip
+            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*-setup.exe
             src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*.sig
             latest.json
           body: |
