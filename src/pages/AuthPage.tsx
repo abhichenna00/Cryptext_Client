@@ -63,6 +63,25 @@ export default function AuthPage() {
     }
   }
 
+  const signInWithGoogle = async () => {
+    setLoading(true)
+    setError(null)
+
+    try {
+      const result = await invoke<AuthResult>('sign_in_with_google')
+
+      if (result.success) {
+        window.location.href = '/'
+      } else {
+        setError(result.error || 'Google sign-in failed')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !loading) {
       signInWithEmail()
@@ -165,6 +184,21 @@ export default function AuthPage() {
                 onClick={() => navigate('/signup')}
               >
                 Sign Up
+              </Button>
+
+              <Box style={{ display: 'flex', alignItems: 'center', gap: '8px', margin: '4px 0' }}>
+                <div style={{ flex: 1, height: '1px', background: 'var(--gray-6)' }} />
+                <Text size="1" color="gray">or</Text>
+                <div style={{ flex: 1, height: '1px', background: 'var(--gray-6)' }} />
+              </Box>
+
+              <Button
+                size="3"
+                variant="outline"
+                onClick={signInWithGoogle}
+                disabled={loading}
+              >
+                {loading ? 'Signing in...' : 'Sign in with Google'}
               </Button>
             </Flex>
 
