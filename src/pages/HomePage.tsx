@@ -262,7 +262,7 @@ export default function HomePage() {
         {/* Recent Chats Sidebar */}
         <div className="recent-chats-panel">
           <div className="panel-header">
-            <h2 className="panel-title">Messages</h2>
+            <h2 className="panel-title">Recent Messages</h2>
             <Button variant="ghost" size="icon">
               <Plus size={18} />
             </Button>
