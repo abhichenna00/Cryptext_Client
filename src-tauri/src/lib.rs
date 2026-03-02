@@ -22,6 +22,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
+        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             println!("Single instance triggered with args: {:?}", argv);
 
@@ -49,6 +50,7 @@ pub fn run() {
             auth::sync_oauth_session,
             auth::confirm_sign_up,
             auth::get_websocket_url,
+            auth::sign_in_with_google,
             // Friends
             friends::get_friends,
             friends::get_incoming_friend_requests,
