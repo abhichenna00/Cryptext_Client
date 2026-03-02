@@ -16,13 +16,13 @@ Cryptext is a cross-platform desktop messaging application focused on privacy an
 - User authentication (email/password)
 - Customizable user profiles with avatars
 - Friends management system
-- automatic updates pushed to client side
 
 ---
 
 ## Planned
 
 - End-to-end encryption
+- automatic updates pushed to client side
 - Group conversations and channels
 - File and media sharing
 - Voice and video calling
