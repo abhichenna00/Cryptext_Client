@@ -4,6 +4,8 @@ use crate::http_client;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{command, State};
+use tauri_plugin_opener::OpenerExt;
+use base64::Engine;
 
 /// Represents a user session stored securely in Tauri's backend process
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -82,8 +84,8 @@ struct ConfirmBody {
 #[derive(Serialize)]
 struct RefreshBody {
     refresh_token: String,
+    username: String,
 }
-
 /// Sign in with email and password via the Axum server
 #[command]
 pub async fn sign_in(
@@ -303,19 +305,21 @@ pub async fn get_user_id(
 /// Refresh the session using the refresh token
 #[command]
 pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<bool, String> {
-    let refresh_token = {
+    let (refresh_token, user_id) = {
         let store = session_store.session.lock().map_err(|e| e.to_string())?;
         match &*store {
-            Some(session) => session.refresh_token.clone(),
+            Some(session) => (session.refresh_token.clone(), session.user_id.clone()),
             None => return Ok(false),
         }
     };
 
-    let body = RefreshBody { refresh_token };
+    let body = RefreshBody {
+        refresh_token,
+        username: user_id,
+    };
     let response: ServerAuthResponse = match http_client::post_no_auth("/auth/refresh", &body).await {
         Ok(r) => r,
         Err(_) => {
-            // If refresh fails, clear the session
             let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
             *store = None;
             return Ok(false);
@@ -377,4 +381,128 @@ pub async fn sync_oauth_session(
 #[tauri::command]
 pub async fn get_websocket_url() -> Result<String, String> {
     crate::config::websocket_url().await
+}
+
+/// Response from POST /auth/google/start
+#[derive(Deserialize)]
+struct GoogleStartResponse {
+    authorize_url: String,
+    state: String,
+}
+
+/// Response from GET /auth/google/status
+#[derive(Deserialize)]
+struct GoogleStatusResponse {
+    status: String,
+    id_token: Option<String>,
+    access_token: Option<String>,
+    refresh_token: Option<String>,
+    error: Option<String>,
+}
+
+/// Sign in with Google via the Axum server's OAuth flow
+#[command]
+pub async fn sign_in_with_google(
+    app_handle: tauri::AppHandle,
+    session_store: State<'_, SessionStore>,
+) -> Result<AuthResult, String> {
+    // 1. Call the server to start the OAuth flow
+    let start: GoogleStartResponse =
+        http_client::post_no_auth("/auth/google/start", &serde_json::json!({})).await?;
+
+    // 2. Open the authorize URL in the default browser
+    app_handle
+        .opener()
+        .open_url(&start.authorize_url, None::<&str>)
+        .map_err(|e| format!("Failed to open browser: {}", e))?;
+
+    // 3. Poll for completion
+    let poll_url = format!("/auth/google/status?state={}", start.state);
+    let mut attempts = 0;
+    let max_attempts = 150; // 5 minutes at 2 second intervals
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        attempts += 1;
+
+        if attempts > max_attempts {
+            return Ok(AuthResult {
+                success: false,
+                error: Some("Google sign-in timed out. Please try again.".to_string()),
+                user_id: None,
+                needs_confirmation: false,
+            });
+        }
+
+        let status: GoogleStatusResponse = match http_client::get_no_auth(&poll_url).await {
+            Ok(s) => s,
+            Err(_) => continue, // Network blip, keep polling
+        };
+
+        match status.status.as_str() {
+            "pending" => continue,
+            "complete" => {
+                let access_token = status.access_token.unwrap_or_default();
+                let id_token = status.id_token.unwrap_or_default();
+                let refresh_token = status.refresh_token.unwrap_or_default();
+
+                // Decode the id_token to extract user_id (sub) and email
+                let claims = decode_id_token_claims(&id_token)?;
+                let user_id = claims.sub.clone();
+                let email = claims.email.unwrap_or_default();
+
+                // Calculate expiry (Cognito access tokens are typically 1 hour)
+                let expires_at = chrono::Utc::now().timestamp() + 3600;
+
+                let session = Session {
+                    access_token,
+                    refresh_token,
+                    id_token,
+                    user_id: user_id.clone(),
+                    email,
+                    expires_at,
+                };
+
+                let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
+                *store = Some(session);
+
+                return Ok(AuthResult {
+                    success: true,
+                    error: None,
+                    user_id: Some(user_id),
+                    needs_confirmation: false,
+                });
+            }
+            "failed" => {
+                return Ok(AuthResult {
+                    success: false,
+                    error: status.error.or(Some("Google sign-in failed".to_string())),
+                    user_id: None,
+                    needs_confirmation: false,
+                });
+            }
+            _ => continue,
+        }
+    }
+}
+
+/// Decode just the claims from a JWT id_token (no signature verification needed here
+/// since the server already verified it with Cognito)
+fn decode_id_token_claims(token: &str) -> Result<IdTokenClaims, String> {
+    let parts: Vec<&str> = token.split('.').collect();
+    if parts.len() != 3 {
+        return Err("Invalid id_token format".to_string());
+    }
+
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(parts[1])
+        .map_err(|e| format!("Failed to decode id_token: {}", e))?;
+
+    serde_json::from_slice(&decoded).map_err(|e| format!("Failed to parse id_token claims: {}", e))
+}
+
+#[derive(Deserialize)]
+struct IdTokenClaims {
+    sub: String,
+    email: Option<String>,
 }
