@@ -1,9 +1,21 @@
-name: Development Build
+name: Release Build
 
 on:
   workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        required: true
+        type: choice
+        options:
+          - patch
+          - minor
+      prerelease:
+        description: 'Mark as pre-release?'
+        required: true
+        type: boolean
+        default: true
 
-# Cancel in-progress runs when a new commit is pushed
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -12,12 +24,58 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-windows:
+  build-and-release:
     runs-on: self-hosted
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Bump version
+        id: version
+        run: |
+          node -e "
+            const fs = require('fs');
+            const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+            const parts = conf.version.split('.').map(Number);
+            const bump = '${{ github.event.inputs.bump }}';
+            
+            if (bump === 'minor') {
+              parts[1]++;
+              parts[2] = 0;
+            } else {
+              parts[2]++;
+            }
+            
+            // Never hit 1.0
+            if (parts[0] >= 1) {
+              console.error('ERROR: Version would reach 1.0. Use 1.0 only for official release.');
+              process.exit(1);
+            }
+            
+            const newVersion = parts.join('.');
+            conf.version = newVersion;
+            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2));
+            
+            // Also update package.json
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = newVersion;
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+            
+            console.log('New version: ' + newVersion);
+          "
+          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Commit version bump
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add src-tauri/tauri.conf.json package.json
+          git commit -m "bump version to v${{ steps.version.outputs.version }}"
+          git push
 
       - name: Setup Rust targets
         run: |
@@ -28,56 +86,66 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri app (Windows)
+      - name: Build Tauri app (signed)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target x86_64-pc-windows-gnu
 
-      - name: Upload Windows artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-windows
-          path: |
-            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/**/*.exe
-            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/**/*.msi
-            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/**/*.sig
-          retention-days: 7
+      - name: Generate latest.json
+        shell: bash
+        run: |
+          BUNDLE_DIR="src-tauri/target/x86_64-pc-windows-gnu/release/bundle"
+          
+          NSIS_ZIP=$(find "$BUNDLE_DIR/nsis" -name "*.nsis.zip" | head -1)
+          NSIS_SIG=$(find "$BUNDLE_DIR/nsis" -name "*.nsis.zip.sig" | head -1)
+          
+          if [ -z "$NSIS_ZIP" ] || [ -z "$NSIS_SIG" ]; then
+            echo "ERROR: Could not find NSIS bundle or signature"
+            find "$BUNDLE_DIR" -type f | sort
+            exit 1
+          fi
+          
+          NSIS_FILENAME=$(basename "$NSIS_ZIP")
+          SIGNATURE=$(cat "$NSIS_SIG")
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v${VERSION}"
+          PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          
+          cat > latest.json << EOF
+          {
+            "version": "${VERSION}",
+            "notes": "Cryptext v${VERSION}",
+            "pub_date": "${PUB_DATE}",
+            "platforms": {
+              "windows-x86_64": {
+                "signature": "${SIGNATURE}",
+                "url": "https://github.com/abhichenna00/Cryptext_Client/releases/download/${TAG}/${NSIS_FILENAME}"
+              }
+            }
+          }
+          EOF
+          
+          echo "Generated latest.json:"
+          cat latest.json
 
-  create-dev-release:
-    needs: [build-windows]
-    runs-on: self-hosted
-    permissions:
-      contents: write
+      - name: List build artifacts
+        run: |
+          find src-tauri/target/x86_64-pc-windows-gnu/release/bundle -type f | sort
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Get version from package.json
-        id: version
-        run: echo "version=$(node -p "require('./package.json').version")" >> $GITHUB_OUTPUT
-
-      - name: Download all artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: artifacts
-          merge-multiple: true
-
-      - name: List artifacts
-        run: find artifacts -type f | sort
-
-      - name: Create dev release
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}-dev.${{ github.run_number }}
-          name: Dev Build v${{ steps.version.outputs.version }}-dev.${{ github.run_number }}
-          prerelease: true
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Cryptext v${{ steps.version.outputs.version }}
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease }}
           files: |
-            artifacts/**/*.exe
-            artifacts/**/*.msi
-            artifacts/**/*.sig
+            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*.exe
+            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*.nsis.zip
+            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*.sig
+            latest.json
           body: |
-            ## Development Build
+            ## Cryptext v${{ steps.version.outputs.version }}
             
-            **Version:** ${{ steps.version.outputs.version }}-dev.${{ github.run_number }}
             **Commit:** ${{ github.sha }}
-            
-            ⚠️ Development build for testing purposes.
