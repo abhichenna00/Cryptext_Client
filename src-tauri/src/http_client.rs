@@ -116,3 +116,21 @@ pub async fn delete<T: DeserializeOwned>(path: &str, token: &str) -> Result<T, S
 
     response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
 }
+
+/// GET request without auth (used for Google OAuth status polling).
+pub async fn get_no_auth<T: DeserializeOwned>(path: &str) -> Result<T, String> {
+    let url = format!("{}{}", server_url(), path);
+    let response = client()
+        .get(&url)
+        .send()
+        .await
+        .map_err(|e| format!("Request failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+
+    response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
+}
