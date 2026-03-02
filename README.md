@@ -1,7 +1,36 @@
-# Cryptext Messaging Platform
+# Cryptext
 
-Cryptext is a messaging platform designed for messaging, calling, and file transfers across all platforms.
+A secure, self-hostable messaging platform.
 
-This application is currently still in development. No release currently available.
+---
 
-Once a stable version is ready to be released, this repo will go public.
+## About
+
+Cryptext is a cross-platform desktop messaging application focused on privacy and user control. Built as a native desktop app, it's designed for individuals and teams who want full ownership of their communication infrastructure.
+
+---
+
+## Features
+
+- Real-time direct messaging
+- User authentication (email/password)
+- Customizable user profiles with avatars
+- Friends management system
+- automatic updates pushed to client side
+
+---
+
+## Planned
+
+- End-to-end encryption
+- Group conversations and channels
+- File and media sharing
+- Voice and video calling
+- Cross-platform support (Windows, macOS, Linux)
+- Mobile clients (iOS, Android)
+
+---
+
+## License
+
+This project is currently source-available. License details to be determined.
