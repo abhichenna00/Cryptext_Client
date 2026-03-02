@@ -6,6 +6,7 @@ mod conversations;
 mod friends;
 mod http_client;
 mod profile;
+mod updates;
 
 pub use auth::SessionStore;
 
@@ -22,7 +23,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
-        .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
             println!("Single instance triggered with args: {:?}", argv);
 
@@ -39,6 +40,9 @@ pub fn run() {
         }))
         .manage(SessionStore::default())
         .invoke_handler(tauri::generate_handler![
+            // Updates
+            updates::check_for_updates,
+            updates::install_update,
             // Auth
             auth::sign_in,
             auth::sign_up,
