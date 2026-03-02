@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Cryptext",
-  "version": "0.1.0",
+  "version": "0.0.9",
   "identifier": "cryptex.app.com",
   "build": {
     "beforeDevCommand": "pnpm dev",

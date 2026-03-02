@@ -86,32 +86,40 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri app (signed)
+      - name: Build Tauri app
+        run: pnpm tauri build --target x86_64-pc-windows-gnu
+
+      - name: Sign the installer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri build --target x86_64-pc-windows-gnu
+        run: |
+          BUNDLE_DIR="src-tauri/target/x86_64-pc-windows-gnu/release/bundle"
+          SETUP_EXE=$(find "$BUNDLE_DIR/nsis" -name "*-setup.exe" | head -1)
+          
+          if [ -z "$SETUP_EXE" ]; then
+            echo "ERROR: Could not find installer"
+            find "$BUNDLE_DIR" -type f | sort
+            exit 1
+          fi
+          
+          echo "Signing: $SETUP_EXE"
+          npx @tauri-apps/cli signer sign "$SETUP_EXE" --private-key "$TAURI_SIGNING_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
+          
+          echo "Files after signing:"
+          find "$BUNDLE_DIR/nsis" -type f | sort
 
       - name: Generate latest.json
         shell: bash
         run: |
           BUNDLE_DIR="src-tauri/target/x86_64-pc-windows-gnu/release/bundle"
           
-          echo "All bundle files:"
-          find "$BUNDLE_DIR" -type f | sort
-          
-          # Look for the NSIS exe and its signature
           SETUP_EXE=$(find "$BUNDLE_DIR/nsis" -name "*-setup.exe" | head -1)
           SETUP_SIG=$(find "$BUNDLE_DIR/nsis" -name "*-setup.exe.sig" | head -1)
           
-          # Fall back to nsis.zip if available
-          if [ -z "$SETUP_SIG" ]; then
-            SETUP_EXE=$(find "$BUNDLE_DIR/nsis" -name "*.nsis.zip" | head -1)
-            SETUP_SIG=$(find "$BUNDLE_DIR/nsis" -name "*.nsis.zip.sig" | head -1)
-          fi
-          
           if [ -z "$SETUP_EXE" ] || [ -z "$SETUP_SIG" ]; then
             echo "ERROR: Could not find installer or signature"
+            find "$BUNDLE_DIR/nsis" -type f | sort
             exit 1
           fi
           
