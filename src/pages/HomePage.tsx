@@ -258,9 +258,6 @@ export default function HomePage() {
 
   return (
     <div className="home-page">
-      <h2>
-        Welcome
-      </h2>
       <div className="home-layout">
         {/* Recent Chats Sidebar */}
         <div className="recent-chats-panel">
