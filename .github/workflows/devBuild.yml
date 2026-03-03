@@ -24,11 +24,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-and-release:
+  build:
     runs-on: self-hosted
     permissions:
-      contents: write
-
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -82,43 +83,55 @@ jobs:
       - name: Build Tauri app
         run: pnpm tauri build --target x86_64-pc-windows-gnu
 
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: tauri-build
+          path: src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/
+          retention-days: 1
+
+  sign-and-release:
+    needs: build
+    runs-on: self-hosted
+    permissions:
+      contents: write
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: tauri-build
+          path: bundle/nsis
+
       - name: Sign the installer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          BUNDLE_DIR="src-tauri/target/x86_64-pc-windows-gnu/release/bundle"
-          SETUP_EXE=$(find "$BUNDLE_DIR/nsis" -name "*-setup.exe" | head -1)
+          SETUP_EXE=$(find "bundle/nsis" -name "*-setup.exe" | head -1)
           
           if [ -z "$SETUP_EXE" ]; then
             echo "ERROR: Could not find installer"
-            find "$BUNDLE_DIR" -type f | sort
+            find "bundle/nsis" -type f | sort
             exit 1
           fi
           
           echo "Signing: $SETUP_EXE"
           npx @tauri-apps/cli signer sign "$SETUP_EXE" --private-key "$TAURI_SIGNING_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
-          
-          echo "Files after signing:"
-          find "$BUNDLE_DIR/nsis" -type f | sort
 
       - name: Generate latest.json
-        shell: bash
         run: |
-          BUNDLE_DIR="src-tauri/target/x86_64-pc-windows-gnu/release/bundle"
-          
-          SETUP_EXE=$(find "$BUNDLE_DIR/nsis" -name "*-setup.exe" | head -1)
-          SETUP_SIG=$(find "$BUNDLE_DIR/nsis" -name "*-setup.exe.sig" | head -1)
+          SETUP_EXE=$(find "bundle/nsis" -name "*-setup.exe" | head -1)
+          SETUP_SIG=$(find "bundle/nsis" -name "*-setup.exe.sig" | head -1)
           
           if [ -z "$SETUP_EXE" ] || [ -z "$SETUP_SIG" ]; then
             echo "ERROR: Could not find installer or signature"
-            find "$BUNDLE_DIR/nsis" -type f | sort
+            find "bundle/nsis" -type f | sort
             exit 1
           fi
           
           FILENAME=$(basename "$SETUP_EXE")
           SIGNATURE=$(cat "$SETUP_SIG")
-          VERSION="${{ steps.version.outputs.version }}"
+          VERSION="${{ needs.build.outputs.version }}"
           TAG="v${VERSION}"
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
           
@@ -135,32 +148,53 @@ jobs:
             }
           }
           EOF
-          
-          echo "Generated latest.json:"
-          cat latest.json
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ steps.version.outputs.version }}
-          name: Cryptext v${{ steps.version.outputs.version }}
+          tag_name: v${{ needs.build.outputs.version }}
+          name: Cryptext v${{ needs.build.outputs.version }}
           draft: false
           prerelease: ${{ github.event.inputs.prerelease }}
           files: |
-            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*-setup.exe
-            src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*.sig
+            bundle/nsis/*-setup.exe
+            bundle/nsis/*.sig
             latest.json
           body: |
-            ## Cryptext v${{ steps.version.outputs.version }}
+            ## Cryptext v${{ needs.build.outputs.version }}
             
             **Commit:** ${{ github.sha }}
+
+  commit-version:
+    needs: [build, sign-and-release]
+    runs-on: self-hosted
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Commit version bump
         run: |
           export PATH="/usr/bin:$PATH"
+          node -e "
+            const fs = require('fs');
+            const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+            const parts = conf.version.split('.').map(Number);
+            const bump = '${{ github.event.inputs.bump }}';
+            if (bump === 'minor') { parts[1]++; parts[2] = 0; } else { parts[2]++; }
+            const newVersion = parts.join('.');
+            conf.version = newVersion;
+            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2));
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = newVersion;
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+          "
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add src-tauri/tauri.conf.json package.json
-          git commit -m "bump version to v${{ steps.version.outputs.version }}"
+          git commit -m "bump version to v${{ needs.build.outputs.version }}"
           git pull --rebase origin main
           git push
