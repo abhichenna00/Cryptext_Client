@@ -30,12 +30,7 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ],
-    "windows": {
-      "nsis": {
-        "installMode": "quietWithoutProgress"
-      }
-    }
+    ]
   },
   "plugins": {
     "deep-link": {
@@ -49,7 +44,8 @@
       "endpoints": [
         "https://github.com/abhichenna00/Cryptext_Client/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ2MTk4RDA0NDFERDU0RDkKUldUWlZOMUJCSTBaMXFCdHl2QWR3Mmx0bkZET3p1NFg3S0prRzY3SUZRc0VoUEdtL0ZCcCtPTkIK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQ2MTk4RDA0NDFERDU0RDkKUldUWlZOMUJCSTBaMXFCdHl2QWR3Mmx0bkZET3p1NFg3S0prRzY3SUZRc0VoUEdtL0ZCcCtPTkIK",
+      "installMode": "passive"
     }
   }
 }
