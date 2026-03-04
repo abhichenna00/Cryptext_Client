@@ -112,6 +112,9 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Clean old bundles
+        run: rm -rf src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*
+
       - name: Build Tauri app
         run: pnpm tauri build --target x86_64-pc-windows-gnu
 
