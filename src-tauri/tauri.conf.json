@@ -12,9 +12,21 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Cryptext",
         "width": 800,
-        "height": 600
+        "height": 600,
+        "visible": false
+      },
+      {
+        "label": "splash",
+        "title": "Cryptext",
+        "width": 300,
+        "height": 200,
+        "resizable": false,
+        "decorations": false,
+        "center": true,
+        "url": "/splash"
       }
     ],
     "security": {
