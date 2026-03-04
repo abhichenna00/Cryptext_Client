@@ -10,6 +10,7 @@ on:
         options:
           - patch
           - minor
+          - major
       prerelease:
         description: 'Mark as pre-release?'
         required: true
@@ -37,40 +38,70 @@ jobs:
           fetch-depth: 0
           clean: false
 
-      - name: Bump version
+      - name: Calculate version from latest tag
         id: version
         run: |
           export PATH="/usr/bin:$PATH"
+
+          # Get latest version tag, default to 0.0.0 if none exist
+          LATEST_TAG=$(git tag --list 'v*' --sort=-v:refname | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_VERSION="0.0.0"
+          else
+            LATEST_VERSION="${LATEST_TAG#v}"
+          fi
+
+          echo "Latest version: $LATEST_VERSION"
+
+          # Bump version
           node -e "
-            const fs = require('fs');
-            const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-            const parts = conf.version.split('.').map(Number);
+            const parts = '${LATEST_VERSION}'.split('.').map(Number);
             const bump = '${{ github.event.inputs.bump }}';
-            
-            if (bump === 'minor') {
+
+            if (bump === 'major') {
+              parts[0]++;
+              parts[1] = 0;
+              parts[2] = 0;
+            } else if (bump === 'minor') {
               parts[1]++;
               parts[2] = 0;
             } else {
               parts[2]++;
             }
-            
-            if (parts[0] >= 1) {
-              console.error('ERROR: Version would reach 1.0. Use 1.0 only for official release.');
-              process.exit(1);
-            }
-            
-            const newVersion = parts.join('.');
-            conf.version = newVersion;
-            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2));
-            
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = newVersion;
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-            
-            console.log('New version: ' + newVersion);
+
+            console.log(parts.join('.'));
           "
-          VERSION=$(node -p "require('./src-tauri/tauri.conf.json').version")
+
+          VERSION=$(node -p "
+            const parts = '${LATEST_VERSION}'.split('.').map(Number);
+            const bump = '${{ github.event.inputs.bump }}';
+            if (bump === 'major') { parts[0]++; parts[1] = 0; parts[2] = 0; }
+            else if (bump === 'minor') { parts[1]++; parts[2] = 0; }
+            else { parts[2]++; }
+            parts.join('.');
+          ")
+
+          echo "New version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Inject version into project files
+        run: |
+          export PATH="/usr/bin:$PATH"
+          VERSION="${{ steps.version.outputs.version }}"
+
+          node -e "
+            const fs = require('fs');
+
+            const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+            conf.version = '${VERSION}';
+            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2));
+
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '${VERSION}';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+
+            console.log('Injected version: ${VERSION}');
+          "
 
       - name: Setup Rust targets
         run: |
@@ -109,13 +140,13 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           SETUP_EXE=$(find "bundle/nsis" -name "*-setup.exe" | head -1)
-          
+
           if [ -z "$SETUP_EXE" ]; then
             echo "ERROR: Could not find installer"
             find "bundle/nsis" -type f | sort
             exit 1
           fi
-          
+
           echo "Signing: $SETUP_EXE"
           npx @tauri-apps/cli signer sign "$SETUP_EXE" --private-key "$TAURI_SIGNING_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD"
 
@@ -123,19 +154,19 @@ jobs:
         run: |
           SETUP_EXE=$(find "bundle/nsis" -name "*-setup.exe" | head -1)
           SETUP_SIG=$(find "bundle/nsis" -name "*-setup.exe.sig" | head -1)
-          
+
           if [ -z "$SETUP_EXE" ] || [ -z "$SETUP_SIG" ]; then
             echo "ERROR: Could not find installer or signature"
             find "bundle/nsis" -type f | sort
             exit 1
           fi
-          
+
           FILENAME=$(basename "$SETUP_EXE")
           SIGNATURE=$(cat "$SETUP_SIG")
           VERSION="${{ needs.build.outputs.version }}"
           TAG="v${VERSION}"
           PUB_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          
+
           cat > latest.json << EOF
           {
             "version": "${VERSION}",
@@ -163,39 +194,5 @@ jobs:
             latest.json
           body: |
             ## Cryptext v${{ needs.build.outputs.version }}
-            
+
             **Commit:** ${{ github.sha }}
-
-  commit-version:
-    needs: [build, sign-and-release]
-    runs-on: self-hosted
-    permissions:
-      contents: write
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Commit version bump
-        run: |
-          export PATH="/usr/bin:$PATH"
-          node -e "
-            const fs = require('fs');
-            const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
-            const parts = conf.version.split('.').map(Number);
-            const bump = '${{ github.event.inputs.bump }}';
-            if (bump === 'minor') { parts[1]++; parts[2] = 0; } else { parts[2]++; }
-            const newVersion = parts.join('.');
-            conf.version = newVersion;
-            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2));
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = newVersion;
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
-          "
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add src-tauri/tauri.conf.json package.json
-          git commit -m "bump version to v${{ needs.build.outputs.version }}"
-          git pull --rebase origin main
-          git push
