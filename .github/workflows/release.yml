@@ -131,6 +131,9 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Clean old release artifacts
+        run: rm -rf bundle/nsis/*
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
