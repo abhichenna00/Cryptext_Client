@@ -51,7 +51,14 @@ export default function SplashPage() {
   }, []);
 
   return (
-    <div style={{
+    <div 
+      onMouseDown={(e) => {
+        if (e.buttons === 1) {
+          e.preventDefault();
+          getCurrentWindow().startDragging();
+        }
+      }}
+      style={{
       display: 'flex',
       flexDirection: 'column',
       alignItems: 'center',
