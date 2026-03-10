@@ -140,6 +140,36 @@ jobs:
           name: tauri-build
           path: bundle/nsis
 
+      - name: Decode certificate
+        run: echo "${{ secrets.WINDOWS_CERTIFICATE }}" | base64 -d > /tmp/CryptextDevelopmentCert.pfx
+
+      - name: Code sign installer with osslsigncode
+        run: |
+          SETUP_EXE=$(find "bundle/nsis" -name "*-setup.exe" | head -1)
+
+          if [ -z "$SETUP_EXE" ]; then
+            echo "ERROR: Could not find installer"
+            find "bundle/nsis" -type f | sort
+            exit 1
+          fi
+
+          echo "Code signing: $SETUP_EXE"
+          osslsigncode sign \
+            -pkcs12 /tmp/CryptextDevelopmentCert.pfx \
+            -pass "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" \
+            -n "Cryptext" \
+            -i "https://cryptext.duckdns.org" \
+            -t "http://timestamp.digicert.com" \
+            -in "$SETUP_EXE" \
+            -out "${SETUP_EXE%.exe}-signed.exe"
+
+          # Replace original with signed binary
+          mv "${SETUP_EXE%.exe}-signed.exe" "$SETUP_EXE"
+
+      - name: Clean up certificate
+        if: always()
+        run: rm -f /tmp/CryptextDevelopmentCert.pfx
+
       - name: Sign the installer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
