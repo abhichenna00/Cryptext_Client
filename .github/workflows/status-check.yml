@@ -28,6 +28,8 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
 
       - name: Build Tauri app
         run: pnpm tauri build --target x86_64-pc-windows-gnu
+        working-directory: apps/desktop

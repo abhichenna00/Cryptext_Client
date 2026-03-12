@@ -92,13 +92,13 @@ jobs:
           node -e "
             const fs = require('fs');
 
-            const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
+            const conf = JSON.parse(fs.readFileSync('apps/desktop/src-tauri/tauri.conf.json', 'utf8'));
             conf.version = '${VERSION}';
-            fs.writeFileSync('src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2));
+            fs.writeFileSync('apps/desktop/src-tauri/tauri.conf.json', JSON.stringify(conf, null, 2));
 
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const pkg = JSON.parse(fs.readFileSync('apps/desktop/package.json', 'utf8'));
             pkg.version = '${VERSION}';
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2));
+            fs.writeFileSync('apps/desktop/package.json', JSON.stringify(pkg, null, 2));
 
             console.log('Injected version: ${VERSION}');
           "
@@ -111,18 +111,20 @@ jobs:
 
       - name: Install frontend dependencies
         run: pnpm install --frozen-lockfile
+        working-directory: apps/desktop
 
       - name: Clean old bundles
-        run: rm -rf src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*
+        run: rm -rf apps/desktop/src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/*
 
       - name: Build Tauri app
         run: pnpm tauri build --target x86_64-pc-windows-gnu
+        working-directory: apps/desktop
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: tauri-build
-          path: src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/
+          path: apps/desktop/src-tauri/target/x86_64-pc-windows-gnu/release/bundle/nsis/
           retention-days: 1
 
   sign-and-release:
