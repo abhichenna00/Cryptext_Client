@@ -3,8 +3,6 @@ name: Desktop Status Check
 on:
   pull_request:
     branches: [main]
-    paths:
-      - "apps/desktop/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,21 +20,33 @@ jobs:
         with:
           clean: false
 
+      - name: Check for desktop changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            desktop:
+              - 'apps/desktop/**'
+
       - name: Load Rust environment
+        if: steps.filter.outputs.desktop == 'true'
         run: |
           source "$HOME/.cargo/env"
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
       - name: Setup Rust targets
+        if: steps.filter.outputs.desktop == 'true'
         run: |
           rustup update stable
           rustup default stable
           rustup target add x86_64-pc-windows-gnu
 
       - name: Install frontend dependencies
+        if: steps.filter.outputs.desktop == 'true'
         run: pnpm install --frozen-lockfile
         working-directory: apps/desktop
 
       - name: Build Tauri app
+        if: steps.filter.outputs.desktop == 'true'
         run: pnpm tauri build --target x86_64-pc-windows-gnu
         working-directory: apps/desktop
