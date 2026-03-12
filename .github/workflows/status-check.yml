@@ -20,6 +20,11 @@ jobs:
         with:
           clean: false
 
+      - name: Load Rust environment
+        run: |
+          source "$HOME/.cargo/env"
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
       - name: Setup Rust targets
         run: |
           rustup update stable
