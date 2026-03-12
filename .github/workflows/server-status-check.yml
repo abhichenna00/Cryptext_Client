@@ -1,0 +1,46 @@
+name: Server Status Check
+
+on:
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  server-check:
+    runs-on: self-hosted
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Check for server changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            server:
+              - 'apps/server/**'
+
+      - name: Load Rust environment
+        if: steps.filter.outputs.server == 'true'
+        run: |
+          source "$HOME/.cargo/env"
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Setup Rust targets
+        if: steps.filter.outputs.server == 'true'
+        run: |
+          rustup update stable
+          rustup default stable
+
+      - name: Build server
+        if: steps.filter.outputs.server == 'true'
+        run: cargo build --release
+        working-directory: apps/server

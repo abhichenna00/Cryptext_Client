@@ -1,0 +1,77 @@
+name: Deploy Server
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "apps/server/**"
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    name: Build & Deploy to EC2
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust (if not present)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/server/target
+          key: ${{ runner.os }}-cargo-server-${{ hashFiles('apps/server/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-server-
+
+      - name: Build release binary
+        working-directory: apps/server
+        run: cargo build --release
+
+      - name: Deploy to EC2
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          # Write SSH key to temp file
+          echo "$EC2_SSH_KEY" > /tmp/deploy_key.pem
+          chmod 600 /tmp/deploy_key.pem
+
+          # Stop service
+          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST \
+            "sudo systemctl stop cryptext || true"
+
+          # Upload new binary
+          scp -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no \
+            apps/server/target/release/cryptext-server \
+            ubuntu@$EC2_HOST:/tmp/cryptext-server-new
+
+          # Swap binary and restart
+          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST "sudo mv /tmp/cryptext-server-new /opt/cryptext/bin/cryptext-server"
+          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST "sudo chown cryptext:cryptext /opt/cryptext/bin/cryptext-server"
+          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST "sudo chmod 755 /opt/cryptext/bin/cryptext-server"
+          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST "sudo systemctl start cryptext"
+          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST "sudo systemctl status cryptext --no-pager"
+
+          # Cleanup key
+          rm /tmp/deploy_key.pem
+
+      - name: Verify deployment
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
+        run: |
+          echo "$EC2_SSH_KEY" > /tmp/deploy_key.pem
+          chmod 600 /tmp/deploy_key.pem
+
+          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST \
+            "curl -sf http://localhost:8080/health && echo 'Health check passed!'"
+
+          rm /tmp/deploy_key.pem
