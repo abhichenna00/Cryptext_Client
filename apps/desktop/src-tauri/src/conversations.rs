@@ -150,16 +150,31 @@ pub async fn get_messages(
 pub async fn send_message(
     conversation_id: String,
     content: String,
+    other_user_id: Option<String>,
     session_store: State<'_, SessionStore>,
     mls_state: State<'_, MlsState>,
 ) -> Result<MessageResult, String> {
     let token = get_token(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
 
-    // Check if this conversation has an MLS group
-    let has_group = crate::mls::has_group_inner(&mls_state, &conversation_id);
+    // Auto-create MLS group if one doesn't exist and we know the other user
+    if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
+        if let Some(ref other_id) = other_user_id {
+            match crate::mls::create_group_inner(
+                &conversation_id,
+                other_id,
+                &mls_state,
+                &session_store,
+            ).await {
+                Ok(_) => {}
+                Err(e) => {
+                    eprintln!("MLS group creation failed, sending plaintext: {}", e);
+                }
+            }
+        }
+    }
 
-    let body = if has_group {
+    let body = if crate::mls::has_group_inner(&mls_state, &conversation_id) {
         let ciphertext = crate::mls::encrypt_message_inner(&mls_state, &conversation_id, &content)?;
         SendMessageBody {
             content: "[encrypted]".to_string(),

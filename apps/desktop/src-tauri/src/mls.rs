@@ -359,6 +359,97 @@ pub async fn mls_has_group(
 // PUBLIC HELPERS (called from conversations.rs)
 // ============================================
 
+/// Create an MLS group (async, for use from conversations.rs)
+pub async fn create_group_inner(
+    conversation_id: &str,
+    other_user_id: &str,
+    mls_state: &State<'_, MlsState>,
+    session_store: &State<'_, SessionStore>,
+) -> Result<bool, String> {
+    let token = get_token(session_store)?;
+    let my_user_id = get_user_id_from_session(session_store)?;
+
+    // Claim a key package for the other user
+    let claimed: ClaimedKeyPackage = http_client::get(
+        &format!("/mls/key-packages/{}", other_user_id),
+        &token,
+    )
+    .await?;
+
+    let (group_id_bytes, welcome_bytes, commit_bytes) = {
+        let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
+        let inner = state.as_mut().ok_or("MLS not initialized")?;
+
+        let key_package_in = KeyPackageIn::tls_deserialize(
+            &mut claimed.key_package_data.as_slice(),
+        )
+        .map_err(|e| format!("Failed to deserialize key package: {:?}", e))?;
+
+        let validated_kp = key_package_in
+            .validate(inner.provider.crypto(), ProtocolVersion::Mls10)
+            .map_err(|e| format!("Failed to validate key package: {:?}", e))?;
+
+        let group_config = MlsGroupCreateConfig::builder()
+            .ciphersuite(CIPHERSUITE)
+            .build();
+
+        let group_id = GroupId::from_slice(&uuid::Uuid::new_v4().as_bytes()[..]);
+
+        let mut group = MlsGroup::new_with_group_id(
+            &inner.provider,
+            &inner.signer,
+            &group_config,
+            group_id,
+            inner.credential_with_key.clone(),
+        )
+        .map_err(|e| format!("Failed to create MLS group: {:?}", e))?;
+
+        let (commit, welcome, _group_info) = group
+            .add_members(&inner.provider, &inner.signer, &[validated_kp])
+            .map_err(|e| format!("Failed to add member: {:?}", e))?;
+
+        group
+            .merge_pending_commit(&inner.provider)
+            .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
+
+        let gid = group.group_id().as_slice().to_vec();
+        let wb = welcome.tls_serialize_detached()
+            .map_err(|e| format!("Failed to serialize welcome: {:?}", e))?;
+        let cb = commit.tls_serialize_detached()
+            .map_err(|e| format!("Failed to serialize commit: {:?}", e))?;
+
+        inner.conversation_groups.insert(conversation_id.to_string(), gid.clone());
+        inner.groups.insert(gid.clone(), group);
+
+        (gid, wb, cb)
+    };
+
+    let register_body = RegisterGroupBody {
+        group_id: group_id_bytes.clone(),
+        conversation_id: conversation_id.to_string(),
+        member_ids: vec![my_user_id, other_user_id.to_string()],
+    };
+    let _: serde_json::Value =
+        http_client::post("/mls/groups", &token, &register_body).await?;
+
+    let welcome_body = StoreWelcomeBody {
+        recipient_id: other_user_id.to_string(),
+        group_id: group_id_bytes.clone(),
+        welcome_data: welcome_bytes,
+    };
+    let _: serde_json::Value =
+        http_client::post("/mls/welcome", &token, &welcome_body).await?;
+
+    let commit_body = FanOutCommitBody {
+        group_id: group_id_bytes,
+        commit_data: commit_bytes,
+    };
+    let _: serde_json::Value =
+        http_client::post("/mls/commit", &token, &commit_body).await?;
+
+    Ok(true)
+}
+
 /// Check if a conversation has an MLS group
 pub fn has_group_inner(mls_state: &State<'_, MlsState>, conversation_id: &str) -> bool {
     let state = match mls_state.inner.lock() {

@@ -272,6 +272,7 @@ export default function DirectMessagePage() {
       const result = await invoke<MessageResult>('send_message', {
         conversationId,
         content: messageContent,
+        otherUserId: friendId,
       })
 
       if (!result.success) {
