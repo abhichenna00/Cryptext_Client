@@ -121,10 +121,29 @@ pub async fn get_or_create_dm(
 pub async fn get_messages(
     conversation_id: String,
     session_store: State<'_, SessionStore>,
+    mls_state: State<'_, MlsState>,
 ) -> Result<Vec<Message>, String> {
     let token = get_token(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
-    http_client::get(&path, &token).await
+    let mut messages: Vec<Message> = http_client::get(&path, &token).await?;
+
+    // Decrypt MLS messages in-place
+    for msg in &mut messages {
+        if msg.content_type == "mls" {
+            if let Some(ref ciphertext) = msg.content_bytes {
+                match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
+                    Ok(plaintext) => {
+                        msg.content = plaintext;
+                    }
+                    Err(_) => {
+                        msg.content = "[encrypted message]".to_string();
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(messages)
 }
 
 #[command]
