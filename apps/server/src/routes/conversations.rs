@@ -21,6 +21,14 @@ pub struct Message {
     pub sender_id: String,
     pub content: String,
     pub timestamp: i64,
+    #[serde(default = "default_content_type")]
+    pub content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_bytes: Option<Vec<u8>>,
+}
+
+fn default_content_type() -> String {
+    "plaintext".to_string()
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -34,6 +42,7 @@ pub struct ConversationWithDetails {
     pub other_user_status: Option<String>,       // added
     pub last_message: Option<String>,
     pub last_message_time: Option<i64>,
+    pub last_message_content_type: Option<String>,
     pub has_unread: bool,
 }
 
@@ -45,6 +54,8 @@ pub struct CreateDmRequest {
 #[derive(Deserialize)]
 pub struct SendMessageRequest {
     pub content: String,
+    pub content_type: Option<String>,
+    pub content_bytes: Option<Vec<u8>>,
 }
 
 // ============================================
@@ -57,41 +68,44 @@ pub async fn get_conversations(claims: Claims) -> AppResult<impl IntoResponse> {
 
     let rows: Vec<(
         String, String, Option<String>, Option<String>, Option<String>,
-        Option<String>, Option<String>, Option<String>, Option<i64>, bool,
+        Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, bool,
     )> = sqlx::query_as(
         r#"
-        SELECT 
+        SELECT
             c.id::text as conversation_id,
             c.type as conversation_type,
             c.name,
-            (SELECT cp2.user_id FROM conversation_participants cp2 
+            (SELECT cp2.user_id FROM conversation_participants cp2
              WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1) as other_user_id,
-            (SELECT p.nickname FROM profiles p 
+            (SELECT p.nickname FROM profiles p
              JOIN conversation_participants cp2 ON p.user_id = cp2.user_id
              WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1) as other_user_nickname,
-            (SELECT p.avatar_url FROM profiles p 
+            (SELECT p.avatar_url FROM profiles p
              JOIN conversation_participants cp2 ON p.user_id = cp2.user_id
              WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1) as other_user_avatar_url,
-            (SELECT p.status FROM profiles p 
+            (SELECT p.status FROM profiles p
              JOIN conversation_participants cp2 ON p.user_id = cp2.user_id
              WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1) as other_user_status,
-            (SELECT m.content FROM messages m 
-             WHERE m.conversation_id = c.id 
+            (SELECT m.content FROM messages m
+             WHERE m.conversation_id = c.id
              ORDER BY m.timestamp DESC LIMIT 1) as last_message,
-            (SELECT m.timestamp FROM messages m 
-             WHERE m.conversation_id = c.id 
+            (SELECT m.timestamp FROM messages m
+             WHERE m.conversation_id = c.id
              ORDER BY m.timestamp DESC LIMIT 1) as last_message_time,
+            (SELECT m.content_type FROM messages m
+             WHERE m.conversation_id = c.id
+             ORDER BY m.timestamp DESC LIMIT 1) as last_message_content_type,
             COALESCE(
                 (SELECT m.timestamp > COALESCE(EXTRACT(EPOCH FROM cp.last_read_at) * 1000, 0)
-                 FROM messages m 
-                 WHERE m.conversation_id = c.id 
+                 FROM messages m
+                 WHERE m.conversation_id = c.id
                  ORDER BY m.timestamp DESC LIMIT 1),
                 false
             ) as has_unread
         FROM conversations c
         JOIN conversation_participants cp ON c.id = cp.conversation_id
         WHERE cp.user_id = $1
-        ORDER BY 
+        ORDER BY
             (SELECT m.timestamp FROM messages m WHERE m.conversation_id = c.id ORDER BY m.timestamp DESC LIMIT 1) DESC NULLS LAST
         "#
     )
@@ -101,12 +115,12 @@ pub async fn get_conversations(claims: Claims) -> AppResult<impl IntoResponse> {
 
     let conversations: Vec<ConversationWithDetails> = rows
         .into_iter()
-        .map(|(conversation_id, conversation_type, name, other_user_id, other_user_nickname, other_user_avatar_url, other_user_status, last_message, last_message_time, has_unread)| {
+        .map(|(conversation_id, conversation_type, name, other_user_id, other_user_nickname, other_user_avatar_url, other_user_status, last_message, last_message_time, last_message_content_type, has_unread)| {
             ConversationWithDetails {
                 conversation_id, conversation_type, name,
                 other_user_id, other_user_nickname,
                 other_user_avatar_url, other_user_status,
-                last_message, last_message_time, has_unread,
+                last_message, last_message_time, last_message_content_type, has_unread,
             }
         })
         .collect();
@@ -217,9 +231,9 @@ pub async fn get_messages(
     }
 
     let messages: Vec<Message> = sqlx::query_as(
-        "SELECT id::text, conversation_id::text, sender_id, content, timestamp 
-         FROM messages 
-         WHERE conversation_id = $1::uuid 
+        "SELECT id::text, conversation_id::text, sender_id, content, timestamp, content_type, content_bytes
+         FROM messages
+         WHERE conversation_id = $1::uuid
          ORDER BY timestamp ASC"
     )
     .bind(&conversation_id)
@@ -265,14 +279,18 @@ pub async fn send_message(
     }
 
     let timestamp = chrono::Utc::now().timestamp_millis();
+    let content_type = req.content_type.as_deref().unwrap_or("plaintext");
 
     sqlx::query(
-        "INSERT INTO messages (conversation_id, sender_id, content, timestamp) VALUES ($1::uuid, $2, $3, $4)"
+        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, content_type, content_bytes)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6)"
     )
     .bind(&conversation_id)
     .bind(claims.user_id())
     .bind(req.content.trim())
     .bind(timestamp)
+    .bind(content_type)
+    .bind(&req.content_bytes)
     .execute(pool.as_ref())
     .await?;
 
