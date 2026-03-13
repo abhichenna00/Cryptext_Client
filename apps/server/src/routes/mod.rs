@@ -1,6 +1,7 @@
 pub mod cognito;
 pub mod conversations;
 pub mod friends;
+pub mod mls;
 pub mod profile;
 pub mod google_oauth;
 
@@ -55,6 +56,15 @@ pub fn build_router() -> Router {
         .route("/conversations/:id/messages", get(conversations::get_messages))
         .route("/conversations/:id/messages", post(conversations::send_message))
         .route("/conversations/:id/read", post(conversations::mark_conversation_read))
+
+        // MLS routes
+        .route("/mls/key-packages", post(mls::upload_key_packages))
+        .route("/mls/key-packages/:user_id", get(mls::claim_key_package))
+        .route("/mls/key-packages/count", get(mls::key_package_count))
+        .route("/mls/groups", post(mls::register_group))
+        .route("/mls/welcome", post(mls::store_welcome))
+        .route("/mls/welcome", get(mls::fetch_welcomes))
+        .route("/mls/commit", post(mls::fan_out_commit))
 }
 
 async fn health() -> axum::Json<serde_json::Value> {
