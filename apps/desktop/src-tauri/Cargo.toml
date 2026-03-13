@@ -39,3 +39,10 @@ aws-sdk-cognitoidentityprovider = "1.60"
 chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 dotenvy = "0.15"
+
+# MLS (E2E Encryption)
+openmls = { version = "0.6", features = ["test-utils"] }
+openmls_rust_crypto = "0.3"
+openmls_basic_credential = "0.3"
+openmls_traits = "0.3"
+uuid = { version = "1", features = ["v4"] }
