@@ -2,6 +2,7 @@
 
 use crate::auth::SessionStore;
 use crate::http_client;
+use crate::mls::MlsState;
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
 
@@ -16,6 +17,7 @@ pub struct ConversationWithDetails {
     pub other_user_status: Option<String>,
     pub last_message: Option<String>,
     pub last_message_time: Option<i64>,
+    pub last_message_content_type: Option<String>,
     pub has_unread: bool,
 }
 
@@ -26,6 +28,14 @@ pub struct Message {
     pub sender_id: String,
     pub content: String,
     pub timestamp: i64,
+    #[serde(default = "default_content_type")]
+    pub content_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_bytes: Option<Vec<u8>>,
+}
+
+fn default_content_type() -> String {
+    "plaintext".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -54,6 +64,10 @@ struct CreateDmBody {
 #[derive(Serialize)]
 struct SendMessageBody {
     content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    content_bytes: Option<Vec<u8>>,
 }
 
 #[derive(Serialize)]
@@ -118,10 +132,30 @@ pub async fn send_message(
     conversation_id: String,
     content: String,
     session_store: State<'_, SessionStore>,
+    mls_state: State<'_, MlsState>,
 ) -> Result<MessageResult, String> {
     let token = get_token(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
-    http_client::post(&path, &token, &SendMessageBody { content }).await
+
+    // Check if this conversation has an MLS group
+    let has_group = crate::mls::has_group_inner(&mls_state, &conversation_id);
+
+    let body = if has_group {
+        let ciphertext = crate::mls::encrypt_message_inner(&mls_state, &conversation_id, &content)?;
+        SendMessageBody {
+            content: "[encrypted]".to_string(),
+            content_type: Some("mls".to_string()),
+            content_bytes: Some(ciphertext),
+        }
+    } else {
+        SendMessageBody {
+            content,
+            content_type: None,
+            content_bytes: None,
+        }
+    };
+
+    http_client::post(&path, &token, &body).await
 }
 
 #[command]
