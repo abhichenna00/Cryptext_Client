@@ -107,6 +107,15 @@ export default function App() {
         if (currentSession?.user_id) {
           const profile = await invoke('get_profile')
           setHasProfile(profile !== null)
+
+          // Initialize MLS encryption
+          try {
+            await invoke('mls_init')
+            await invoke('mls_upload_key_packages')
+            await invoke('mls_fetch_welcomes')
+          } catch (mlsErr) {
+            console.error('MLS initialization failed:', mlsErr)
+          }
         }
       } catch (error) {
         console.error('Failed to initialize:', error)

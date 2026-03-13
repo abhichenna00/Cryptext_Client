@@ -20,6 +20,8 @@ interface Message {
   sender_id: string
   content: string
   timestamp: number
+  content_type?: string
+  content_bytes?: number[]
 }
 
 interface DmResult {
@@ -124,10 +126,23 @@ export default function DirectMessagePage() {
   useEffect(() => { userIdRef.current = userId }, [userId])
   useEffect(() => { isAtBottomRef.current = isAtBottom }, [isAtBottom])
 
-  const handleWsMessage = useCallback((data: WebSocketMessage) => {
+  const handleWsMessage = useCallback(async (data: WebSocketMessage) => {
     if (data.action === 'new_message') {
       const newMsg = data.message as Message
       if (newMsg.conversation_id !== conversationIdRef.current) return
+
+      // Decrypt MLS messages via the Rust backend
+      if (newMsg.content_type === 'mls' && newMsg.content_bytes) {
+        try {
+          const decrypted = await invoke<string>('mls_decrypt_message', {
+            conversationId: newMsg.conversation_id,
+            ciphertext: newMsg.content_bytes,
+          })
+          newMsg.content = decrypted
+        } catch {
+          newMsg.content = '[encrypted message]'
+        }
+      }
 
       setMessages((prev) => {
         if (prev.some((m) => m.id === newMsg.id)) return prev
