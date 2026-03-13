@@ -72,6 +72,6 @@ jobs:
           chmod 600 /tmp/deploy_key.pem
 
           ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST \
-            "curl -sf http://localhost:8080/health && echo 'Health check passed!'"
+            "for i in 1 2 3 4 5; do curl -sf http://localhost:8080/health && echo 'Health check passed!' && exit 0; sleep 3; done; echo 'Health check failed after 15s'; exit 1"
 
           rm /tmp/deploy_key.pem
