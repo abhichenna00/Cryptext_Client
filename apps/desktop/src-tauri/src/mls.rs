@@ -18,6 +18,13 @@ pub struct MlsState {
     inner: Mutex<Option<MlsInner>>,
 }
 
+/// Serializable metadata persisted alongside the MLS key store
+#[derive(Serialize, Deserialize, Default)]
+struct MlsMetadata {
+    conversation_groups: HashMap<String, Vec<u8>>,
+    signer_public_key: Vec<u8>,
+}
+
 struct MlsInner {
     provider: OpenMlsRustCrypto,
     credential_with_key: CredentialWithKey,
@@ -32,17 +39,19 @@ struct MlsInner {
 
 impl MlsInner {
     fn save_state(&self) {
-        // Save the memory storage to file
         if let Err(e) = self.provider.storage().save_to_file(
             &std::fs::File::create(&self.storage_path).unwrap(),
         ) {
             eprintln!("Failed to save MLS state: {}", e);
         }
 
-        // Save conversation_groups mapping
-        let map_path = self.storage_path.with_extension("map.json");
-        if let Ok(file) = std::fs::File::create(&map_path) {
-            let _ = serde_json::to_writer(file, &self.conversation_groups);
+        let meta = MlsMetadata {
+            conversation_groups: self.conversation_groups.clone(),
+            signer_public_key: self.signer.to_public_vec().to_vec(),
+        };
+        let meta_path = self.storage_path.with_extension("meta.json");
+        if let Ok(file) = std::fs::File::create(&meta_path) {
+            let _ = serde_json::to_writer(file, &meta);
         }
     }
 }
@@ -94,9 +103,9 @@ struct StoreWelcomeBody {
 struct WelcomeMessageResponse {
     #[allow(dead_code)]
     id: String,
-    #[allow(dead_code)]
     group_id: Vec<u8>,
     welcome_data: Vec<u8>,
+    conversation_id: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -149,22 +158,37 @@ pub async fn mls_init(
         }
     }
 
-    // Load conversation_groups mapping
-    let map_path = storage_path.with_extension("map.json");
-    let conversation_groups: HashMap<String, Vec<u8>> = if map_path.exists() {
-        std::fs::File::open(&map_path)
+    // Load metadata (conversation mappings + signer public key)
+    let meta_path = storage_path.with_extension("meta.json");
+    let metadata: MlsMetadata = if meta_path.exists() {
+        std::fs::File::open(&meta_path)
             .ok()
             .and_then(|f| serde_json::from_reader(f).ok())
             .unwrap_or_default()
     } else {
-        HashMap::new()
+        MlsMetadata::default()
     };
 
     let credential = BasicCredential::new(user_id.as_bytes().to_vec());
-    let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
-        .map_err(|e| format!("Failed to generate signing key: {:?}", e))?;
-    signer.store(provider.storage())
-        .map_err(|e| format!("Failed to store signing key: {:?}", e))?;
+
+    // Try to reload existing signer, or generate a new one
+    let signer = if !metadata.signer_public_key.is_empty() {
+        SignatureKeyPair::read(
+            provider.storage(),
+            &metadata.signer_public_key,
+            CIPHERSUITE.signature_algorithm(),
+        ).unwrap_or_else(|| {
+            let s = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).unwrap();
+            s.store(provider.storage()).unwrap();
+            s
+        })
+    } else {
+        let s = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
+            .map_err(|e| format!("Failed to generate signing key: {:?}", e))?;
+        s.store(provider.storage())
+            .map_err(|e| format!("Failed to store signing key: {:?}", e))?;
+        s
+    };
 
     let credential_with_key = CredentialWithKey {
         credential: credential.into(),
@@ -173,7 +197,7 @@ pub async fn mls_init(
 
     // Reload groups from storage
     let mut groups = HashMap::new();
-    for group_id_bytes in conversation_groups.values() {
+    for group_id_bytes in metadata.conversation_groups.values() {
         let group_id = GroupId::from_slice(group_id_bytes);
         if let Ok(Some(group)) = MlsGroup::load(provider.storage(), &group_id) {
             groups.insert(group_id_bytes.to_vec(), group);
@@ -185,7 +209,7 @@ pub async fn mls_init(
         credential_with_key,
         signer,
         groups,
-        conversation_groups,
+        conversation_groups: metadata.conversation_groups,
         storage_path,
     };
 
@@ -464,7 +488,7 @@ pub async fn fetch_welcomes_inner(
 
     let mut count = 0u32;
     for welcome_msg in welcomes {
-        match process_welcome_inner(mls_state, &welcome_msg.welcome_data) {
+        match process_welcome_inner(mls_state, &welcome_msg.welcome_data, welcome_msg.conversation_id.as_deref()) {
             Ok(_) => count += 1,
             Err(e) => eprintln!("Failed to process welcome: {}", e),
         }
@@ -480,6 +504,7 @@ pub async fn fetch_welcomes_inner(
 fn process_welcome_inner(
     mls_state: &State<'_, MlsState>,
     welcome_data: &[u8],
+    conversation_id: Option<&str>,
 ) -> Result<(), String> {
     let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
     let inner = state.as_mut().ok_or("MLS not initialized")?;
@@ -500,6 +525,12 @@ fn process_welcome_inner(
     .map_err(|e| format!("Failed to join group from welcome: {:?}", e))?;
 
     let group_id = group.group_id().as_slice().to_vec();
+
+    // Map conversation_id to this group so we can decrypt messages
+    if let Some(conv_id) = conversation_id {
+        inner.conversation_groups.insert(conv_id.to_string(), group_id.clone());
+    }
+
     inner.groups.insert(group_id, group);
     inner.save_state();
 
