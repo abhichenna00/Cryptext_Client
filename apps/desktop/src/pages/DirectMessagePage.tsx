@@ -279,8 +279,6 @@ export default function DirectMessagePage() {
         setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id))
         setError(result.error || 'Failed to send message')
         setNewMessage(messageContent)
-      } else {
-        await loadMessages(conversationId)
       }
     } catch (err) {
       console.error('Failed to send message:', err)
