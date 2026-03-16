@@ -43,6 +43,7 @@ dotenvy = "0.15"
 # MLS (E2E Encryption)
 openmls = { version = "0.6", features = ["test-utils"] }
 openmls_rust_crypto = "0.3"
+openmls_memory_storage = { version = "0.3", features = ["persistence"] }
 openmls_basic_credential = "0.3"
 openmls_traits = "0.3"
 uuid = { version = "1", features = ["v4"] }
