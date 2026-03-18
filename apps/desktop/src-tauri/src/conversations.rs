@@ -146,10 +146,10 @@ pub async fn get_messages(
             if let Some(ref ciphertext) = msg.content_bytes {
                 match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
                     Ok(plaintext) => plaintext,
-                    Err(_) => continue,
+                    Err(_) => "[encrypted message]".to_string(),
                 }
             } else {
-                continue;
+                "[encrypted message]".to_string()
             }
         } else {
             msg.content.clone()
