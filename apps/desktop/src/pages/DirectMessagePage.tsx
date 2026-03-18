@@ -264,6 +264,14 @@ export default function DirectMessagePage() {
       }
 
       setConversationId(result.conversation_id)
+
+      // Fetch any pending Welcome messages to join MLS groups
+      try {
+        await invoke('mls_fetch_welcomes')
+      } catch (err) {
+        console.error('Failed to fetch welcomes:', err)
+      }
+
       await loadMessages(result.conversation_id)
       await invoke('mark_read', { conversationId: result.conversation_id })
     } catch (err) {
