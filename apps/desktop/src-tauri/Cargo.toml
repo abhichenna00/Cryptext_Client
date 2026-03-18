@@ -40,6 +40,9 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 dotenvy = "0.15"
 
+# Local message storage (SQLCipher encryption added in a later branch)
+rusqlite = { version = "0.31", features = ["bundled"] }
+
 # MLS (E2E Encryption)
 openmls = { version = "0.6", features = ["test-utils"] }
 openmls_rust_crypto = "0.3"

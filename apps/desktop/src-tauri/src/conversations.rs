@@ -2,6 +2,7 @@
 
 use crate::auth::SessionStore;
 use crate::http_client;
+use crate::local_db::{self, LocalDb, LocalMessage};
 use crate::mls::MlsState;
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
@@ -122,28 +123,69 @@ pub async fn get_messages(
     conversation_id: String,
     session_store: State<'_, SessionStore>,
     mls_state: State<'_, MlsState>,
+    local_db: State<'_, LocalDb>,
 ) -> Result<Vec<Message>, String> {
     let token = get_token(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
-    let mut messages: Vec<Message> = http_client::get(&path, &token).await?;
 
-    // Decrypt MLS messages in-place
-    for msg in &mut messages {
-        if msg.content_type == "mls" {
+    // Get IDs of messages we already have locally
+    let existing_ids =
+        local_db::get_existing_message_ids(&local_db, &conversation_id).unwrap_or_default();
+
+    // Fetch from server
+    let server_messages: Vec<Message> = http_client::get(&path, &token).await?;
+
+    // Only decrypt new messages we haven't seen before
+    let mut new_to_store: Vec<LocalMessage> = Vec::new();
+    for msg in &server_messages {
+        if existing_ids.contains(&msg.id) {
+            continue;
+        }
+
+        let content = if msg.content_type == "mls" {
             if let Some(ref ciphertext) = msg.content_bytes {
                 match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
-                    Ok(plaintext) => {
-                        msg.content = plaintext;
-                    }
-                    Err(_) => {
-                        msg.content = "[encrypted message]".to_string();
-                    }
+                    Ok(plaintext) => plaintext,
+                    Err(_) => continue,
                 }
+            } else {
+                continue;
             }
-        }
+        } else {
+            msg.content.clone()
+        };
+
+        new_to_store.push(LocalMessage {
+            id: msg.id.clone(),
+            conversation_id: msg.conversation_id.clone(),
+            sender_id: msg.sender_id.clone(),
+            content,
+            timestamp: msg.timestamp,
+            content_type: msg.content_type.clone(),
+        });
     }
 
-    Ok(messages)
+    // Store newly decrypted messages locally
+    if !new_to_store.is_empty() {
+        let _ = local_db::store_messages(&local_db, &new_to_store);
+    }
+
+    // Return all messages from local DB
+    let local_messages =
+        local_db::get_local_messages_inner(&local_db, &conversation_id, Some(200), None)?;
+
+    Ok(local_messages
+        .into_iter()
+        .map(|m| Message {
+            id: m.id,
+            conversation_id: m.conversation_id,
+            sender_id: m.sender_id,
+            content: m.content,
+            timestamp: m.timestamp,
+            content_type: m.content_type,
+            content_bytes: None,
+        })
+        .collect())
 }
 
 #[command]

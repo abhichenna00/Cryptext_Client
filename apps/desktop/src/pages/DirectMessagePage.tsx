@@ -114,6 +114,8 @@ export default function DirectMessagePage() {
   const [error, setError] = useState<string | null>(null)
   const [newMessageCount, setNewMessageCount] = useState(0)
   const [isAtBottom, setIsAtBottom] = useState(true)
+  const [hasMore, setHasMore] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
@@ -142,6 +144,20 @@ export default function DirectMessagePage() {
         } catch {
           newMsg.content = '[encrypted message]'
         }
+      }
+
+      // Persist to local DB
+      try {
+        await invoke('store_decrypted_message', {
+          id: newMsg.id,
+          conversationId: newMsg.conversation_id,
+          senderId: newMsg.sender_id,
+          content: newMsg.content,
+          timestamp: newMsg.timestamp,
+          contentType: newMsg.content_type || 'plaintext',
+        })
+      } catch (err) {
+        console.error('Failed to store message locally:', err)
       }
 
       setMessages((prev) => {
@@ -173,13 +189,50 @@ export default function DirectMessagePage() {
     previousMessageCount.current = messages.length
   }, [messages, isAtBottom])
 
+  const loadMoreMessages = useCallback(async () => {
+    if (!conversationIdRef.current || loadingMore || !hasMore) return
+    setLoadingMore(true)
+
+    try {
+      const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : undefined
+      const older = await invoke<Message[]>('get_local_messages', {
+        conversationId: conversationIdRef.current,
+        limit: 50,
+        beforeTimestamp: oldestTimestamp,
+      })
+
+      if (older.length === 0) {
+        setHasMore(false)
+      } else {
+        const container = messagesContainerRef.current
+        const prevScrollHeight = container?.scrollHeight || 0
+
+        setMessages((prev) => [...older, ...prev])
+
+        requestAnimationFrame(() => {
+          if (container) {
+            container.scrollTop = container.scrollHeight - prevScrollHeight
+          }
+        })
+      }
+    } catch (err) {
+      console.error('Failed to load more messages:', err)
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [messages, loadingMore, hasMore])
+
   const handleScroll = useCallback(() => {
     if (!messagesContainerRef.current) return
     const { scrollTop, scrollHeight, clientHeight } = messagesContainerRef.current
     const atBottom = scrollHeight - scrollTop - clientHeight < 50
     setIsAtBottom(atBottom)
     if (atBottom) setNewMessageCount(0)
-  }, [])
+
+    if (scrollTop < 100 && hasMore && !loadingMore) {
+      loadMoreMessages()
+    }
+  }, [hasMore, loadingMore, loadMoreMessages])
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -267,6 +320,20 @@ export default function DirectMessagePage() {
 
     setMessages((prev) => [...prev, optimisticMessage])
     setTimeout(() => scrollToBottom(), 100)
+
+    // Store sent message locally
+    try {
+      await invoke('store_decrypted_message', {
+        id: optimisticMessage.id,
+        conversationId: optimisticMessage.conversation_id,
+        senderId: optimisticMessage.sender_id,
+        content: optimisticMessage.content,
+        timestamp: optimisticMessage.timestamp,
+        contentType: 'plaintext',
+      })
+    } catch (err) {
+      console.error('Failed to store sent message locally:', err)
+    }
 
     try {
       const result = await invoke<MessageResult>('send_message', {
