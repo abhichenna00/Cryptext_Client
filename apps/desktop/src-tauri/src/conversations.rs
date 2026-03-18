@@ -126,6 +126,13 @@ pub async fn get_messages(
     local_db: State<'_, LocalDb>,
 ) -> Result<Vec<Message>, String> {
     let token = get_token(&session_store)?;
+    let current_user_id = {
+        let store = session_store.session.lock().map_err(|e| e.to_string())?;
+        match &*store {
+            Some(session) => session.user_id.clone(),
+            None => return Err("Not authenticated".to_string()),
+        }
+    };
     let path = format!("/conversations/{}/messages", conversation_id);
 
     // Get IDs of messages we already have locally
@@ -143,6 +150,10 @@ pub async fn get_messages(
         }
 
         let content = if msg.content_type == "mls" {
+            // Never decrypt our own MLS messages — the ratchet already advanced when we encrypted
+            if msg.sender_id == current_user_id {
+                continue;
+            }
             if let Some(ref ciphertext) = msg.content_bytes {
                 match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
                     Ok(plaintext) => plaintext,
