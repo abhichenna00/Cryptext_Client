@@ -133,6 +133,9 @@ export default function DirectMessagePage() {
       const newMsg = data.message as Message
       if (newMsg.conversation_id !== conversationIdRef.current) return
 
+      // Skip own messages — we already have the plaintext from the optimistic send
+      if (newMsg.sender_id === userIdRef.current) return
+
       // Decrypt MLS messages via the Rust backend
       if (newMsg.content_type === 'mls' && newMsg.content_bytes) {
         try {
