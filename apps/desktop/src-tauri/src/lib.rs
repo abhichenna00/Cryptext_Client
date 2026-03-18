@@ -5,11 +5,13 @@ mod config;
 mod conversations;
 mod friends;
 mod http_client;
+mod local_db;
 mod mls;
 mod profile;
 mod updates;
 
 pub use auth::SessionStore;
+pub use local_db::LocalDb;
 pub use mls::MlsState;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -43,6 +45,7 @@ pub fn run() {
         }))
         .manage(SessionStore::default())
         .manage(MlsState::default())
+        .manage(LocalDb::default())
         .invoke_handler(tauri::generate_handler![
             // Updates
             updates::check_for_updates,
@@ -74,6 +77,10 @@ pub fn run() {
             conversations::get_messages,
             conversations::send_message,
             conversations::mark_read,
+            // Local encrypted message storage
+            local_db::init_local_db,
+            local_db::get_local_messages,
+            local_db::store_decrypted_message,
             // MLS (E2E Encryption)
             mls::mls_init,
             mls::mls_upload_key_packages,

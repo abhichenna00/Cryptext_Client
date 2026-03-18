@@ -108,6 +108,13 @@ export default function App() {
           const profile = await invoke('get_profile')
           setHasProfile(profile !== null)
 
+          // Initialize local message database
+          try {
+            await invoke('init_local_db', { userId: currentSession.user_id })
+          } catch (dbErr) {
+            console.error('Local DB initialization failed:', dbErr)
+          }
+
           // Initialize MLS encryption
           try {
             await invoke('mls_init')
