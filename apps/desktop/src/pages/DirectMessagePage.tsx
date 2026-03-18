@@ -33,6 +33,8 @@ interface DmResult {
 interface MessageResult {
   success: boolean
   error: string | null
+  message_id: string | null
+  timestamp: number | null
 }
 
 type Status = 'online' | 'idle' | 'dnd' | 'offline'
@@ -132,6 +134,9 @@ export default function DirectMessagePage() {
     if (data.action === 'new_message') {
       const newMsg = data.message as Message
       if (newMsg.conversation_id !== conversationIdRef.current) return
+
+      // Skip own messages — we already have the plaintext from the optimistic send
+      if (newMsg.sender_id === userIdRef.current) return
 
       // Decrypt MLS messages via the Rust backend
       if (newMsg.content_type === 'mls' && newMsg.content_bytes) {
@@ -329,20 +334,6 @@ export default function DirectMessagePage() {
     setMessages((prev) => [...prev, optimisticMessage])
     setTimeout(() => scrollToBottom(), 100)
 
-    // Store sent message locally
-    try {
-      await invoke('store_decrypted_message', {
-        id: optimisticMessage.id,
-        conversationId: optimisticMessage.conversation_id,
-        senderId: optimisticMessage.sender_id,
-        content: optimisticMessage.content,
-        timestamp: optimisticMessage.timestamp,
-        contentType: 'plaintext',
-      })
-    } catch (err) {
-      console.error('Failed to store sent message locally:', err)
-    }
-
     try {
       const result = await invoke<MessageResult>('send_message', {
         conversationId,
@@ -350,7 +341,16 @@ export default function DirectMessagePage() {
         otherUserId: friendId,
       })
 
-      if (!result.success) {
+      if (result.success && result.message_id) {
+        // Replace optimistic message with real server ID
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === optimisticMessage.id
+              ? { ...m, id: result.message_id!, timestamp: result.timestamp || m.timestamp }
+              : m
+          )
+        )
+      } else if (!result.success) {
         setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id))
         setError(result.error || 'Failed to send message')
         setNewMessage(messageContent)

@@ -50,6 +50,8 @@ pub struct DmResult {
 pub struct MessageResult {
     pub success: bool,
     pub error: Option<String>,
+    pub message_id: Option<String>,
+    pub timestamp: Option<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -126,6 +128,13 @@ pub async fn get_messages(
     local_db: State<'_, LocalDb>,
 ) -> Result<Vec<Message>, String> {
     let token = get_token(&session_store)?;
+    let current_user_id = {
+        let store = session_store.session.lock().map_err(|e| e.to_string())?;
+        match &*store {
+            Some(session) => session.user_id.clone(),
+            None => return Err("Not authenticated".to_string()),
+        }
+    };
     let path = format!("/conversations/{}/messages", conversation_id);
 
     // Get IDs of messages we already have locally
@@ -143,6 +152,10 @@ pub async fn get_messages(
         }
 
         let content = if msg.content_type == "mls" {
+            // Never decrypt our own MLS messages — the ratchet already advanced when we encrypted
+            if msg.sender_id == current_user_id {
+                continue;
+            }
             if let Some(ref ciphertext) = msg.content_bytes {
                 match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
                     Ok(plaintext) => plaintext,
@@ -195,8 +208,16 @@ pub async fn send_message(
     other_user_id: Option<String>,
     session_store: State<'_, SessionStore>,
     mls_state: State<'_, MlsState>,
+    local_db: State<'_, LocalDb>,
 ) -> Result<MessageResult, String> {
     let token = get_token(&session_store)?;
+    let current_user_id = {
+        let store = session_store.session.lock().map_err(|e| e.to_string())?;
+        match &*store {
+            Some(session) => session.user_id.clone(),
+            None => return Err("Not authenticated".to_string()),
+        }
+    };
     let path = format!("/conversations/{}/messages", conversation_id);
 
     // Auto-create MLS group if one doesn't exist and we know the other user
@@ -216,6 +237,7 @@ pub async fn send_message(
         }
     }
 
+    let plaintext = content.clone();
     let body = if crate::mls::has_group_inner(&mls_state, &conversation_id) {
         let ciphertext = crate::mls::encrypt_message_inner(&mls_state, &conversation_id, &content)?;
         SendMessageBody {
@@ -231,7 +253,24 @@ pub async fn send_message(
         }
     };
 
-    http_client::post(&path, &token, &body).await
+    let result: MessageResult = http_client::post(&path, &token, &body).await?;
+
+    // Store plaintext locally with the real server ID
+    if result.success {
+        if let (Some(ref msg_id), Some(ts)) = (&result.message_id, result.timestamp) {
+            let msg = LocalMessage {
+                id: msg_id.clone(),
+                conversation_id: conversation_id.clone(),
+                sender_id: current_user_id,
+                content: plaintext,
+                timestamp: ts,
+                content_type: "plaintext".to_string(),
+            };
+            let _ = local_db::store_message(&local_db, &msg);
+        }
+    }
+
+    Ok(result)
 }
 
 #[command]

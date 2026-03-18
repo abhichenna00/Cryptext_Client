@@ -281,9 +281,10 @@ pub async fn send_message(
     let timestamp = chrono::Utc::now().timestamp_millis();
     let content_type = req.content_type.as_deref().unwrap_or("plaintext");
 
-    sqlx::query(
+    let (message_id,): (String,) = sqlx::query_as(
         "INSERT INTO messages (conversation_id, sender_id, content, timestamp, content_type, content_bytes)
-         VALUES ($1::uuid, $2, $3, $4, $5, $6)"
+         VALUES ($1::uuid, $2, $3, $4, $5, $6)
+         RETURNING id::text"
     )
     .bind(&conversation_id)
     .bind(claims.user_id())
@@ -291,7 +292,7 @@ pub async fn send_message(
     .bind(timestamp)
     .bind(content_type)
     .bind(&req.content_bytes)
-    .execute(pool.as_ref())
+    .fetch_one(pool.as_ref())
     .await?;
 
     let _ = sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1::uuid")
@@ -299,7 +300,7 @@ pub async fn send_message(
         .execute(pool.as_ref())
         .await;
 
-    Ok(Json(serde_json::json!({ "success": true, "error": null })))
+    Ok(Json(serde_json::json!({ "success": true, "error": null, "message_id": message_id, "timestamp": timestamp })))
 }
 
 pub async fn mark_conversation_read(
