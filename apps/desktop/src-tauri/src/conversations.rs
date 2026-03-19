@@ -240,38 +240,25 @@ pub async fn send_message(
     let mut welcome_bytes: Option<Vec<u8>> = None;
     if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
         if let Some(ref other_id) = other_user_id {
-            match crate::mls::create_group_inner(
+            let wb = crate::mls::create_group_inner(
                 &conversation_id,
                 other_id,
                 &mls_state,
                 &session_store,
-            ).await {
-                Ok(wb) => {
-                    welcome_bytes = Some(wb);
-                }
-                Err(e) => {
-                    eprintln!("MLS group creation failed, sending plaintext: {}", e);
-                }
-            }
+            ).await?;
+            welcome_bytes = Some(wb);
+        } else {
+            return Err("Cannot send encrypted message: recipient unknown".to_string());
         }
     }
 
     let plaintext = content.clone();
-    let body = if crate::mls::has_group_inner(&mls_state, &conversation_id) {
-        let ciphertext = crate::mls::encrypt_message_inner(&mls_state, &conversation_id, &content)?;
-        SendMessageBody {
-            content: "[encrypted]".to_string(),
-            content_type: Some("mls".to_string()),
-            content_bytes: Some(ciphertext),
-            welcome_data: welcome_bytes,
-        }
-    } else {
-        SendMessageBody {
-            content,
-            content_type: None,
-            content_bytes: None,
-            welcome_data: None,
-        }
+    let ciphertext = crate::mls::encrypt_message_inner(&mls_state, &conversation_id, &content)?;
+    let body = SendMessageBody {
+        content: "[encrypted]".to_string(),
+        content_type: Some("mls".to_string()),
+        content_bytes: Some(ciphertext),
+        welcome_data: welcome_bytes,
     };
 
     let result: MessageResult = http_client::post(&path, &token, &body).await?;
