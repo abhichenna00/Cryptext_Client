@@ -38,21 +38,23 @@ struct MlsInner {
 }
 
 impl MlsInner {
-    fn save_state(&self) {
-        if let Err(e) = self.provider.storage().save_to_file(
-            &std::fs::File::create(&self.storage_path).unwrap(),
-        ) {
-            eprintln!("Failed to save MLS state: {}", e);
-        }
+    fn save_state(&self) -> Result<(), String> {
+        let file = std::fs::File::create(&self.storage_path)
+            .map_err(|e| format!("Failed to create MLS state file: {}", e))?;
+        self.provider.storage().save_to_file(&file)
+            .map_err(|e| format!("Failed to save MLS state: {}", e))?;
 
         let meta = MlsMetadata {
             conversation_groups: self.conversation_groups.clone(),
             signer_public_key: self.signer.to_public_vec().to_vec(),
         };
         let meta_path = self.storage_path.with_extension("meta.json");
-        if let Ok(file) = std::fs::File::create(&meta_path) {
-            let _ = serde_json::to_writer(file, &meta);
-        }
+        let meta_file = std::fs::File::create(&meta_path)
+            .map_err(|e| format!("Failed to create MLS meta file: {}", e))?;
+        serde_json::to_writer(meta_file, &meta)
+            .map_err(|e| format!("Failed to write MLS metadata: {}", e))?;
+
+        Ok(())
     }
 }
 
@@ -245,7 +247,7 @@ pub async fn mls_upload_key_packages(
             packages.push(serialized);
         }
 
-        inner.save_state();
+        inner.save_state()?;
         packages
     };
 
@@ -373,7 +375,7 @@ pub async fn create_group_inner(
 
         inner.conversation_groups.insert(conversation_id.to_string(), gid.clone());
         inner.groups.insert(gid.clone(), group);
-        inner.save_state();
+        inner.save_state()?;
 
         (gid, wb, cb)
     };
@@ -426,7 +428,7 @@ pub fn encrypt_message_inner(
         .create_message(&inner.provider, &inner.signer, plaintext.as_bytes())
         .map_err(|e| format!("Failed to encrypt message: {:?}", e))?;
 
-    inner.save_state();
+    inner.save_state()?;
 
     ciphertext.tls_serialize_detached()
         .map_err(|e| format!("Failed to serialize ciphertext: {:?}", e))
@@ -457,7 +459,7 @@ pub fn decrypt_message_inner(
         .process_message(&inner.provider, protocol_message)
         .map_err(|e| format!("Failed to process message: {:?}", e))?;
 
-    inner.save_state();
+    inner.save_state()?;
 
     match processed.into_content() {
         ProcessedMessageContent::ApplicationMessage(app_msg) => {
@@ -542,7 +544,7 @@ fn process_welcome_inner(
     }
 
     inner.groups.insert(group_id, group);
-    inner.save_state();
+    inner.save_state()?;
 
     Ok(())
 }
