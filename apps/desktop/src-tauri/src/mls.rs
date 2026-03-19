@@ -348,6 +348,7 @@ pub async fn create_group_inner(
 
         let group_config = MlsGroupCreateConfig::builder()
             .ciphersuite(CIPHERSUITE)
+            .use_ratchet_tree_extension(true)
             .build();
 
         let group_id = GroupId::from_slice(&uuid::Uuid::new_v4().as_bytes()[..]);
