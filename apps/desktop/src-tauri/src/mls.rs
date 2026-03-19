@@ -278,7 +278,7 @@ pub async fn mls_create_group(
     other_user_id: String,
     mls_state: State<'_, MlsState>,
     session_store: State<'_, SessionStore>,
-) -> Result<bool, String> {
+) -> Result<Vec<u8>, String> {
     create_group_inner(&conversation_id, &other_user_id, &mls_state, &session_store).await
 }
 
@@ -320,12 +320,13 @@ pub async fn mls_has_group(
 // PUBLIC HELPERS (called from conversations.rs)
 // ============================================
 
+/// Creates an MLS group and returns the Welcome bytes for embedding in the first message.
 pub async fn create_group_inner(
     conversation_id: &str,
     other_user_id: &str,
     mls_state: &State<'_, MlsState>,
     session_store: &State<'_, SessionStore>,
-) -> Result<bool, String> {
+) -> Result<Vec<u8>, String> {
     let token = get_token(session_store)?;
     let my_user_id = get_user_id_from_session(session_store)?;
 
@@ -384,14 +385,6 @@ pub async fn create_group_inner(
     let _: serde_json::Value =
         http_client::post("/mls/groups", &token, &register_body).await?;
 
-    let welcome_body = StoreWelcomeBody {
-        recipient_id: other_user_id.to_string(),
-        group_id: group_id_bytes.clone(),
-        welcome_data: welcome_bytes,
-    };
-    let _: serde_json::Value =
-        http_client::post("/mls/welcome", &token, &welcome_body).await?;
-
     let commit_body = FanOutCommitBody {
         group_id: group_id_bytes,
         commit_data: commit_bytes,
@@ -399,7 +392,8 @@ pub async fn create_group_inner(
     let _: serde_json::Value =
         http_client::post("/mls/commit", &token, &commit_body).await?;
 
-    Ok(true)
+    // Return the Welcome bytes to be embedded in the first message
+    Ok(welcome_bytes)
 }
 
 pub fn has_group_inner(mls_state: &State<'_, MlsState>, conversation_id: &str) -> bool {
@@ -507,6 +501,14 @@ pub async fn fetch_welcomes_inner(
 // ============================================
 // PRIVATE HELPERS
 // ============================================
+
+pub fn process_welcome_public(
+    mls_state: &State<'_, MlsState>,
+    welcome_data: &[u8],
+    conversation_id: Option<&str>,
+) -> Result<(), String> {
+    process_welcome_inner(mls_state, welcome_data, conversation_id)
+}
 
 fn process_welcome_inner(
     mls_state: &State<'_, MlsState>,

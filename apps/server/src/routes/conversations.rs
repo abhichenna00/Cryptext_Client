@@ -25,6 +25,8 @@ pub struct Message {
     pub content_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_bytes: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub welcome_data: Option<Vec<u8>>,
 }
 
 fn default_content_type() -> String {
@@ -56,6 +58,7 @@ pub struct SendMessageRequest {
     pub content: String,
     pub content_type: Option<String>,
     pub content_bytes: Option<Vec<u8>>,
+    pub welcome_data: Option<Vec<u8>>,
 }
 
 // ============================================
@@ -230,19 +233,13 @@ pub async fn get_messages(
         ));
     }
 
-    // Exclude messages that are still pending for this user (they haven't confirmed the MLS group yet)
     let messages: Vec<Message> = sqlx::query_as(
-        "SELECT m.id::text, m.conversation_id::text, m.sender_id, m.content, m.timestamp, m.content_type, m.content_bytes
-         FROM messages m
-         WHERE m.conversation_id = $1::uuid
-           AND m.id NOT IN (
-               SELECT pm.message_id::uuid FROM mls_pending_messages pm
-               WHERE pm.recipient_id = $2 AND pm.conversation_id = $1
-           )
-         ORDER BY m.timestamp ASC"
+        "SELECT id::text, conversation_id::text, sender_id, content, timestamp, content_type, content_bytes, welcome_data
+         FROM messages
+         WHERE conversation_id = $1::uuid
+         ORDER BY timestamp ASC"
     )
     .bind(&conversation_id)
-    .bind(claims.user_id())
     .fetch_all(pool.as_ref())
     .await?;
 
@@ -288,8 +285,8 @@ pub async fn send_message(
     let content_type = req.content_type.as_deref().unwrap_or("plaintext");
 
     let (message_id,): (String,) = sqlx::query_as(
-        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, content_type, content_bytes)
-         VALUES ($1::uuid, $2, $3, $4, $5, $6)
+        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, content_type, content_bytes, welcome_data)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
          RETURNING id::text"
     )
     .bind(&conversation_id)
@@ -298,6 +295,7 @@ pub async fn send_message(
     .bind(timestamp)
     .bind(content_type)
     .bind(&req.content_bytes)
+    .bind(&req.welcome_data)
     .fetch_one(pool.as_ref())
     .await?;
 

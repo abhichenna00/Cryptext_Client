@@ -22,6 +22,7 @@ interface Message {
   timestamp: number
   content_type?: string
   content_bytes?: number[]
+  welcome_data?: number[]
 }
 
 interface DmResult {
