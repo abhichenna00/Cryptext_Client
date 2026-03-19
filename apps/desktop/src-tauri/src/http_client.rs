@@ -2,11 +2,13 @@
 
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
+use std::sync::OnceLock;
 use crate::config::server_url;
 
-/// Build a reqwest client. Called per-request since Tauri commands are async.
-fn client() -> Client {
-    Client::new()
+static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn client() -> &'static Client {
+    HTTP_CLIENT.get_or_init(Client::new)
 }
 
 /// GET request with Bearer token auth.
