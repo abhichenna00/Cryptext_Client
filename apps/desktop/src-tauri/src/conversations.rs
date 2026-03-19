@@ -33,6 +33,8 @@ pub struct Message {
     pub content_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_bytes: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub welcome_data: Option<Vec<u8>>,
 }
 
 fn default_content_type() -> String {
@@ -71,6 +73,8 @@ struct SendMessageBody {
     content_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     content_bytes: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    welcome_data: Option<Vec<u8>>,
 }
 
 #[derive(Serialize)]
@@ -144,6 +148,17 @@ pub async fn get_messages(
     // Fetch from server
     let server_messages: Vec<Message> = http_client::get(&path, &token).await?;
 
+    // Process any Welcome data embedded in messages before decrypting
+    for msg in &server_messages {
+        if let Some(ref welcome_data) = msg.welcome_data {
+            if msg.sender_id != current_user_id {
+                let _ = crate::mls::process_welcome_public(
+                    &mls_state, welcome_data, Some(&conversation_id),
+                );
+            }
+        }
+    }
+
     // Only decrypt new messages we haven't seen before
     let mut new_to_store: Vec<LocalMessage> = Vec::new();
     for msg in &server_messages {
@@ -197,6 +212,7 @@ pub async fn get_messages(
             timestamp: m.timestamp,
             content_type: m.content_type,
             content_bytes: None,
+            welcome_data: None,
         })
         .collect())
 }
@@ -221,6 +237,7 @@ pub async fn send_message(
     let path = format!("/conversations/{}/messages", conversation_id);
 
     // Auto-create MLS group if one doesn't exist and we know the other user
+    let mut welcome_bytes: Option<Vec<u8>> = None;
     if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
         if let Some(ref other_id) = other_user_id {
             match crate::mls::create_group_inner(
@@ -229,7 +246,9 @@ pub async fn send_message(
                 &mls_state,
                 &session_store,
             ).await {
-                Ok(_) => {}
+                Ok(wb) => {
+                    welcome_bytes = Some(wb);
+                }
                 Err(e) => {
                     eprintln!("MLS group creation failed, sending plaintext: {}", e);
                 }
@@ -244,12 +263,14 @@ pub async fn send_message(
             content: "[encrypted]".to_string(),
             content_type: Some("mls".to_string()),
             content_bytes: Some(ciphertext),
+            welcome_data: welcome_bytes,
         }
     } else {
         SendMessageBody {
             content,
             content_type: None,
             content_bytes: None,
+            welcome_data: None,
         }
     };
 
