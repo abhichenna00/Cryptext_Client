@@ -230,13 +230,19 @@ pub async fn get_messages(
         ));
     }
 
+    // Exclude messages that are still pending for this user (they haven't confirmed the MLS group yet)
     let messages: Vec<Message> = sqlx::query_as(
-        "SELECT id::text, conversation_id::text, sender_id, content, timestamp, content_type, content_bytes
-         FROM messages
-         WHERE conversation_id = $1::uuid
-         ORDER BY timestamp ASC"
+        "SELECT m.id::text, m.conversation_id::text, m.sender_id, m.content, m.timestamp, m.content_type, m.content_bytes
+         FROM messages m
+         WHERE m.conversation_id = $1::uuid
+           AND m.id NOT IN (
+               SELECT pm.message_id::uuid FROM mls_pending_messages pm
+               WHERE pm.recipient_id = $2 AND pm.conversation_id = $1
+           )
+         ORDER BY m.timestamp ASC"
     )
     .bind(&conversation_id)
+    .bind(claims.user_id())
     .fetch_all(pool.as_ref())
     .await?;
 
@@ -295,12 +301,41 @@ pub async fn send_message(
     .fetch_one(pool.as_ref())
     .await?;
 
+    // For MLS messages, queue delivery for recipients who haven't confirmed their epoch
+    if content_type == "mls" {
+        let unconfirmed: Vec<(String,)> = sqlx::query_as(
+            "SELECT gm.user_id FROM mls_group_members gm
+             JOIN mls_groups g ON g.group_id = gm.group_id
+             WHERE g.conversation_id = $1::uuid
+               AND gm.user_id != $2
+               AND gm.confirmed_epoch < 1"
+        )
+        .bind(&conversation_id)
+        .bind(claims.user_id())
+        .fetch_all(pool.as_ref())
+        .await?;
+
+        for (recipient_id,) in &unconfirmed {
+            sqlx::query(
+                "INSERT INTO mls_pending_messages (group_id, conversation_id, recipient_id, message_id)
+                 SELECT g.group_id, $1, $2, $3
+                 FROM mls_groups g WHERE g.conversation_id = $1::uuid
+                 LIMIT 1"
+            )
+            .bind(&conversation_id)
+            .bind(recipient_id)
+            .bind(&message_id)
+            .execute(pool.as_ref())
+            .await?;
+        }
+    }
+
     let _ = sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1::uuid")
         .bind(&conversation_id)
         .execute(pool.as_ref())
         .await;
 
-    Ok(Json(serde_json::json!({ "success": true, "error": null, "message_id": message_id, "timestamp": timestamp })))
+    Ok(Json(serde_json::json!({ "success": true, "error": null, "message_id": message_id, "timestamp": timestamp, "queued": content_type == "mls" })))
 }
 
 pub async fn mark_conversation_read(

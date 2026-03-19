@@ -65,6 +65,7 @@ pub fn build_router() -> Router {
         .route("/mls/welcome", post(mls::store_welcome))
         .route("/mls/welcome", get(mls::fetch_welcomes))
         .route("/mls/commit", post(mls::fan_out_commit))
+        .route("/mls/welcome-ack", post(mls::welcome_ack))
 }
 
 async fn health() -> axum::Json<serde_json::Value> {
