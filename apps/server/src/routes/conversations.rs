@@ -78,38 +78,26 @@ pub async fn get_conversations(claims: Claims) -> AppResult<impl IntoResponse> {
             c.id::text as conversation_id,
             c.type as conversation_type,
             c.name,
-            (SELECT cp2.user_id FROM conversation_participants cp2
-             WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1) as other_user_id,
-            (SELECT p.nickname FROM profiles p
-             JOIN conversation_participants cp2 ON p.user_id = cp2.user_id
-             WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1) as other_user_nickname,
-            (SELECT p.avatar_url FROM profiles p
-             JOIN conversation_participants cp2 ON p.user_id = cp2.user_id
-             WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1) as other_user_avatar_url,
-            (SELECT p.status FROM profiles p
-             JOIN conversation_participants cp2 ON p.user_id = cp2.user_id
-             WHERE cp2.conversation_id = c.id AND cp2.user_id != $1 LIMIT 1) as other_user_status,
-            (SELECT m.content FROM messages m
-             WHERE m.conversation_id = c.id
-             ORDER BY m.timestamp DESC LIMIT 1) as last_message,
-            (SELECT m.timestamp FROM messages m
-             WHERE m.conversation_id = c.id
-             ORDER BY m.timestamp DESC LIMIT 1) as last_message_time,
-            (SELECT m.content_type FROM messages m
-             WHERE m.conversation_id = c.id
-             ORDER BY m.timestamp DESC LIMIT 1) as last_message_content_type,
-            COALESCE(
-                (SELECT m.timestamp > COALESCE(EXTRACT(EPOCH FROM cp.last_read_at) * 1000, 0)
-                 FROM messages m
-                 WHERE m.conversation_id = c.id
-                 ORDER BY m.timestamp DESC LIMIT 1),
-                false
-            ) as has_unread
+            other_cp.user_id as other_user_id,
+            p.nickname as other_user_nickname,
+            p.avatar_url as other_user_avatar_url,
+            p.status as other_user_status,
+            lm.content as last_message,
+            lm.timestamp as last_message_time,
+            lm.content_type as last_message_content_type,
+            COALESCE(lm.timestamp > COALESCE(EXTRACT(EPOCH FROM cp.last_read_at) * 1000, 0), false) as has_unread
         FROM conversations c
-        JOIN conversation_participants cp ON c.id = cp.conversation_id
-        WHERE cp.user_id = $1
-        ORDER BY
-            (SELECT m.timestamp FROM messages m WHERE m.conversation_id = c.id ORDER BY m.timestamp DESC LIMIT 1) DESC NULLS LAST
+        JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = $1
+        LEFT JOIN conversation_participants other_cp ON other_cp.conversation_id = c.id AND other_cp.user_id != $1
+        LEFT JOIN profiles p ON p.user_id = other_cp.user_id
+        LEFT JOIN LATERAL (
+            SELECT m.content, m.timestamp, m.content_type
+            FROM messages m
+            WHERE m.conversation_id = c.id
+            ORDER BY m.timestamp DESC
+            LIMIT 1
+        ) lm ON true
+        ORDER BY lm.timestamp DESC NULLS LAST
         "#
     )
     .bind(user_id)

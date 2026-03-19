@@ -111,6 +111,13 @@ export default function SignupPage() {
         })
 
         if (signInResult.success) {
+          // Generate and upload MLS key packages immediately after signup
+          try {
+            await invoke('mls_init')
+            await invoke('mls_upload_key_packages')
+          } catch (mlsErr) {
+            console.error('MLS key package generation failed:', mlsErr)
+          }
           navigate('/profile')
         } else {
           // Confirmed but sign-in failed, send to login page

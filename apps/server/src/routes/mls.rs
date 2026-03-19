@@ -86,6 +86,19 @@ pub async fn upload_key_packages(
         .await?;
     }
 
+    // Notify any senders waiting for this user's key packages
+    let pending: Vec<(String, String)> = sqlx::query_as(
+        "DELETE FROM pending_welcomes WHERE recipient_id = $1 RETURNING sender_id, conversation_id"
+    )
+    .bind(user_id)
+    .fetch_all(pool.as_ref())
+    .await
+    .unwrap_or_default();
+
+    if !pending.is_empty() {
+        eprintln!("[MLS] Resolved {} pending welcomes for user {}", pending.len(), user_id);
+    }
+
     Ok(Json(serde_json::json!({
         "success": true,
         "uploaded": req.key_packages.len()
