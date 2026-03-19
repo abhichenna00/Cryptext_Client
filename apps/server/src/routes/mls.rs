@@ -51,6 +51,11 @@ pub struct FanOutCommitRequest {
     pub commit_data: Vec<u8>,
 }
 
+#[derive(Deserialize)]
+pub struct WelcomeAckRequest {
+    pub group_id: Vec<u8>,
+}
+
 // ============================================
 // HANDLERS
 // ============================================
@@ -172,14 +177,16 @@ pub async fn register_group(
     .execute(&mut *tx)
     .await?;
 
-    // Insert group members
+    // Insert group members — creator gets confirmed_epoch=1, others get 0
     for member_id in &req.member_ids {
+        let epoch = if member_id == claims.user_id() { 1i64 } else { 0i64 };
         sqlx::query(
-            "INSERT INTO mls_group_members (group_id, user_id) VALUES ($1, $2)
+            "INSERT INTO mls_group_members (group_id, user_id, confirmed_epoch) VALUES ($1, $2, $3)
              ON CONFLICT (group_id, user_id) DO NOTHING"
         )
         .bind(&req.group_id)
         .bind(member_id)
+        .bind(epoch)
         .execute(&mut *tx)
         .await?;
     }
@@ -235,6 +242,60 @@ pub async fn fetch_welcomes(
         .collect();
 
     Ok(Json(welcomes))
+}
+
+/// Acknowledge that the user has processed a Welcome and joined the group
+pub async fn welcome_ack(
+    claims: Claims,
+    Json(req): Json<WelcomeAckRequest>,
+) -> AppResult<impl IntoResponse> {
+    let pool = get_pool();
+
+    // Update the member's confirmed epoch
+    let rows_affected = sqlx::query(
+        "UPDATE mls_group_members SET confirmed_epoch = 1
+         WHERE group_id = $1 AND user_id = $2 AND confirmed_epoch = 0"
+    )
+    .bind(&req.group_id)
+    .bind(claims.user_id())
+    .execute(pool.as_ref())
+    .await?
+    .rows_affected();
+
+    if rows_affected == 0 {
+        return Err(AppError::NotFound(
+            "Not a pending member of this group".to_string(),
+        ));
+    }
+
+    // Get the conversation_id for this group
+    let conv_row: Option<(String,)> = sqlx::query_as(
+        "SELECT conversation_id::text FROM mls_groups WHERE group_id = $1"
+    )
+    .bind(&req.group_id)
+    .fetch_optional(pool.as_ref())
+    .await?;
+
+    // Flush any pending messages for this user in this conversation
+    let mut flushed = 0i64;
+    if let Some((conversation_id,)) = conv_row {
+        let pending: Vec<(String,)> = sqlx::query_as(
+            "DELETE FROM mls_pending_messages
+             WHERE recipient_id = $1 AND conversation_id = $2
+             RETURNING message_id"
+        )
+        .bind(claims.user_id())
+        .bind(&conversation_id)
+        .fetch_all(pool.as_ref())
+        .await?;
+
+        flushed = pending.len() as i64;
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "flushed_messages": flushed
+    })))
 }
 
 /// Fan out a commit message to all group members (excluding sender)
