@@ -117,8 +117,15 @@ export default function App() {
 
           // Initialize MLS encryption
           try {
-            await invoke('mls_init')
-            await invoke('mls_upload_key_packages')
+            const signerRegenerated = await invoke<boolean>('mls_init')
+            if (signerRegenerated) {
+              // Signer changed — old key packages on server are invalid
+              await invoke('mls_delete_key_packages')
+              await invoke('mls_upload_key_packages')
+            } else {
+              // Signer intact — only upload if running low
+              await invoke('mls_check_key_packages')
+            }
             await invoke('mls_fetch_welcomes')
           } catch (mlsErr) {
             console.error('MLS initialization failed:', mlsErr)
