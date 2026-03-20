@@ -165,17 +165,24 @@ pub async fn mls_init(
     let credential = BasicCredential::new(user_id.as_bytes().to_vec());
 
     // Try to reload existing signer, or generate a new one
+    let mut signer_regenerated = false;
     let signer = if !metadata.signer_public_key.is_empty() {
-        SignatureKeyPair::read(
+        match SignatureKeyPair::read(
             provider.storage(),
             &metadata.signer_public_key,
             CIPHERSUITE.signature_algorithm(),
-        ).unwrap_or_else(|| {
-            let s = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).unwrap();
-            s.store(provider.storage()).unwrap();
-            s
-        })
+        ) {
+            Some(s) => s,
+            None => {
+                eprintln!("[MLS] Signer reload failed, generating new signer");
+                signer_regenerated = true;
+                let s = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).unwrap();
+                s.store(provider.storage()).unwrap();
+                s
+            }
+        }
     } else {
+        signer_regenerated = true;
         let s = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
             .map_err(|e| format!("Failed to generate signing key: {:?}", e))?;
         s.store(provider.storage())
@@ -209,7 +216,7 @@ pub async fn mls_init(
     let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
     *state = Some(inner);
 
-    Ok(true)
+    Ok(signer_regenerated)
 }
 
 #[command]
@@ -247,6 +254,15 @@ pub async fn mls_upload_key_packages(
     let _: serde_json::Value = http_client::post("/mls/key-packages", &token, &body).await?;
 
     Ok(count)
+}
+
+#[command]
+pub async fn mls_delete_key_packages(
+    session_store: State<'_, SessionStore>,
+) -> Result<bool, String> {
+    let token = get_token(&session_store)?;
+    let _: serde_json::Value = http_client::delete("/mls/key-packages", &token).await?;
+    Ok(true)
 }
 
 #[command]

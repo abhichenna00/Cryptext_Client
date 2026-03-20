@@ -84,6 +84,7 @@ pub fn run() {
             // MLS (E2E Encryption)
             mls::mls_init,
             mls::mls_upload_key_packages,
+            mls::mls_delete_key_packages,
             mls::mls_check_key_packages,
             mls::mls_create_group,
             mls::mls_encrypt_message,
