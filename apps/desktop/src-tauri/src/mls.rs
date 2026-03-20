@@ -470,22 +470,22 @@ pub fn decrypt_message_inner(
 
     let result = match processed.into_content() {
         ProcessedMessageContent::ApplicationMessage(app_msg) => {
-            inner.save_state();
+            inner.save_state()?;
             String::from_utf8(app_msg.into_bytes())
                 .map_err(|e| format!("Invalid UTF-8 in decrypted message: {}", e))
         }
         ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
             group.merge_staged_commit(&inner.provider, *staged_commit)
                 .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
-            inner.save_state();
+            inner.save_state()?;
             Err("Commit processed".to_string())
         }
         ProcessedMessageContent::ProposalMessage(_) => {
-            inner.save_state();
+            inner.save_state()?;
             Err("Proposal processed".to_string())
         }
         _ => {
-            inner.save_state();
+            inner.save_state()?;
             Err("Unknown message type".to_string())
         }
     };
