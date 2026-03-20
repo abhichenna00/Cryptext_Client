@@ -105,6 +105,25 @@ pub async fn upload_key_packages(
     })))
 }
 
+/// Delete all key packages for the authenticated user (used when signer is regenerated)
+pub async fn delete_key_packages(
+    claims: Claims,
+) -> AppResult<impl IntoResponse> {
+    let pool = get_pool();
+
+    let result = sqlx::query(
+        "DELETE FROM key_packages WHERE user_id = $1"
+    )
+    .bind(claims.user_id())
+    .execute(pool.as_ref())
+    .await?;
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "deleted": result.rows_affected()
+    })))
+}
+
 /// Claim one unclaimed key package for a given user (marks it as used)
 pub async fn claim_key_package(
     _claims: Claims,

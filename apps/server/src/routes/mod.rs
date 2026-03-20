@@ -59,6 +59,7 @@ pub fn build_router() -> Router {
 
         // MLS routes
         .route("/mls/key-packages", post(mls::upload_key_packages))
+        .route("/mls/key-packages", delete(mls::delete_key_packages))
         .route("/mls/key-packages/:user_id", get(mls::claim_key_package))
         .route("/mls/key-packages/count", get(mls::key_package_count))
         .route("/mls/groups", post(mls::register_group))
