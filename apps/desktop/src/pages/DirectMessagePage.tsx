@@ -133,55 +133,34 @@ export default function DirectMessagePage() {
 
   const handleWsMessage = useCallback(async (data: WebSocketMessage) => {
     if (data.action === 'new_message') {
-      const newMsg = data.message as Message
-      if (newMsg.conversation_id !== conversationIdRef.current) return
+      const notification = data.message as Message
+      if (notification.conversation_id !== conversationIdRef.current) return
 
       // Skip own messages — we already have the plaintext from the optimistic send
-      if (newMsg.sender_id === userIdRef.current) return
+      if (notification.sender_id === userIdRef.current) return
 
-      // Decrypt MLS messages via the Rust backend
-      if (newMsg.content_type === 'mls' && newMsg.content_bytes) {
-        try {
-          const decrypted = await invoke<string>('mls_decrypt_message', {
-            conversationId: newMsg.conversation_id,
-            ciphertext: newMsg.content_bytes,
-          })
-          newMsg.content = decrypted
-        } catch {
-          newMsg.content = '[encrypted message]'
-        }
-      }
-
-      // Persist to local DB
+      // Fetch the full message from server (includes ciphertext for decryption)
       try {
-        await invoke('store_decrypted_message', {
-          id: newMsg.id,
-          conversationId: newMsg.conversation_id,
-          senderId: newMsg.sender_id,
-          content: newMsg.content,
-          timestamp: newMsg.timestamp,
-          contentType: newMsg.content_type || 'plaintext',
+        const messages = await invoke<Message[]>('get_messages', {
+          conversationId: notification.conversation_id,
         })
+
+        setMessages(messages)
+
+        if (conversationIdRef.current) {
+          invoke('mark_read', { conversationId: conversationIdRef.current }).catch(console.error)
+        }
+
+        if (isAtBottomRef.current) {
+          setTimeout(() => scrollToBottom(), 100)
+        }
       } catch (err) {
-        console.error('Failed to store message locally:', err)
-      }
-
-      setMessages((prev) => {
-        if (prev.some((m) => m.id === newMsg.id)) return prev
-        return [...prev, newMsg]
-      })
-
-      if (newMsg.sender_id !== userIdRef.current && conversationIdRef.current) {
-        invoke('mark_read', { conversationId: conversationIdRef.current }).catch(console.error)
-      }
-
-      if (isAtBottomRef.current) {
-        setTimeout(() => scrollToBottom(), 100)
+        console.error('Failed to fetch messages after notification:', err)
       }
     }
   }, [])
 
-  const { isConnected } = useWebSocket({ onMessage: handleWsMessage })
+  const { isConnected, sendMessage: wsSend } = useWebSocket({ onMessage: handleWsMessage })
 
   useEffect(() => { initializeChat() }, [friendId])
 
@@ -351,6 +330,17 @@ export default function DirectMessagePage() {
               : m
           )
         )
+
+        // Notify other clients via WebSocket that a new message is available
+        wsSend({
+          action: 'new_message',
+          message: {
+            id: result.message_id,
+            conversation_id: conversationId,
+            sender_id: userId,
+            timestamp: result.timestamp || optimisticMessage.timestamp,
+          },
+        })
       } else if (!result.success) {
         setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id))
         setError(result.error || 'Failed to send message')
