@@ -2,8 +2,11 @@
 
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::sync::Mutex;
 use tauri::{command, AppHandle, Manager, State};
+
+use crate::vault;
 
 pub struct LocalDb {
     pub conn: Mutex<Option<Connection>>,
@@ -15,6 +18,30 @@ impl Default for LocalDb {
             conn: Mutex::new(None),
         }
     }
+}
+
+/// Open a SQLCipher database with the given DEK.
+fn open_encrypted_db(db_path: &Path, dek: &[u8; 32]) -> Result<Connection, String> {
+    let conn = Connection::open(db_path)
+        .map_err(|e| format!("Failed to open database: {}", e))?;
+
+    // Pass raw hex key to SQLCipher — skips its internal PBKDF2
+    let hex_key = format!("x'{}'", hex::encode(dek));
+    conn.pragma_update(None, "key", &hex_key)
+        .map_err(|e| format!("Failed to set encryption key: {}", e))?;
+
+    // Verify the key works by reading a page
+    conn.execute_batch("SELECT count(*) FROM sqlite_master;")
+        .map_err(|_| "Invalid PIN — could not unlock database".to_string())?;
+
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA busy_timeout=5000;",
+    )
+    .map_err(|e| format!("Failed to set pragmas: {}", e))?;
+
+    Ok(conn)
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -43,6 +70,124 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("Failed to init schema: {}", e))
 }
 
+/// Check if a vault (encryption PIN) has been set up for this user.
+#[command]
+pub fn has_vault(
+    app: AppHandle,
+    user_id: String,
+) -> Result<bool, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    Ok(vault::vault_exists(&app_data, &user_id))
+}
+
+/// First-time setup: create vault with PIN and open encrypted database.
+#[command]
+pub fn setup_vault(
+    app: AppHandle,
+    local_db: State<'_, LocalDb>,
+    user_id: String,
+    pin: String,
+) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    std::fs::create_dir_all(&app_data).map_err(|e| format!("Failed to create dir: {}", e))?;
+
+    if vault::vault_exists(&app_data, &user_id) {
+        return Err("Vault already exists for this user".to_string());
+    }
+
+    let dek = vault::create_vault(&app_data, &user_id, &pin)?;
+    let db_path = app_data.join(format!("messages_{}.db", user_id));
+    let conn = open_encrypted_db(&db_path, &dek)?;
+    init_schema(&conn)?;
+
+    // Migrate any existing unencrypted messages
+    let unencrypted_path = app_data.join(format!("messages_{}.db.unencrypted", user_id));
+
+    if unencrypted_path.exists() {
+        let msgs = {
+            let old_conn = Connection::open(&unencrypted_path)
+                .map_err(|e| format!("Failed to open old DB for migration: {}", e))?;
+            let mut stmt = old_conn.prepare(
+                "SELECT id, conversation_id, sender_id, content, timestamp, content_type FROM messages"
+            ).map_err(|e| format!("Failed to query old DB: {}", e))?;
+
+            let results: Vec<LocalMessage> = stmt
+                .query_map([], |row| {
+                    Ok(LocalMessage {
+                        id: row.get(0)?,
+                        conversation_id: row.get(1)?,
+                        sender_id: row.get(2)?,
+                        content: row.get(3)?,
+                        timestamp: row.get(4)?,
+                        content_type: row.get(5)?,
+                    })
+                })
+                .map_err(|e| format!("Failed to read old messages: {}", e))?
+                .filter_map(|r| r.ok())
+                .collect();
+            results
+        }; // old_conn dropped here
+
+        for msg in &msgs {
+            let _ = conn.execute(
+                "INSERT OR IGNORE INTO messages (id, conversation_id, sender_id, content, timestamp, content_type)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![msg.id, msg.conversation_id, msg.sender_id, msg.content, msg.timestamp, msg.content_type],
+            );
+        }
+        let _ = std::fs::remove_file(&unencrypted_path);
+    }
+
+    let mut guard = local_db.conn.lock().map_err(|e| e.to_string())?;
+    *guard = Some(conn);
+    Ok(())
+}
+
+/// Unlock existing vault with PIN and open encrypted database.
+#[command]
+pub fn unlock_vault(
+    app: AppHandle,
+    local_db: State<'_, LocalDb>,
+    user_id: String,
+    pin: String,
+) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    let dek = vault::open_vault(&app_data, &user_id, &pin)?;
+    let db_path = app_data.join(format!("messages_{}.db", user_id));
+    let conn = open_encrypted_db(&db_path, &dek)?;
+    init_schema(&conn)?;
+
+    let mut guard = local_db.conn.lock().map_err(|e| e.to_string())?;
+    *guard = Some(conn);
+    Ok(())
+}
+
+/// Change the encryption PIN.
+#[command]
+pub fn change_pin(
+    app: AppHandle,
+    user_id: String,
+    old_pin: String,
+    new_pin: String,
+) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    vault::change_pin(&app_data, &user_id, &old_pin, &new_pin)
+}
+
+/// Legacy init for unencrypted DB — renamed to prepare for migration.
 #[command]
 pub fn init_local_db(
     app: AppHandle,
@@ -55,14 +200,19 @@ pub fn init_local_db(
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
     std::fs::create_dir_all(&app_data).map_err(|e| format!("Failed to create dir: {}", e))?;
 
+    // If vault exists, user needs to unlock with PIN instead
+    if vault::vault_exists(&app_data, &user_id) {
+        return Err("Vault exists — use unlock_vault with PIN".to_string());
+    }
+
     let db_path = app_data.join(format!("messages_{}.db", user_id));
     let conn =
         Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
 
-    // Performance settings
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;",
+         PRAGMA synchronous=NORMAL;
+         PRAGMA busy_timeout=5000;",
     )
     .map_err(|e| format!("Failed to set pragmas: {}", e))?;
 
