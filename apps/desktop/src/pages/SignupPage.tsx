@@ -110,7 +110,14 @@ export default function SignupPage() {
           password,
         })
 
-        if (signInResult.success) {
+        if (signInResult.success && signInResult.user_id) {
+          // Create encrypted vault for message storage
+          try {
+            await invoke('setup_vault', { userId: signInResult.user_id, pin: password })
+          } catch (vaultErr) {
+            console.error('Vault setup failed:', vaultErr)
+          }
+
           // Generate and upload MLS key packages immediately after signup
           try {
             await invoke('mls_init')
