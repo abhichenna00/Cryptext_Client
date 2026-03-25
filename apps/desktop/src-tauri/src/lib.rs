@@ -9,6 +9,7 @@ mod local_db;
 mod mls;
 mod profile;
 mod updates;
+mod vault;
 
 pub use auth::SessionStore;
 pub use local_db::LocalDb;
@@ -78,6 +79,10 @@ pub fn run() {
             conversations::send_message,
             conversations::mark_read,
             // Local encrypted message storage
+            local_db::has_vault,
+            local_db::setup_vault,
+            local_db::unlock_vault,
+            local_db::change_pin,
             local_db::init_local_db,
             local_db::get_local_messages,
             local_db::store_decrypted_message,
