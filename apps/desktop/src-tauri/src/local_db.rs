@@ -101,13 +101,22 @@ pub fn setup_vault(
         return Err("Vault already exists for this user".to_string());
     }
 
-    let dek = vault::create_vault(&app_data, &user_id, &pin)?;
+    // Rename existing unencrypted DB for migration before creating encrypted one
     let db_path = app_data.join(format!("messages_{}.db", user_id));
+    let unencrypted_path = app_data.join(format!("messages_{}.db.unencrypted", user_id));
+    if db_path.exists() && !unencrypted_path.exists() {
+        std::fs::rename(&db_path, &unencrypted_path)
+            .map_err(|e| format!("Failed to rename old DB for migration: {}", e))?;
+        // Also clean up WAL/SHM files from the old unencrypted DB
+        let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-wal", user_id)));
+        let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-shm", user_id)));
+    }
+
+    let dek = vault::create_vault(&app_data, &user_id, &pin)?;
     let conn = open_encrypted_db(&db_path, &dek)?;
     init_schema(&conn)?;
 
     // Migrate any existing unencrypted messages
-    let unencrypted_path = app_data.join(format!("messages_{}.db.unencrypted", user_id));
 
     if unencrypted_path.exists() {
         let msgs = {

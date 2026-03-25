@@ -48,7 +48,18 @@ export default function AuthPage() {
         password,
       })
 
-      if (result.success) {
+      if (result.success && result.user_id) {
+        // Set up or unlock the encrypted message database
+        try {
+          const vaultExists = await invoke<boolean>('has_vault', { userId: result.user_id })
+          if (vaultExists) {
+            await invoke('unlock_vault', { userId: result.user_id, pin: password })
+          } else {
+            await invoke('setup_vault', { userId: result.user_id, pin: password })
+          }
+        } catch (vaultErr) {
+          console.error('Vault initialization failed:', vaultErr)
+        }
         window.location.href = '/'
       } else if (result.needs_confirmation) {
         setError('Please confirm your email first. Check your inbox for a verification code.')
