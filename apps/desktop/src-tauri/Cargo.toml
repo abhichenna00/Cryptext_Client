@@ -40,8 +40,15 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 dotenvy = "0.15"
 
-# Local message storage (SQLCipher encryption added in a later branch)
-rusqlite = { version = "0.31", features = ["bundled"] }
+# Local encrypted message storage (SQLCipher)
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
+
+# Vault (DEK/KEK key management)
+argon2 = { version = "0.5", features = ["zeroize"] }
+aes-gcm = "0.10"
+zeroize = { version = "1.8", features = ["derive"] }
+rand = "0.8"
+hex = "0.4"
 
 # MLS (E2E Encryption)
 openmls = { version = "0.6", features = ["test-utils"] }
