@@ -40,8 +40,8 @@ chrono = { version = "0.4", features = ["serde"] }
 base64 = "0.22"
 dotenvy = "0.15"
 
-# Local encrypted message storage (SQLCipher)
-rusqlite = { version = "0.31", features = ["bundled-sqlcipher"] }
+# Local encrypted message storage (SQLCipher + vendored OpenSSL for cross-compilation)
+rusqlite = { version = "0.31", features = ["bundled-sqlcipher-vendored-openssl"] }
 
 # Vault (DEK/KEK key management)
 argon2 = { version = "0.5", features = ["zeroize"] }
