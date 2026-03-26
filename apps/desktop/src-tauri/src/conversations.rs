@@ -1,6 +1,6 @@
 // src-tauri/src/conversations.rs
 
-use crate::auth::SessionStore;
+use crate::auth::{self, SessionStore};
 use crate::http_client;
 use crate::local_db::{self, LocalDb, LocalMessage};
 use crate::mls::MlsState;
@@ -81,14 +81,7 @@ struct SendMessageBody {
 struct EmptyBody {}
 
 fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, String> {
-    let store = session_store.session.lock().map_err(|e| e.to_string())?;
-    match &*store {
-        Some(session) if chrono::Utc::now().timestamp() < session.expires_at => {
-            Ok(session.access_token.clone())
-        }
-        Some(_) => Err("Session expired".to_string()),
-        None => Err("Not authenticated".to_string()),
-    }
+    auth::get_token(session_store)
 }
 
 #[command]
@@ -132,13 +125,7 @@ pub async fn get_messages(
     local_db: State<'_, LocalDb>,
 ) -> Result<Vec<Message>, String> {
     let token = get_token(&session_store)?;
-    let current_user_id = {
-        let store = session_store.session.lock().map_err(|e| e.to_string())?;
-        match &*store {
-            Some(session) => session.user_id.clone(),
-            None => return Err("Not authenticated".to_string()),
-        }
-    };
+    let current_user_id = auth::get_user_id_from_session(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
 
     // Get IDs of messages we already have locally
@@ -227,13 +214,7 @@ pub async fn send_message(
     local_db: State<'_, LocalDb>,
 ) -> Result<MessageResult, String> {
     let token = get_token(&session_store)?;
-    let current_user_id = {
-        let store = session_store.session.lock().map_err(|e| e.to_string())?;
-        match &*store {
-            Some(session) => session.user_id.clone(),
-            None => return Err("Not authenticated".to_string()),
-        }
-    };
+    let current_user_id = auth::get_user_id_from_session(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
 
     // Auto-create MLS group if one doesn't exist and we know the other user

@@ -1,6 +1,6 @@
 // src-tauri/src/profile.rs
 
-use crate::auth::SessionStore;
+use crate::auth::{self, SessionStore};
 use crate::http_client;
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
@@ -65,14 +65,7 @@ struct UploadAvatarBody {
 }
 
 fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, String> {
-    let store = session_store.session.lock().map_err(|e| e.to_string())?;
-    match &*store {
-        Some(session) if chrono::Utc::now().timestamp() < session.expires_at => {
-            Ok(session.access_token.clone())
-        }
-        Some(_) => Err("Session expired".to_string()),
-        None => Err("Not authenticated".to_string()),
-    }
+    auth::get_token(session_store)
 }
 
 #[command]

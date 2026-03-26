@@ -31,6 +31,27 @@ impl Default for SessionStore {
     }
 }
 
+/// Extract auth token from session. Used by all modules that make authenticated API calls.
+pub fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, String> {
+    let store = session_store.session.lock().map_err(|e| e.to_string())?;
+    match &*store {
+        Some(session) if chrono::Utc::now().timestamp() < session.expires_at => {
+            Ok(session.access_token.clone())
+        }
+        Some(_) => Err("Session expired".to_string()),
+        None => Err("Not authenticated".to_string()),
+    }
+}
+
+/// Extract user_id from session. Used by modules that need the current user's identity.
+pub fn get_user_id_from_session(session_store: &State<'_, SessionStore>) -> Result<String, String> {
+    let store = session_store.session.lock().map_err(|e| e.to_string())?;
+    match &*store {
+        Some(session) => Ok(session.user_id.clone()),
+        None => Err("Not authenticated".to_string()),
+    }
+}
+
 /// Public session info returned to frontend (no sensitive tokens)
 #[derive(Serialize)]
 pub struct PublicSessionInfo {
