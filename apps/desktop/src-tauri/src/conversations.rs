@@ -77,18 +77,11 @@ struct SendMessageBody {
     welcome_data: Option<Vec<u8>>,
 }
 
-#[derive(Serialize)]
-struct EmptyBody {}
-
-fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, String> {
-    auth::get_token(session_store)
-}
-
 #[command]
 pub async fn get_conversations(
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<ConversationWithDetails>, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::get("/conversations", &token).await
 }
 
@@ -97,7 +90,7 @@ pub async fn get_or_create_dm(
     other_user_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<DmResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let body = CreateDmBody { other_user_id };
 
     match http_client::post::<serde_json::Value, _>("/conversations/dm", &token, &body).await {
@@ -124,7 +117,7 @@ pub async fn get_messages(
     mls_state: State<'_, MlsState>,
     local_db: State<'_, LocalDb>,
 ) -> Result<Vec<Message>, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
 
@@ -213,7 +206,7 @@ pub async fn send_message(
     mls_state: State<'_, MlsState>,
     local_db: State<'_, LocalDb>,
 ) -> Result<MessageResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
 
@@ -267,7 +260,7 @@ pub async fn mark_read(
     conversation_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<ReadResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let path = format!("/conversations/{}/read", conversation_id);
-    http_client::post(&path, &token, &EmptyBody {}).await
+    http_client::post(&path, &token, &http_client::EmptyBody {}).await
 }

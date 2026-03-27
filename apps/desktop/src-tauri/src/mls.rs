@@ -251,7 +251,7 @@ pub async fn mls_upload_key_packages(
         packages
     };
 
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let body = UploadKeyPackagesBody { key_packages: serialized_packages };
     let _: serde_json::Value = http_client::post("/mls/key-packages", &token, &body).await?;
 
@@ -262,7 +262,7 @@ pub async fn mls_upload_key_packages(
 pub async fn mls_delete_key_packages(
     session_store: State<'_, SessionStore>,
 ) -> Result<bool, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let _: serde_json::Value = http_client::delete("/mls/key-packages", &token).await?;
     Ok(true)
 }
@@ -272,7 +272,7 @@ pub async fn mls_check_key_packages(
     mls_state: State<'_, MlsState>,
     session_store: State<'_, SessionStore>,
 ) -> Result<i64, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let resp: KeyPackageCountResponse =
         http_client::get("/mls/key-packages/count", &token).await?;
 
@@ -338,8 +338,8 @@ pub async fn create_group_inner(
     mls_state: &State<'_, MlsState>,
     session_store: &State<'_, SessionStore>,
 ) -> Result<Vec<u8>, String> {
-    let token = get_token(session_store)?;
-    let my_user_id = get_user_id_from_session(session_store)?;
+    let token = auth::get_token(session_store)?;
+    let my_user_id = auth::get_user_id_from_session(session_store)?;
 
     let claimed: ClaimedKeyPackage = http_client::get(
         &format!("/mls/key-packages/{}", other_user_id), &token,
@@ -497,7 +497,7 @@ pub async fn fetch_welcomes_inner(
     mls_state: &State<'_, MlsState>,
     session_store: &State<'_, SessionStore>,
 ) -> Result<u32, String> {
-    let token = get_token(session_store)?;
+    let token = auth::get_token(session_store)?;
 
     let welcomes: Vec<WelcomeMessageResponse> =
         http_client::get("/mls/welcome", &token).await?;
@@ -572,10 +572,3 @@ fn process_welcome_inner(
     Ok(())
 }
 
-fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, String> {
-    auth::get_token(session_store)
-}
-
-fn get_user_id_from_session(session_store: &State<'_, SessionStore>) -> Result<String, String> {
-    auth::get_user_id_from_session(session_store)
-}

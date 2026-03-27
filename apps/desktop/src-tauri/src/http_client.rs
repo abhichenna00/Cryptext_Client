@@ -5,6 +5,9 @@ use serde::{de::DeserializeOwned, Serialize};
 use std::sync::OnceLock;
 use crate::config::server_url;
 
+#[derive(Serialize)]
+pub struct EmptyBody {}
+
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
 fn client() -> &'static Client {

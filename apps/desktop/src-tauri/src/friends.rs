@@ -44,19 +44,11 @@ struct SendRequestBody {
     to_username: String,
 }
 
-#[derive(Serialize)]
-struct EmptyBody {}
-
-/// Helper to grab the access token from the session store.
-fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, String> {
-    auth::get_token(session_store)
-}
-
 #[command]
 pub async fn get_friends(
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<FriendWithProfile>, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::get("/friends", &token).await
 }
 
@@ -64,7 +56,7 @@ pub async fn get_friends(
 pub async fn get_incoming_friend_requests(
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<FriendRequest>, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::get("/friends/requests/incoming", &token).await
 }
 
@@ -72,7 +64,7 @@ pub async fn get_incoming_friend_requests(
 pub async fn get_outgoing_friend_requests(
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<FriendRequest>, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::get("/friends/requests/outgoing", &token).await
 }
 
@@ -81,7 +73,7 @@ pub async fn send_friend_request(
     to_username: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::post("/friends/requests/send", &token, &SendRequestBody { to_username }).await
 }
 
@@ -90,9 +82,9 @@ pub async fn accept_friend_request(
     request_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let path = format!("/friends/requests/{}/accept", request_id);
-    http_client::post(&path, &token, &EmptyBody {}).await
+    http_client::post(&path, &token, &http_client::EmptyBody {}).await
 }
 
 #[command]
@@ -100,9 +92,9 @@ pub async fn decline_friend_request(
     request_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let path = format!("/friends/requests/{}/decline", request_id);
-    http_client::post(&path, &token, &EmptyBody {}).await
+    http_client::post(&path, &token, &http_client::EmptyBody {}).await
 }
 
 #[command]
@@ -110,7 +102,7 @@ pub async fn cancel_friend_request(
     request_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let path = format!("/friends/requests/{}/cancel", request_id);
     http_client::delete(&path, &token).await
 }
@@ -120,7 +112,7 @@ pub async fn remove_friend(
     friend_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     let path = format!("/friends/{}", friend_id);
     http_client::delete(&path, &token).await
 }
