@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useParams } from 'react-router-dom'
-import { useWebSocket, WebSocketMessage } from '../hooks/useWebSocket'
+import { useWebSocket, WebSocketMessage } from '@/hooks'
 import { ArrowLeft, ArrowDown, Send } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'

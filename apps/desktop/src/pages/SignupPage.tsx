@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { invoke } from '@tauri-apps/api/core'
+import { useWindowSize } from '@/hooks'
 import { Card, Flex, Text, TextField, Button, Heading, Box } from '@radix-ui/themes'
 import { FlickeringGrid } from "../components/ui/flickering-grid"
 import '../styles/AuthPage.css'
@@ -23,23 +24,7 @@ export default function SignupPage() {
   const [loading, setLoading] = useState(false)
   const [step, setStep] = useState<'signup' | 'verify'>('signup')
 
-  // Track window size for responsive grid
-  const [windowSize, setWindowSize] = useState({
-    width: window.innerWidth,
-    height: window.innerHeight,
-  })
-
-  useEffect(() => {
-    const handleResize = () => {
-      setWindowSize({
-        width: window.innerWidth,
-        height: window.innerHeight,
-      })
-    }
-
-    window.addEventListener('resize', handleResize)
-    return () => window.removeEventListener('resize', handleResize)
-  }, [])
+  const windowSize = useWindowSize()
 
   const handleSignup = async () => {
     setError(null)

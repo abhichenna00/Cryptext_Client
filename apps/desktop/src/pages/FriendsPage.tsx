@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate } from 'react-router-dom'
+import { useFriendActions } from '@/hooks'
 import '../styles/FriendsPage.css'
 
 interface FriendWithProfile {
@@ -39,25 +40,18 @@ export default function FriendsPage() {
   const [outgoingRequests, setOutgoingRequests] = useState<FriendRequestWithProfile[]>([])
   const [searchUsername, setSearchUsername] = useState('')
   const [loading, setLoading] = useState(true)
-  const [actionLoading, setActionLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-  const [success, setSuccess] = useState<string | null>(null)
-
-  useEffect(() => {
-    loadData()
-  }, [])
 
   const loadData = async () => {
     setLoading(true)
     setError(null)
-    
+
     try {
       const [friendsData, incomingData, outgoingData] = await Promise.all([
         invoke<FriendWithProfile[]>('get_friends'),
         invoke<FriendRequestWithProfile[]>('get_incoming_friend_requests'),
         invoke<FriendRequestWithProfile[]>('get_outgoing_friend_requests'),
       ])
-      
+
       setFriends(friendsData)
       setIncomingRequests(incomingData)
       setOutgoingRequests(outgoingData)
@@ -69,13 +63,27 @@ export default function FriendsPage() {
     }
   }
 
+  const {
+    actionLoading,
+    error,
+    setError,
+    success,
+    setSuccess,
+    handleAcceptRequest,
+    handleDeclineRequest,
+    handleCancelRequest,
+  } = useFriendActions(loadData)
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
   const handleSendRequest = async () => {
     if (!searchUsername.trim()) {
       setError('Please enter a username')
       return
     }
 
-    setActionLoading(true)
     setError(null)
     setSuccess(null)
 
@@ -94,77 +102,6 @@ export default function FriendsPage() {
     } catch (err) {
       console.error('Failed to send friend request:', err)
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionLoading(false)
-    }
-  }
-
-  const handleAcceptRequest = async (requestId: string) => {
-    setActionLoading(true)
-    setError(null)
-
-    try {
-      const result = await invoke<FriendsResult>('accept_friend_request', {
-        requestId,
-      })
-
-      if (result.success) {
-        setSuccess('Friend request accepted!')
-        loadData()
-      } else {
-        setError(result.error || 'Failed to accept friend request')
-      }
-    } catch (err) {
-      console.error('Failed to accept friend request:', err)
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionLoading(false)
-    }
-  }
-
-  const handleDeclineRequest = async (requestId: string) => {
-    setActionLoading(true)
-    setError(null)
-
-    try {
-      const result = await invoke<FriendsResult>('decline_friend_request', {
-        requestId,
-      })
-
-      if (result.success) {
-        setSuccess('Friend request declined')
-        loadData()
-      } else {
-        setError(result.error || 'Failed to decline friend request')
-      }
-    } catch (err) {
-      console.error('Failed to decline friend request:', err)
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionLoading(false)
-    }
-  }
-
-  const handleCancelRequest = async (requestId: string) => {
-    setActionLoading(true)
-    setError(null)
-
-    try {
-      const result = await invoke<FriendsResult>('cancel_friend_request', {
-        requestId,
-      })
-
-      if (result.success) {
-        setSuccess('Friend request cancelled')
-        loadData()
-      } else {
-        setError(result.error || 'Failed to cancel friend request')
-      }
-    } catch (err) {
-      console.error('Failed to cancel friend request:', err)
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionLoading(false)
     }
   }
 
@@ -173,7 +110,6 @@ export default function FriendsPage() {
       return
     }
 
-    setActionLoading(true)
     setError(null)
 
     try {
@@ -190,8 +126,6 @@ export default function FriendsPage() {
     } catch (err) {
       console.error('Failed to remove friend:', err)
       setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionLoading(false)
     }
   }
 
