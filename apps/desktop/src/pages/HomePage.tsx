@@ -19,6 +19,7 @@ import {
 } from '../components/ui/dialog'
 import { MessageCircle, MoreVertical, Plus, Check, X } from 'lucide-react'
 import Avatar from '@/components/Avatar'
+import { useFriendActions } from '@/hooks'
 import '../styles/HomePage.css'
 
 type FriendsTab = 'online' | 'all' | 'pending'
@@ -86,16 +87,11 @@ export default function HomePage() {
   const [friendsTab, setFriendsTab] = useState<FriendsTab>('all')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [actionLoading, setActionLoading] = useState(false)
 
   const [searchUsername, setSearchUsername] = useState('')
   const [addFriendLoading, setAddFriendLoading] = useState(false)
   const [addFriendError, setAddFriendError] = useState<string | null>(null)
   const [addFriendSuccess, setAddFriendSuccess] = useState<string | null>(null)
-
-  useEffect(() => {
-    loadData()
-  }, [])
 
   const loadData = async () => {
     try {
@@ -119,6 +115,18 @@ export default function HomePage() {
       setLoading(false)
     }
   }
+
+  const {
+    actionLoading,
+    error: friendActionError,
+    handleAcceptRequest,
+    handleDeclineRequest,
+    handleCancelRequest,
+  } = useFriendActions(loadData)
+
+  useEffect(() => {
+    loadData()
+  }, [])
 
   const filteredFriends = useMemo(() => {
     let filtered = friends
@@ -167,45 +175,6 @@ export default function HomePage() {
       setAddFriendError(err instanceof Error ? err.message : String(err))
     } finally {
       setAddFriendLoading(false)
-    }
-  }
-
-  const handleAcceptRequest = async (requestId: string) => {
-    setActionLoading(true)
-    try {
-      const result = await invoke<FriendResult>('accept_friend_request', { requestId })
-      if (result.success) loadData()
-      else setError(result.error || 'Failed to accept request')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionLoading(false)
-    }
-  }
-
-  const handleDeclineRequest = async (requestId: string) => {
-    setActionLoading(true)
-    try {
-      const result = await invoke<FriendResult>('decline_friend_request', { requestId })
-      if (result.success) loadData()
-      else setError(result.error || 'Failed to decline request')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionLoading(false)
-    }
-  }
-
-  const handleCancelRequest = async (requestId: string) => {
-    setActionLoading(true)
-    try {
-      const result = await invoke<FriendResult>('cancel_friend_request', { requestId })
-      if (result.success) loadData()
-      else setError(result.error || 'Failed to cancel request')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setActionLoading(false)
     }
   }
 
@@ -327,7 +296,7 @@ export default function HomePage() {
             </div>
           )}
 
-          {error && <p className="home-error">{error}</p>}
+          {(error || friendActionError) && <p className="home-error">{error || friendActionError}</p>}
 
           {friendsTab === 'pending' ? (
             <ScrollArea className="friends-list-container">

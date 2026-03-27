@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate } from 'react-router-dom'
-import { useWebSocket, WebSocketMessage } from '../hooks/useWebSocket'
+import { useWebSocket, WebSocketMessage } from '@/hooks'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Send } from 'lucide-react'
 import Avatar from '@/components/Avatar'
