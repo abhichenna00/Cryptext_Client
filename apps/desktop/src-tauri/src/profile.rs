@@ -1,6 +1,6 @@
 // src-tauri/src/profile.rs
 
-use crate::auth::SessionStore;
+use crate::auth::{self, SessionStore};
 use crate::http_client;
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
@@ -64,22 +64,11 @@ struct UploadAvatarBody {
     content_type: String,
 }
 
-fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, String> {
-    let store = session_store.session.lock().map_err(|e| e.to_string())?;
-    match &*store {
-        Some(session) if chrono::Utc::now().timestamp() < session.expires_at => {
-            Ok(session.access_token.clone())
-        }
-        Some(_) => Err("Session expired".to_string()),
-        None => Err("Not authenticated".to_string()),
-    }
-}
-
 #[command]
 pub async fn get_profile(
     session_store: State<'_, SessionStore>,
 ) -> Result<Option<ProfileData>, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     match http_client::get::<ProfileData>("/profile", &token).await {
         Ok(profile) => Ok(Some(profile)),
         Err(e) if e.contains("HTTP 404") => Ok(None),
@@ -92,7 +81,7 @@ pub async fn get_profiles_by_ids(
     user_ids: Vec<String>,
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<ProfileData>, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::post("/profiles", &token, &GetProfilesByIdsBody { user_ids }).await
 }
 
@@ -103,7 +92,7 @@ pub async fn create_profile(
     avatar_url: Option<String>,
     session_store: State<'_, SessionStore>,
 ) -> Result<ProfileResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::post("/profile", &token, &CreateProfileBody { username, nickname, avatar_url }).await
 }
 
@@ -114,7 +103,7 @@ pub async fn update_profile(
     avatar_url: Option<String>,
     session_store: State<'_, SessionStore>,
 ) -> Result<ProfileResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::put("/profile", &token, &UpdateProfileBody { username, nickname, avatar_url }).await
 }
 
@@ -123,7 +112,7 @@ pub async fn update_status(
     status: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<ProfileResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::put("/profile/status", &token, &UpdateStatusBody { status }).await
 }
 
@@ -134,7 +123,7 @@ pub async fn upload_avatar(
     content_type: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<AvatarResult, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::post(
         "/profile/avatar",
         &token,
@@ -147,6 +136,6 @@ pub async fn upload_avatar(
 pub async fn generate_placeholder(
     session_store: State<'_, SessionStore>,
 ) -> Result<PlaceholderProfile, String> {
-    let token = get_token(&session_store)?;
+    let token = auth::get_token(&session_store)?;
     http_client::get("/profile/placeholder", &token).await
 }

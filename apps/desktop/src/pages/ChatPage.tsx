@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom'
 import { useWebSocket, WebSocketMessage } from '../hooks/useWebSocket'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Send } from 'lucide-react'
+import Avatar from '@/components/Avatar'
 import '../styles/ChatPage.css'
 
 interface Message {
@@ -34,32 +35,6 @@ interface ProfileInfo {
 
 interface ChatPageProps {
   onSignOut?: () => void
-}
-
-// Avatar component
-interface AvatarProps {
-  src?: string | null
-  fallback: string
-  size?: 'sm' | 'md' | 'lg'
-  className?: string
-}
-
-function Avatar({ src, fallback, size = 'md', className = '' }: AvatarProps) {
-  const sizeClasses = {
-    sm: 'avatar-sm',
-    md: 'avatar-md',
-    lg: 'avatar-lg'
-  }
-
-  return (
-    <div className={`avatar ${sizeClasses[size]} ${className}`}>
-      {src ? (
-        <img src={src} alt={fallback} className="avatar-image" />
-      ) : (
-        <span className="avatar-fallback">{fallback.charAt(0).toUpperCase()}</span>
-      )}
-    </div>
-  )
 }
 
 export default function ChatPage({ onSignOut }: ChatPageProps) {

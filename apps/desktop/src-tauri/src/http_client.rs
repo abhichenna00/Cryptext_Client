@@ -1,9 +1,12 @@
 // src-tauri/src/http_client.rs
 
-use reqwest::Client;
+use reqwest::{Client, Response};
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::OnceLock;
 use crate::config::server_url;
+
+#[derive(Serialize)]
+pub struct EmptyBody {}
 
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
@@ -11,7 +14,15 @@ fn client() -> &'static Client {
     HTTP_CLIENT.get_or_init(Client::new)
 }
 
-/// GET request with Bearer token auth.
+async fn handle_response<T: DeserializeOwned>(response: Response) -> Result<T, String> {
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let text = response.text().await.unwrap_or_default();
+        return Err(format!("HTTP {}: {}", status, text));
+    }
+    response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
+}
+
 pub async fn get<T: DeserializeOwned>(path: &str, token: &str) -> Result<T, String> {
     let url = format!("{}{}", server_url(), path);
     let response = client()
@@ -20,17 +31,9 @@ pub async fn get<T: DeserializeOwned>(path: &str, token: &str) -> Result<T, Stri
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("HTTP {}: {}", status, text));
-    }
-
-    response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
+    handle_response(response).await
 }
 
-/// POST request with Bearer token auth and optional JSON body.
 pub async fn post<T: DeserializeOwned, B: Serialize>(
     path: &str,
     token: &str,
@@ -44,17 +47,9 @@ pub async fn post<T: DeserializeOwned, B: Serialize>(
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("HTTP {}: {}", status, text));
-    }
-
-    response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
+    handle_response(response).await
 }
 
-/// POST request without auth (used for auth endpoints).
 pub async fn post_no_auth<T: DeserializeOwned, B: Serialize>(
     path: &str,
     body: &B,
@@ -66,17 +61,9 @@ pub async fn post_no_auth<T: DeserializeOwned, B: Serialize>(
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("HTTP {}: {}", status, text));
-    }
-
-    response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
+    handle_response(response).await
 }
 
-/// PUT request with Bearer token auth and JSON body.
 pub async fn put<T: DeserializeOwned, B: Serialize>(
     path: &str,
     token: &str,
@@ -90,17 +77,9 @@ pub async fn put<T: DeserializeOwned, B: Serialize>(
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("HTTP {}: {}", status, text));
-    }
-
-    response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
+    handle_response(response).await
 }
 
-/// DELETE request with Bearer token auth.
 pub async fn delete<T: DeserializeOwned>(path: &str, token: &str) -> Result<T, String> {
     let url = format!("{}{}", server_url(), path);
     let response = client()
@@ -109,17 +88,9 @@ pub async fn delete<T: DeserializeOwned>(path: &str, token: &str) -> Result<T, S
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("HTTP {}: {}", status, text));
-    }
-
-    response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
+    handle_response(response).await
 }
 
-/// GET request without auth (used for Google OAuth status polling).
 pub async fn get_no_auth<T: DeserializeOwned>(path: &str) -> Result<T, String> {
     let url = format!("{}{}", server_url(), path);
     let response = client()
@@ -127,12 +98,5 @@ pub async fn get_no_auth<T: DeserializeOwned>(path: &str) -> Result<T, String> {
         .send()
         .await
         .map_err(|e| format!("Request failed: {}", e))?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        return Err(format!("HTTP {}: {}", status, text));
-    }
-
-    response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
+    handle_response(response).await
 }
