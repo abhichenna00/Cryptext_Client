@@ -232,10 +232,7 @@ pub fn init_local_db(
     Ok(())
 }
 
-pub fn store_message(db: &LocalDb, msg: &LocalMessage) -> Result<(), String> {
-    let guard = db.conn.lock().map_err(|e| e.to_string())?;
-    let conn = guard.as_ref().ok_or("Local DB not initialized")?;
-
+fn insert_message(conn: &rusqlite::Connection, msg: &LocalMessage) -> Result<(), String> {
     conn.execute(
         "INSERT OR IGNORE INTO messages (id, conversation_id, sender_id, content, timestamp, content_type)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -249,30 +246,21 @@ pub fn store_message(db: &LocalDb, msg: &LocalMessage) -> Result<(), String> {
         ],
     )
     .map_err(|e| format!("Failed to store message: {}", e))?;
-
     Ok(())
+}
+
+pub fn store_message(db: &LocalDb, msg: &LocalMessage) -> Result<(), String> {
+    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let conn = guard.as_ref().ok_or("Local DB not initialized")?;
+    insert_message(conn, msg)
 }
 
 pub fn store_messages(db: &LocalDb, msgs: &[LocalMessage]) -> Result<(), String> {
     let guard = db.conn.lock().map_err(|e| e.to_string())?;
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
-
     for msg in msgs {
-        conn.execute(
-            "INSERT OR IGNORE INTO messages (id, conversation_id, sender_id, content, timestamp, content_type)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![
-                msg.id,
-                msg.conversation_id,
-                msg.sender_id,
-                msg.content,
-                msg.timestamp,
-                msg.content_type,
-            ],
-        )
-        .map_err(|e| format!("Failed to store message: {}", e))?;
+        insert_message(conn, msg)?;
     }
-
     Ok(())
 }
 
