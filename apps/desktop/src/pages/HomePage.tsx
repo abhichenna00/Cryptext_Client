@@ -18,17 +18,10 @@ import {
   DialogTrigger,
 } from '../components/ui/dialog'
 import { MessageCircle, MoreVertical, Plus, Check, X } from 'lucide-react'
+import Avatar from '@/components/Avatar'
 import '../styles/HomePage.css'
 
 type FriendsTab = 'online' | 'all' | 'pending'
-type Status = 'online' | 'idle' | 'dnd' | 'offline'
-
-const STATUS_COLORS: Record<Status, string> = {
-  online: '#22c55e',
-  idle: '#eab308',
-  dnd: '#ef4444',
-  offline: '#6b7280',
-}
 
 interface ProfileData {
   user_id: string
@@ -80,33 +73,6 @@ interface ConversationWithDetails {
 interface FriendResult {
   success: boolean
   error?: string
-}
-
-interface AvatarProps {
-  src?: string | null
-  fallback: string
-  size?: 'sm' | 'md' | 'lg'
-  status?: string | null
-  showStatus?: boolean
-  className?: string
-}
-
-function Avatar({ src, fallback, size = 'md', status, showStatus = false, className = '' }: AvatarProps) {
-  const sizeClasses = { sm: 'avatar-sm', md: 'avatar-md', lg: 'avatar-lg' }
-  const statusColor = STATUS_COLORS[(status as Status) || 'offline']
-
-  return (
-    <div className={`avatar ${sizeClasses[size]} ${className}`}>
-      {src ? (
-        <img src={src} alt={fallback} className="avatar-image" />
-      ) : (
-        <span className="avatar-fallback">{fallback.charAt(0).toUpperCase()}</span>
-      )}
-      {showStatus && (
-        <div className="status-indicator" style={{ backgroundColor: statusColor }} />
-      )}
-    </div>
-  )
 }
 
 export default function HomePage() {

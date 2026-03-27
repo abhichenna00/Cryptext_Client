@@ -10,9 +10,8 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Circle, ChevronDown } from 'lucide-react'
+import { Status, STATUS_OPTIONS } from '@/constants/status'
 import '../styles/ProfilePage.css'
-
-type Status = 'online' | 'idle' | 'dnd' | 'offline'
 
 interface ProfileData {
   user_id: string
@@ -37,13 +36,6 @@ interface AvatarResult {
   url?: string
   error?: string
 }
-
-const STATUS_OPTIONS: { value: Status; label: string; color: string }[] = [
-  { value: 'online', label: 'Online', color: '#22c55e' },
-  { value: 'idle', label: 'Idle', color: '#eab308' },
-  { value: 'dnd', label: 'Do Not Disturb', color: '#ef4444' },
-  { value: 'offline', label: 'Invisible', color: '#6b7280' },
-]
 
 export default function ProfilePage() {
   const navigate = useNavigate()
