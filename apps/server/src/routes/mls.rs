@@ -76,6 +76,21 @@ pub async fn upload_key_packages(
     let pool = get_pool();
     let user_id = claims.user_id();
 
+    // Reject if user already has too many unclaimed key packages
+    let (existing_count,): (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM key_packages WHERE user_id = $1 AND claimed = FALSE"
+    )
+    .bind(user_id)
+    .fetch_one(pool.as_ref())
+    .await?;
+
+    if existing_count + req.key_packages.len() as i64 > 500 {
+        return Err(AppError::BadRequest(format!(
+            "Too many unclaimed key packages ({} existing, max 500)",
+            existing_count
+        )));
+    }
+
     for kp in &req.key_packages {
         sqlx::query(
             "INSERT INTO key_packages (user_id, key_package_data) VALUES ($1, $2)"
