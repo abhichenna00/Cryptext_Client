@@ -544,6 +544,13 @@ fn process_welcome_inner(
     let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
     let inner = state.as_mut().ok_or("MLS not initialized")?;
 
+    // Skip if we already have a group for this conversation (duplicate welcome)
+    if let Some(conv_id) = conversation_id {
+        if inner.conversation_groups.contains_key(conv_id) {
+            return Ok(());
+        }
+    }
+
     let mls_msg_in = MlsMessageIn::tls_deserialize(&mut &welcome_data[..])
         .map_err(|e| format!("Failed to deserialize welcome: {:?}", e))?;
 
