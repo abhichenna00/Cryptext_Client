@@ -1,6 +1,7 @@
 // src-tauri/src/auth.rs
 
 use crate::http_client;
+use crate::sync_utils::MutexExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{command, State};
@@ -37,7 +38,7 @@ impl Default for SessionStore {
 
 /// Extract auth token from session. Used by all modules that make authenticated API calls.
 pub fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, String> {
-    let store = session_store.session.lock().map_err(|e| e.to_string())?;
+    let store = session_store.session.lock_or_err()?;
     match &*store {
         Some(session) if chrono::Utc::now().timestamp() + EXPIRY_BUFFER_SECS < session.expires_at => {
             Ok(session.access_token.clone())
@@ -49,7 +50,7 @@ pub fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, Stri
 
 /// Extract user_id from session. Used by modules that need the current user's identity.
 pub fn get_user_id_from_session(session_store: &State<'_, SessionStore>) -> Result<String, String> {
-    let store = session_store.session.lock().map_err(|e| e.to_string())?;
+    let store = session_store.session.lock_or_err()?;
     match &*store {
         Some(session) => Ok(session.user_id.clone()),
         None => Err("Not authenticated".to_string()),
@@ -157,7 +158,7 @@ pub async fn sign_in(
                 email,
                 expires_at,
             };
-            let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
+            let mut store = session_store.session.lock_or_err()?;
             *store = Some(session);
 
             Ok(AuthResult {
@@ -228,7 +229,7 @@ pub async fn sign_up(
                     response.expires_at,
                 ) {
                     let session = Session { access_token, refresh_token, id_token, user_id: user_id.clone(), email, expires_at };
-                    let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
+                    let mut store = session_store.session.lock_or_err()?;
                     *store = Some(session);
                     return Ok(AuthResult { success: true, error: None, user_id: Some(user_id), needs_confirmation: false });
                 }
@@ -273,7 +274,7 @@ pub async fn confirm_sign_up(
 /// Sign out and clear the local session
 #[command]
 pub async fn sign_out(session_store: State<'_, SessionStore>) -> Result<bool, String> {
-    let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
+    let mut store = session_store.session.lock_or_err()?;
     *store = None;
     Ok(true)
 }
@@ -283,7 +284,7 @@ pub async fn sign_out(session_store: State<'_, SessionStore>) -> Result<bool, St
 pub async fn get_session(
     session_store: State<'_, SessionStore>,
 ) -> Result<Option<PublicSessionInfo>, String> {
-    let store = session_store.session.lock().map_err(|e| e.to_string())?;
+    let store = session_store.session.lock_or_err()?;
 
     match &*store {
         Some(session) if chrono::Utc::now().timestamp() + EXPIRY_BUFFER_SECS < session.expires_at => {
@@ -302,7 +303,7 @@ pub async fn get_session(
 pub async fn get_auth_token(
     session_store: State<'_, SessionStore>,
 ) -> Result<Option<String>, String> {
-    let store = session_store.session.lock().map_err(|e| e.to_string())?;
+    let store = session_store.session.lock_or_err()?;
 
     match &*store {
         Some(session) if chrono::Utc::now().timestamp() + EXPIRY_BUFFER_SECS < session.expires_at => {
@@ -317,7 +318,7 @@ pub async fn get_auth_token(
 pub async fn get_user_id(
     session_store: State<'_, SessionStore>,
 ) -> Result<Option<String>, String> {
-    let store = session_store.session.lock().map_err(|e| e.to_string())?;
+    let store = session_store.session.lock_or_err()?;
 
     match &*store {
         Some(session) if chrono::Utc::now().timestamp() + EXPIRY_BUFFER_SECS < session.expires_at => {
@@ -331,7 +332,7 @@ pub async fn get_user_id(
 #[command]
 pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<bool, String> {
     let (refresh_token, user_id) = {
-        let store = session_store.session.lock().map_err(|e| e.to_string())?;
+        let store = session_store.session.lock_or_err()?;
         match &*store {
             Some(session) => (session.refresh_token.clone(), session.user_id.clone()),
             None => return Ok(false),
@@ -345,7 +346,7 @@ pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<b
     let response: ServerAuthResponse = match http_client::post_no_auth("/auth/refresh", &body).await {
         Ok(r) => r,
         Err(_) => {
-            let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
+            let mut store = session_store.session.lock_or_err()?;
             *store = None;
             return Ok(false);
         }
@@ -359,7 +360,7 @@ pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<b
             response.email,
             response.expires_at,
         ) {
-            let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
+            let mut store = session_store.session.lock_or_err()?;
             if let Some(session) = store.as_mut() {
                 session.access_token = access_token;
                 session.id_token = id_token;
@@ -372,7 +373,7 @@ pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<b
             Ok(false)
         }
     } else {
-        let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
+        let mut store = session_store.session.lock_or_err()?;
         *store = None;
         Ok(false)
     }
@@ -397,7 +398,7 @@ pub async fn sync_oauth_session(
     }
 
     let session = Session { access_token, refresh_token, id_token, user_id, email, expires_at };
-    let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
+    let mut store = session_store.session.lock_or_err()?;
     *store = Some(session);
     Ok(true)
 }
@@ -488,7 +489,7 @@ pub async fn sign_in_with_google(
                     expires_at,
                 };
 
-                let mut store = session_store.session.lock().map_err(|e| e.to_string())?;
+                let mut store = session_store.session.lock_or_err()?;
                 *store = Some(session);
 
                 return Ok(AuthResult {
