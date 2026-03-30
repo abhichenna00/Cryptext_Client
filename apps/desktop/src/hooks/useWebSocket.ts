@@ -3,10 +3,30 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 
-export interface WebSocketMessage {
-  action: string
-  [key: string]: unknown
+// ── Message types ──
+
+export interface WsNewMessage {
+  action: 'new_message'
+  message: {
+    id: string
+    conversation_id: string
+    sender_id: string
+    timestamp: number
+  }
 }
+
+export interface WsStatusUpdate {
+  action: 'status_update'
+  user_id: string
+  status: string
+}
+
+export type WebSocketMessage =
+  | WsNewMessage
+  | WsStatusUpdate
+  | { action: string; [key: string]: unknown }
+
+// ── Options & return types ──
 
 interface UseWebSocketOptions {
   /** Called when a message is received from the server */
@@ -17,9 +37,11 @@ interface UseWebSocketOptions {
   onClose?: () => void
   /** Called on connection error */
   onError?: (error: Event) => void
+  /** Called when all reconnect attempts are exhausted */
+  onReconnectFailed?: () => void
   /** Auto-reconnect on disconnect (default: true) */
   autoReconnect?: boolean
-  /** Reconnect interval in ms (default: 3000) */
+  /** Base reconnect interval in ms (default: 3000) */
   reconnectInterval?: number
   /** Max reconnect attempts (default: 10) */
   maxReconnectAttempts?: number
@@ -37,6 +59,18 @@ interface UseWebSocketReturn {
 }
 
 /**
+ * Compute exponential backoff delay with jitter.
+ * Caps at 30 seconds.
+ */
+function getBackoffDelay(attempt: number, baseInterval: number): number {
+  const exponential = baseInterval * Math.pow(2, attempt - 1)
+  const capped = Math.min(exponential, 30000)
+  // Add ±25% jitter to avoid thundering herd
+  const jitter = capped * (0.75 + Math.random() * 0.5)
+  return Math.round(jitter)
+}
+
+/**
  * Hook that manages a WebSocket connection to the API Gateway WebSocket endpoint.
  * Retrieves the WebSocket URL and auth token from the Tauri backend.
  */
@@ -46,6 +80,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
     onOpen,
     onClose,
     onError,
+    onReconnectFailed,
     autoReconnect = true,
     reconnectInterval = 3000,
     maxReconnectAttempts = 10,
@@ -62,13 +97,36 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
   const onOpenRef = useRef(onOpen)
   const onCloseRef = useRef(onClose)
   const onErrorRef = useRef(onError)
+  const onReconnectFailedRef = useRef(onReconnectFailed)
 
   useEffect(() => {
     onMessageRef.current = onMessage
     onOpenRef.current = onOpen
     onCloseRef.current = onClose
     onErrorRef.current = onError
-  }, [onMessage, onOpen, onClose, onError])
+    onReconnectFailedRef.current = onReconnectFailed
+  }, [onMessage, onOpen, onClose, onError, onReconnectFailed])
+
+  const scheduleReconnect = useCallback((connectFn: () => void) => {
+    if (
+      !autoReconnect ||
+      intentionalCloseRef.current ||
+      reconnectAttemptsRef.current >= maxReconnectAttempts
+    ) {
+      if (reconnectAttemptsRef.current >= maxReconnectAttempts) {
+        console.error('[WebSocket] All reconnect attempts exhausted')
+        onReconnectFailedRef.current?.()
+      }
+      return
+    }
+
+    reconnectAttemptsRef.current += 1
+    const delay = getBackoffDelay(reconnectAttemptsRef.current, reconnectInterval)
+    console.log(
+      `[WebSocket] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})...`
+    )
+    reconnectTimerRef.current = setTimeout(connectFn, delay)
+  }, [autoReconnect, reconnectInterval, maxReconnectAttempts])
 
   const connect = useCallback(async () => {
     // Close existing connection if any
@@ -110,17 +168,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
         onCloseRef.current?.()
 
         // Auto-reconnect unless intentionally closed
-        if (
-          autoReconnect &&
-          !intentionalCloseRef.current &&
-          reconnectAttemptsRef.current < maxReconnectAttempts
-        ) {
-          reconnectAttemptsRef.current += 1
-          console.log(
-            `[WebSocket] Reconnecting (attempt ${reconnectAttemptsRef.current}/${maxReconnectAttempts})...`
-          )
-          reconnectTimerRef.current = setTimeout(connect, reconnectInterval)
-        }
+        scheduleReconnect(connect)
       }
 
       ws.onerror = (event) => {
@@ -131,18 +179,9 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       wsRef.current = ws
     } catch (err) {
       console.error('[WebSocket] Failed to connect:', err)
-
-      // Retry if auto-reconnect enabled
-      if (
-        autoReconnect &&
-        !intentionalCloseRef.current &&
-        reconnectAttemptsRef.current < maxReconnectAttempts
-      ) {
-        reconnectAttemptsRef.current += 1
-        reconnectTimerRef.current = setTimeout(connect, reconnectInterval)
-      }
+      scheduleReconnect(connect)
     }
-  }, [autoReconnect, reconnectInterval, maxReconnectAttempts])
+  }, [scheduleReconnect])
 
   const disconnect = useCallback(() => {
     intentionalCloseRef.current = true
