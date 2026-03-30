@@ -109,6 +109,9 @@ export default function SignupPage() {
             await invoke('mls_upload_key_packages')
           } catch (mlsErr) {
             console.error('MLS key package generation failed:', mlsErr)
+            setError('Account created, but encryption setup failed. Please restart the app and sign in again.')
+            setLoading(false)
+            return
           }
           navigate('/profile')
         } else {

@@ -81,6 +81,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<PublicSessionInfo | null>(null)
   const [hasProfile, setHasProfile] = useState(false)
+  const [mlsWarning, setMlsWarning] = useState<string | null>(null)
 
   useEffect(() => {
     const initialize = async () => {
@@ -138,6 +139,7 @@ export default function App() {
             await invoke('mls_fetch_welcomes')
           } catch (mlsErr) {
             console.error('MLS initialization failed:', mlsErr)
+            setMlsWarning('Encryption failed to initialize. Messages may not be delivered securely. Try restarting the app.')
           }
         }
       } catch (error) {
@@ -173,6 +175,25 @@ export default function App() {
     <Theme appearance={systemTheme}>
       <BrowserRouter>
         <AppLayout showSidebar={showSidebar} onSignOut={handleSignOut}>
+          {mlsWarning && (
+            <div style={{
+              background: '#b91c1c',
+              color: 'white',
+              padding: '8px 16px',
+              fontSize: '13px',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}>
+              <span>{mlsWarning}</span>
+              <button
+                onClick={() => setMlsWarning(null)}
+                style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '16px' }}
+              >
+                ×
+              </button>
+            </div>
+          )}
           <Routes>
             <Route path="/splash" element={<SplashPage />} />
 
