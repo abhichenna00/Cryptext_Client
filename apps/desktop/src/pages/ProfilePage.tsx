@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useLocation } from 'react-router-dom'
+import { ErrorMessage } from '@/components/ui/ErrorMessage'
 import { Input } from "@/components/ui/input"
 import { Button } from '@/components/ui/button'
 import {
@@ -308,7 +309,7 @@ export default function ProfilePage() {
             </div>
           </div>
 
-          {error && <p className="error-message">{error}</p>}
+          <ErrorMessage error={error} className="error-message" />
         </div>
 
         <div className="profile-card-footer">

@@ -4,6 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate } from 'react-router-dom'
 import { useWebSocket, WebSocketMessage } from '@/hooks'
+import { ErrorMessage } from '@/components/ui/ErrorMessage'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Send } from 'lucide-react'
 import Avatar from '@/components/Avatar'
@@ -244,11 +245,7 @@ export default function ChatPage({ onSignOut }: ChatPageProps) {
         </div>
       </div>
 
-      {error && (
-        <div className="chat-error-banner">
-          {error}
-        </div>
-      )}
+      <ErrorMessage error={error} className="chat-error-banner" />
 
       <ScrollArea className="messages-area">
         <div className="chat-messages">

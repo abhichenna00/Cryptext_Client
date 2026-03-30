@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { useWindowSize } from '@/hooks'
+import { ErrorMessage } from '@/components/ui/ErrorMessage'
 import { Card, Flex, Text, TextField, Button, Heading, Box } from '@radix-ui/themes'
 import { FlickeringGrid } from "../components/ui/flickering-grid"
 import '../styles/AuthPage.css'
@@ -266,11 +267,7 @@ export default function SignupPage() {
                 </Button>
               </Flex>
 
-              {error && (
-                <Text color="red" size="2" align="center">
-                  {error}
-                </Text>
-              )}
+              <ErrorMessage error={error} variant="inline" />
             </Flex>
           ) : (
             <Flex direction="column" gap="4">
@@ -316,11 +313,7 @@ export default function SignupPage() {
                 </Button>
               </Flex>
 
-              {error && (
-                <Text color="red" size="2" align="center">
-                  {error}
-                </Text>
-              )}
+              <ErrorMessage error={error} variant="inline" />
             </Flex>
           )}
         </Card>

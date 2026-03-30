@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useWebSocket, WebSocketMessage } from '@/hooks'
+import { ErrorMessage } from '@/components/ui/ErrorMessage'
 import { ArrowLeft, ArrowDown, Send } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
@@ -363,7 +364,7 @@ export default function DirectMessagePage() {
         </div>
       </header>
 
-      {error && <div className="dm-error-banner">{error}</div>}
+      <ErrorMessage error={error} className="dm-error-banner" />
 
       <main ref={messagesContainerRef} onScroll={handleScroll} className="dm-messages">
         {messages.length === 0 ? (
