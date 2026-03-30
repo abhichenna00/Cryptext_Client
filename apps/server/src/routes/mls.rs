@@ -129,6 +129,9 @@ pub async fn claim_key_package(
     _claims: Claims,
     Path(user_id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
+    if uuid::Uuid::parse_str(&user_id).is_err() {
+        return Err(AppError::BadRequest("Invalid user ID".to_string()));
+    }
     let pool = get_pool();
 
     let row: Option<(Vec<u8>,)> = sqlx::query_as(

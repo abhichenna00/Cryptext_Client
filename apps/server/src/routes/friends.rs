@@ -76,6 +76,9 @@ pub async fn remove_friend(
     claims: Claims,
     Path(friend_id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
+    if uuid::Uuid::parse_str(&friend_id).is_err() {
+        return Err(AppError::BadRequest("Invalid friend ID".to_string()));
+    }
     let pool = get_pool();
 
     sqlx::query(
@@ -217,6 +220,9 @@ pub async fn accept_friend_request(
     claims: Claims,
     Path(request_id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
+    if uuid::Uuid::parse_str(&request_id).is_err() {
+        return Err(AppError::BadRequest("Invalid request ID".to_string()));
+    }
     let pool = get_pool();
 
     let request: Option<(String, String)> = sqlx::query_as(
@@ -251,6 +257,9 @@ pub async fn decline_friend_request(
     claims: Claims,
     Path(request_id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
+    if uuid::Uuid::parse_str(&request_id).is_err() {
+        return Err(AppError::BadRequest("Invalid request ID".to_string()));
+    }
     let pool = get_pool();
 
     sqlx::query(
@@ -268,6 +277,9 @@ pub async fn cancel_friend_request(
     claims: Claims,
     Path(request_id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
+    if uuid::Uuid::parse_str(&request_id).is_err() {
+        return Err(AppError::BadRequest("Invalid request ID".to_string()));
+    }
     let pool = get_pool();
 
     sqlx::query(
