@@ -1,5 +1,6 @@
 use crate::auth::{self, SessionStore};
 use crate::http_client;
+use crate::sync_utils::MutexExt;
 use openmls::prelude::*;
 use openmls::prelude::tls_codec::{Deserialize as TlsDeserializeTrait, Serialize as TlsSerializeTrait};
 use openmls_basic_credential::SignatureKeyPair;
@@ -120,7 +121,7 @@ pub async fn mls_init(
     session_store: State<'_, SessionStore>,
 ) -> Result<bool, String> {
     let user_id = {
-        let store = session_store.session.lock().map_err(|e| e.to_string())?;
+        let store = session_store.session.lock_or_err()?;
         match &*store {
             Some(session) => session.user_id.clone(),
             None => return Err("Not authenticated".to_string()),
@@ -215,7 +216,7 @@ pub async fn mls_init(
         storage_path,
     };
 
-    let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
+    let mut state = mls_state.inner.lock_or_err()?;
     *state = Some(inner);
 
     Ok(signer_regenerated)
@@ -229,7 +230,7 @@ pub async fn mls_upload_key_packages(
     let count = 50u32;
 
     let serialized_packages = {
-        let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
+        let mut state = mls_state.inner.lock_or_err()?;
         let inner = state.as_mut().ok_or("MLS not initialized")?;
 
         let mut packages = Vec::with_capacity(count as usize);
@@ -346,7 +347,7 @@ pub async fn create_group_inner(
     ).await?;
 
     let (group_id_bytes, welcome_bytes, commit_bytes) = {
-        let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
+        let mut state = mls_state.inner.lock_or_err()?;
         let inner = state.as_mut().ok_or("MLS not initialized")?;
 
         let key_package_in = KeyPackageIn::tls_deserialize(
@@ -424,7 +425,7 @@ pub fn encrypt_message_inner(
     conversation_id: &str,
     plaintext: &str,
 ) -> Result<Vec<u8>, String> {
-    let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
+    let mut state = mls_state.inner.lock_or_err()?;
     let inner = state.as_mut().ok_or("MLS not initialized")?;
 
     let group_id = inner.conversation_groups.get(conversation_id)
@@ -448,7 +449,7 @@ pub fn decrypt_message_inner(
     conversation_id: &str,
     ciphertext: &[u8],
 ) -> Result<String, String> {
-    let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
+    let mut state = mls_state.inner.lock_or_err()?;
     let inner = state.as_mut().ok_or("MLS not initialized")?;
 
     let group_id = inner.conversation_groups.get(conversation_id)
@@ -533,7 +534,7 @@ pub fn process_welcome(
     welcome_data: &[u8],
     conversation_id: Option<&str>,
 ) -> Result<(), String> {
-    let mut state = mls_state.inner.lock().map_err(|e| e.to_string())?;
+    let mut state = mls_state.inner.lock_or_err()?;
     let inner = state.as_mut().ok_or("MLS not initialized")?;
 
     // Skip if we already have a group for this conversation (duplicate welcome)

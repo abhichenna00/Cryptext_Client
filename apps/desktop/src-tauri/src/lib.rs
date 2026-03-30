@@ -8,6 +8,7 @@ mod http_client;
 mod local_db;
 mod mls;
 mod profile;
+mod sync_utils;
 mod updates;
 mod vault;
 

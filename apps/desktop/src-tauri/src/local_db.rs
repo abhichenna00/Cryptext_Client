@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Mutex;
 use tauri::{command, AppHandle, Manager, State};
 
+use crate::sync_utils::MutexExt;
 use crate::vault;
 
 pub struct LocalDb {
@@ -153,7 +154,7 @@ pub fn setup_vault(
         let _ = std::fs::remove_file(&unencrypted_path);
     }
 
-    let mut guard = local_db.conn.lock().map_err(|e| e.to_string())?;
+    let mut guard = local_db.conn.lock_or_err()?;
     *guard = Some(conn);
     Ok(())
 }
@@ -176,7 +177,7 @@ pub fn unlock_vault(
     let conn = open_encrypted_db(&db_path, &dek)?;
     init_schema(&conn)?;
 
-    let mut guard = local_db.conn.lock().map_err(|e| e.to_string())?;
+    let mut guard = local_db.conn.lock_or_err()?;
     *guard = Some(conn);
     Ok(())
 }
@@ -227,7 +228,7 @@ pub fn init_local_db(
 
     init_schema(&conn)?;
 
-    let mut guard = local_db.conn.lock().map_err(|e| e.to_string())?;
+    let mut guard = local_db.conn.lock_or_err()?;
     *guard = Some(conn);
     Ok(())
 }
@@ -250,13 +251,13 @@ fn insert_message(conn: &rusqlite::Connection, msg: &LocalMessage) -> Result<(),
 }
 
 pub fn store_message(db: &LocalDb, msg: &LocalMessage) -> Result<(), String> {
-    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let guard = db.conn.lock_or_err()?;
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
     insert_message(conn, msg)
 }
 
 pub fn store_messages(db: &LocalDb, msgs: &[LocalMessage]) -> Result<(), String> {
-    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let guard = db.conn.lock_or_err()?;
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
     for msg in msgs {
         insert_message(conn, msg)?;
@@ -268,7 +269,7 @@ pub fn get_existing_message_ids(
     db: &LocalDb,
     conversation_id: &str,
 ) -> Result<std::collections::HashSet<String>, String> {
-    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let guard = db.conn.lock_or_err()?;
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
 
     let mut stmt = conn
@@ -302,7 +303,7 @@ pub fn get_local_messages_inner(
     before_timestamp: Option<i64>,
     before_id: Option<&str>,
 ) -> Result<Vec<LocalMessage>, String> {
-    let guard = db.conn.lock().map_err(|e| e.to_string())?;
+    let guard = db.conn.lock_or_err()?;
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
 
     let limit = limit.unwrap_or(50);
