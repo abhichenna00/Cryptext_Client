@@ -37,7 +37,7 @@ pub struct StoreWelcomeRequest {
     pub welcome_data: Vec<u8>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 pub struct WelcomeMessage {
     pub id: String,
     pub group_id: Vec<u8>,
@@ -253,7 +253,7 @@ pub async fn fetch_welcomes(
 ) -> AppResult<impl IntoResponse> {
     let pool = get_pool();
 
-    let rows: Vec<(String, Vec<u8>, Vec<u8>, Option<String>)> = sqlx::query_as(
+    let welcomes: Vec<WelcomeMessage> = sqlx::query_as(
         "DELETE FROM mls_welcome_messages w
          USING mls_groups g
          WHERE w.recipient_id = $1 AND g.group_id = w.group_id
@@ -262,16 +262,6 @@ pub async fn fetch_welcomes(
     .bind(claims.user_id())
     .fetch_all(pool.as_ref())
     .await?;
-
-    let welcomes: Vec<WelcomeMessage> = rows
-        .into_iter()
-        .map(|(id, group_id, welcome_data, conversation_id)| WelcomeMessage {
-            id,
-            group_id,
-            welcome_data,
-            conversation_id,
-        })
-        .collect();
 
     Ok(Json(welcomes))
 }
