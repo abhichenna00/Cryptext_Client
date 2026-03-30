@@ -55,6 +55,17 @@ pub struct LocalMessage {
     pub content_type: String,
 }
 
+fn local_message_from_row(row: &rusqlite::Row) -> rusqlite::Result<LocalMessage> {
+    Ok(LocalMessage {
+        id: row.get(0)?,
+        conversation_id: row.get(1)?,
+        sender_id: row.get(2)?,
+        content: row.get(3)?,
+        timestamp: row.get(4)?,
+        content_type: row.get(5)?,
+    })
+}
+
 fn init_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -129,14 +140,7 @@ pub fn setup_vault(
 
             let results: Vec<LocalMessage> = stmt
                 .query_map([], |row| {
-                    Ok(LocalMessage {
-                        id: row.get(0)?,
-                        conversation_id: row.get(1)?,
-                        sender_id: row.get(2)?,
-                        content: row.get(3)?,
-                        timestamp: row.get(4)?,
-                        content_type: row.get(5)?,
-                    })
+                    local_message_from_row(row)
                 })
                 .map_err(|e| format!("Failed to read old messages: {}", e))?
                 .filter_map(|r| r.ok())
@@ -325,14 +329,7 @@ pub fn get_local_messages_inner(
 
             let results: Vec<LocalMessage> = stmt
                 .query_map(params![conversation_id, before_ts, b_id, limit], |row| {
-                    Ok(LocalMessage {
-                        id: row.get(0)?,
-                        conversation_id: row.get(1)?,
-                        sender_id: row.get(2)?,
-                        content: row.get(3)?,
-                        timestamp: row.get(4)?,
-                        content_type: row.get(5)?,
-                    })
+                    local_message_from_row(row)
                 })
                 .map_err(|e| format!("Failed to query: {}", e))?
                 .filter_map(|r| r.ok())
@@ -353,14 +350,7 @@ pub fn get_local_messages_inner(
 
             let results: Vec<LocalMessage> = stmt
                 .query_map(params![conversation_id, before_ts, limit], |row| {
-                    Ok(LocalMessage {
-                        id: row.get(0)?,
-                        conversation_id: row.get(1)?,
-                        sender_id: row.get(2)?,
-                        content: row.get(3)?,
-                        timestamp: row.get(4)?,
-                        content_type: row.get(5)?,
-                    })
+                    local_message_from_row(row)
                 })
                 .map_err(|e| format!("Failed to query: {}", e))?
                 .filter_map(|r| r.ok())
@@ -380,14 +370,7 @@ pub fn get_local_messages_inner(
 
             let results: Vec<LocalMessage> = stmt
                 .query_map(params![conversation_id, limit], |row| {
-                    Ok(LocalMessage {
-                        id: row.get(0)?,
-                        conversation_id: row.get(1)?,
-                        sender_id: row.get(2)?,
-                        content: row.get(3)?,
-                        timestamp: row.get(4)?,
-                        content_type: row.get(5)?,
-                    })
+                    local_message_from_row(row)
                 })
                 .map_err(|e| format!("Failed to query: {}", e))?
                 .filter_map(|r| r.ok())
