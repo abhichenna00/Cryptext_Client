@@ -7,6 +7,10 @@ use tauri::{command, State};
 use tauri_plugin_opener::OpenerExt;
 use base64::Engine;
 
+/// Buffer (in seconds) subtracted from token expiry to guard against clock skew
+/// between the client and server.
+const EXPIRY_BUFFER_SECS: i64 = 60;
+
 /// Represents a user session stored securely in Tauri's backend process
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Session {
@@ -35,7 +39,7 @@ impl Default for SessionStore {
 pub fn get_token(session_store: &State<'_, SessionStore>) -> Result<String, String> {
     let store = session_store.session.lock().map_err(|e| e.to_string())?;
     match &*store {
-        Some(session) if chrono::Utc::now().timestamp() < session.expires_at => {
+        Some(session) if chrono::Utc::now().timestamp() + EXPIRY_BUFFER_SECS < session.expires_at => {
             Ok(session.access_token.clone())
         }
         Some(_) => Err("Session expired".to_string()),
@@ -282,7 +286,7 @@ pub async fn get_session(
     let store = session_store.session.lock().map_err(|e| e.to_string())?;
 
     match &*store {
-        Some(session) if chrono::Utc::now().timestamp() < session.expires_at => {
+        Some(session) if chrono::Utc::now().timestamp() + EXPIRY_BUFFER_SECS < session.expires_at => {
             Ok(Some(PublicSessionInfo {
                 user_id: session.user_id.clone(),
                 email: session.email.clone(),
@@ -301,7 +305,7 @@ pub async fn get_auth_token(
     let store = session_store.session.lock().map_err(|e| e.to_string())?;
 
     match &*store {
-        Some(session) if chrono::Utc::now().timestamp() < session.expires_at => {
+        Some(session) if chrono::Utc::now().timestamp() + EXPIRY_BUFFER_SECS < session.expires_at => {
             Ok(Some(session.access_token.clone()))
         }
         _ => Ok(None),
@@ -316,7 +320,7 @@ pub async fn get_user_id(
     let store = session_store.session.lock().map_err(|e| e.to_string())?;
 
     match &*store {
-        Some(session) if chrono::Utc::now().timestamp() < session.expires_at => {
+        Some(session) if chrono::Utc::now().timestamp() + EXPIRY_BUFFER_SECS < session.expires_at => {
             Ok(Some(session.user_id.clone()))
         }
         _ => Ok(None),
