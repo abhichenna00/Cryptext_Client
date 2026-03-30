@@ -3,4 +3,4 @@ export { useFriendActions } from './useFriendActions'
 export { useWebSocket } from './useWebSocket'
 export { useWindowSize } from './useWindowSize'
 
-export type { WebSocketMessage } from './useWebSocket'
+export type { WebSocketMessage, WsNewMessage, WsStatusUpdate } from './useWebSocket'
