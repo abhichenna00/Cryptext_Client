@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate } from 'react-router-dom'
 import { useFriendActions } from '@/hooks'
+import { ErrorMessage } from '@/components/ui/ErrorMessage'
 import '../styles/FriendsPage.css'
 
 interface FriendWithProfile {
@@ -163,7 +164,7 @@ export default function FriendsPage() {
       </div>
 
       <div className="friends-content">
-        {error && <div className="friends-error">{error}</div>}
+        <ErrorMessage error={error} className="friends-error" />
         {success && <div className="friends-success">{success}</div>}
 
         {activeTab === 'friends' && (
