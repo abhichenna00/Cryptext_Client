@@ -6,6 +6,8 @@ mod routes;
 
 use axum::Router;
 use std::net::SocketAddr;
+use std::sync::Arc;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -45,8 +47,18 @@ async fn main() {
         .allow_methods(Any)
         .allow_headers(Any);
 
+    // Per-IP rate limiting: 60 requests per second with burst of 30
+    let rate_limit_config = GovernorConfigBuilder::default()
+        .per_second(60)
+        .burst_size(30)
+        .finish()
+        .expect("Failed to build rate limit config");
+
     let app = Router::new()
         .merge(routes::build_router())
+        .layer(GovernorLayer {
+            config: Arc::new(rate_limit_config),
+        })
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
