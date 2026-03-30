@@ -508,7 +508,7 @@ pub async fn fetch_welcomes_inner(
 
     let mut count = 0u32;
     for welcome_msg in &welcomes {
-        match process_welcome_inner(mls_state, &welcome_msg.welcome_data, welcome_msg.conversation_id.as_deref()) {
+        match process_welcome(mls_state, &welcome_msg.welcome_data, welcome_msg.conversation_id.as_deref()) {
             Ok(_) => {
                 // Send ACK to server so queued messages can be released
                 let ack_body = serde_json::json!({ "group_id": welcome_msg.group_id });
@@ -528,15 +528,7 @@ pub async fn fetch_welcomes_inner(
 // PRIVATE HELPERS
 // ============================================
 
-pub fn process_welcome_public(
-    mls_state: &State<'_, MlsState>,
-    welcome_data: &[u8],
-    conversation_id: Option<&str>,
-) -> Result<(), String> {
-    process_welcome_inner(mls_state, welcome_data, conversation_id)
-}
-
-fn process_welcome_inner(
+pub fn process_welcome(
     mls_state: &State<'_, MlsState>,
     welcome_data: &[u8],
     conversation_id: Option<&str>,

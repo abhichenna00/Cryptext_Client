@@ -132,7 +132,7 @@ pub async fn get_messages(
     for msg in &server_messages {
         if let Some(ref welcome_data) = msg.welcome_data {
             if msg.sender_id != current_user_id {
-                let _ = crate::mls::process_welcome_public(
+                let _ = crate::mls::process_welcome(
                     &mls_state, welcome_data, Some(&conversation_id),
                 );
             }
