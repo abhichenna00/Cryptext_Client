@@ -180,7 +180,7 @@ pub async fn get_messages(
 
     // Return all messages from local DB
     let local_messages =
-        local_db::get_local_messages_inner(&local_db, &conversation_id, Some(200), None)?;
+        local_db::get_local_messages_inner(&local_db, &conversation_id, Some(200), None, None)?;
 
     Ok(local_messages
         .into_iter()

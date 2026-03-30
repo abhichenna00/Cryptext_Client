@@ -290,8 +290,9 @@ pub fn get_local_messages(
     conversation_id: String,
     limit: Option<u32>,
     before_timestamp: Option<i64>,
+    before_id: Option<String>,
 ) -> Result<Vec<LocalMessage>, String> {
-    get_local_messages_inner(&local_db, &conversation_id, limit, before_timestamp)
+    get_local_messages_inner(&local_db, &conversation_id, limit, before_timestamp, before_id.as_deref())
 }
 
 pub fn get_local_messages_inner(
@@ -299,20 +300,52 @@ pub fn get_local_messages_inner(
     conversation_id: &str,
     limit: Option<u32>,
     before_timestamp: Option<i64>,
+    before_id: Option<&str>,
 ) -> Result<Vec<LocalMessage>, String> {
     let guard = db.conn.lock().map_err(|e| e.to_string())?;
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
 
     let limit = limit.unwrap_or(50);
 
-    let mut messages = match before_timestamp {
-        Some(before_ts) => {
+    let mut messages = match (before_timestamp, before_id) {
+        (Some(before_ts), Some(b_id)) => {
+            // Composite cursor: messages strictly before (timestamp, id) to avoid
+            // skipping or duplicating rows that share the same timestamp.
+            let mut stmt = conn
+                .prepare(
+                    "SELECT id, conversation_id, sender_id, content, timestamp, content_type
+                     FROM messages
+                     WHERE conversation_id = ?1
+                       AND (timestamp < ?2 OR (timestamp = ?2 AND id < ?3))
+                     ORDER BY timestamp DESC, id DESC
+                     LIMIT ?4",
+                )
+                .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+            let results: Vec<LocalMessage> = stmt
+                .query_map(params![conversation_id, before_ts, b_id, limit], |row| {
+                    Ok(LocalMessage {
+                        id: row.get(0)?,
+                        conversation_id: row.get(1)?,
+                        sender_id: row.get(2)?,
+                        content: row.get(3)?,
+                        timestamp: row.get(4)?,
+                        content_type: row.get(5)?,
+                    })
+                })
+                .map_err(|e| format!("Failed to query: {}", e))?
+                .filter_map(|r| r.ok())
+                .collect();
+            results
+        }
+        (Some(before_ts), None) => {
+            // Backwards-compatible: timestamp-only cursor
             let mut stmt = conn
                 .prepare(
                     "SELECT id, conversation_id, sender_id, content, timestamp, content_type
                      FROM messages
                      WHERE conversation_id = ?1 AND timestamp < ?2
-                     ORDER BY timestamp DESC
+                     ORDER BY timestamp DESC, id DESC
                      LIMIT ?3",
                 )
                 .map_err(|e| format!("Failed to prepare query: {}", e))?;
@@ -333,13 +366,13 @@ pub fn get_local_messages_inner(
                 .collect();
             results
         }
-        None => {
+        _ => {
             let mut stmt = conn
                 .prepare(
                     "SELECT id, conversation_id, sender_id, content, timestamp, content_type
                      FROM messages
                      WHERE conversation_id = ?1
-                     ORDER BY timestamp DESC
+                     ORDER BY timestamp DESC, id DESC
                      LIMIT ?2",
                 )
                 .map_err(|e| format!("Failed to prepare query: {}", e))?;
