@@ -138,11 +138,12 @@ export default function DirectMessagePage() {
     setLoadingMore(true)
 
     try {
-      const oldestTimestamp = messages.length > 0 ? messages[0].timestamp : undefined
+      const oldestMessage = messages.length > 0 ? messages[0] : undefined
       const older = await invoke<Message[]>('get_local_messages', {
         conversationId: conversationIdRef.current,
         limit: 50,
-        beforeTimestamp: oldestTimestamp,
+        beforeTimestamp: oldestMessage?.timestamp,
+        beforeId: oldestMessage?.id,
       })
 
       if (older.length === 0) {
