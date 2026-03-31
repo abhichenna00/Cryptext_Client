@@ -18,9 +18,23 @@ async fn handle_response<T: DeserializeOwned>(response: Response) -> Result<T, S
     if !response.status().is_success() {
         let status = response.status().as_u16();
         let text = response.text().await.unwrap_or_default();
-        return Err(format!("HTTP {}: {}", status, text));
+        eprintln!("[HTTP] Error {}: {}", status, text);
+        // Return generic message to frontend — don't leak server internals
+        let message = match status {
+            400 => "Bad request",
+            401 => "Not authorized",
+            403 => "Forbidden",
+            404 => "Not found",
+            409 => "Conflict",
+            429 => "Too many requests",
+            _ => "Server error",
+        };
+        return Err(format!("HTTP {}: {}", status, message));
     }
-    response.json::<T>().await.map_err(|e| format!("Failed to parse response: {}", e))
+    response.json::<T>().await.map_err(|e| {
+        eprintln!("[HTTP] Parse error: {}", e);
+        "Failed to parse server response".to_string()
+    })
 }
 
 pub async fn get<T: DeserializeOwned>(path: &str, token: &str) -> Result<T, String> {
