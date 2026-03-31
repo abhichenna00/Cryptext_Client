@@ -141,12 +141,18 @@ pub async fn delete_key_packages(
 
 /// Claim one unclaimed key package for a given user (marks it as used)
 pub async fn claim_key_package(
-    _claims: Claims,
+    claims: Claims,
     Path(user_id): Path<String>,
 ) -> AppResult<impl IntoResponse> {
     if uuid::Uuid::parse_str(&user_id).is_err() {
         return Err(AppError::BadRequest("Invalid user ID".to_string()));
     }
+
+    // Prevent users from claiming their own key packages
+    if claims.user_id() == user_id {
+        return Err(AppError::BadRequest("Cannot claim your own key packages".to_string()));
+    }
+
     let pool = get_pool();
 
     let row: Option<(Vec<u8>,)> = sqlx::query_as(
