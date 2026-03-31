@@ -239,6 +239,13 @@ pub async fn upload_profile_image(
     claims: Claims,
     Json(req): Json<UploadImageRequest>,
 ) -> AppResult<impl IntoResponse> {
+    let allowed_types = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+    if !allowed_types.contains(&req.content_type.as_str()) {
+        return Err(AppError::BadRequest(
+            "Only PNG, JPEG, WebP, and GIF images are allowed".to_string(),
+        ));
+    }
+
     let image_bytes = STANDARD
         .decode(&req.image_data)
         .map_err(|_| AppError::BadRequest("Failed to decode image data".to_string()))?;
