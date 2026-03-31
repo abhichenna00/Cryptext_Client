@@ -205,6 +205,10 @@ pub async fn register_group(
         return Err(AppError::BadRequest("Invalid conversation ID".to_string()));
     }
 
+    if !req.member_ids.contains(&claims.user_id().to_string()) {
+        return Err(AppError::BadRequest("Creator must be in member list".to_string()));
+    }
+
     let pool = get_pool();
     let mut tx = pool.begin().await?;
 
