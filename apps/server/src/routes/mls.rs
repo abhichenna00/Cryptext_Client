@@ -254,10 +254,29 @@ pub async fn register_group(
 
 /// Store a Welcome message for a recipient
 pub async fn store_welcome(
-    _claims: Claims,
+    claims: Claims,
     Json(req): Json<StoreWelcomeRequest>,
 ) -> AppResult<impl IntoResponse> {
+    if req.welcome_data.len() > 32_000 {
+        return Err(AppError::BadRequest("Welcome data too large (max 32KB)".to_string()));
+    }
+
     let pool = get_pool();
+
+    // Verify the caller is a confirmed member of the group
+    let member: Option<(String,)> = sqlx::query_as(
+        "SELECT user_id FROM mls_group_members WHERE group_id = $1 AND user_id = $2 AND confirmed_epoch >= 1"
+    )
+    .bind(&req.group_id)
+    .bind(claims.user_id())
+    .fetch_optional(pool.as_ref())
+    .await?;
+
+    if member.is_none() {
+        return Err(AppError::Unauthorized(
+            "You are not a confirmed member of this group".to_string(),
+        ));
+    }
 
     sqlx::query(
         "INSERT INTO mls_welcome_messages (recipient_id, group_id, welcome_data) VALUES ($1, $2, $3)"
