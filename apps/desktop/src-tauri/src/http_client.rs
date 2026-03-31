@@ -3,6 +3,7 @@
 use reqwest::{Client, Response};
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::OnceLock;
+use std::time::Duration;
 use crate::config::server_url;
 
 #[derive(Serialize)]
@@ -11,7 +12,13 @@ pub struct EmptyBody {}
 static HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
 
 fn client() -> &'static Client {
-    HTTP_CLIENT.get_or_init(Client::new)
+    HTTP_CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .expect("Failed to build HTTP client")
+    })
 }
 
 async fn handle_response<T: DeserializeOwned>(response: Response) -> Result<T, String> {
