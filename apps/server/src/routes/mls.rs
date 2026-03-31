@@ -92,6 +92,9 @@ pub async fn upload_key_packages(
     }
 
     for kp in &req.key_packages {
+        if kp.len() > 5000 {
+            return Err(AppError::BadRequest("Key package too large (max 5KB)".to_string()));
+        }
         sqlx::query(
             "INSERT INTO key_packages (user_id, key_package_data) VALUES ($1, $2)"
         )
