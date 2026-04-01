@@ -1,0 +1,11 @@
+target/
+.git/
+.gitignore
+.env*
+*.pem
+*.key
+*.cert
+*.p12
+*.pfx
+README.md
+CHANGELOG.md
