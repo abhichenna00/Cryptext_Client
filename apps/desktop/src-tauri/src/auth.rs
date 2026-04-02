@@ -345,9 +345,12 @@ pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<b
     };
     let response: ServerAuthResponse = match http_client::post_no_auth("/auth/refresh", &body).await {
         Ok(r) => r,
-        Err(_) => {
-            let mut store = session_store.session.lock_or_err()?;
-            *store = None;
+        Err(e) => {
+            // Only clear session on definitive auth failures, not transient errors
+            if e.contains("401") || e.contains("403") {
+                let mut store = session_store.session.lock_or_err()?;
+                *store = None;
+            }
             return Ok(false);
         }
     };
