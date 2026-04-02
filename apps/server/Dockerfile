@@ -16,7 +16,7 @@ RUN touch src/main.rs && cargo build --release
 # Stage 2: Runtime
 FROM debian:bookworm-slim
 
-RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y ca-certificates curl && rm -rf /var/lib/apt/lists/*
 
 RUN useradd --system --no-create-home cryptext
 
@@ -30,5 +30,8 @@ ENV HOST=0.0.0.0
 ENV PORT=8080
 ENV AWS_REGION=us-east-2
 ENV SECRET_NAME=cryptext/server-config
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -sf http://localhost:8080/health || exit 1
 
 CMD ["cryptext-server"]

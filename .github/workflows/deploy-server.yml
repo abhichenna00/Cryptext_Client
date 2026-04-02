@@ -1,4 +1,4 @@
-name: Deploy Server
+name: Build Server Image
 
 on:
   push:
@@ -54,63 +54,3 @@ jobs:
           context: apps/server
           push: true
           tags: ${{ steps.tags.outputs.tags }}
-
-  deploy:
-    name: Deploy to EC2
-    needs: build-and-push
-    runs-on: self-hosted
-
-    steps:
-      - name: Determine deploy tag
-        id: deploy-tag
-        run: |
-          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
-            echo "tag=stable" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=latest" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Deploy container
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          DEPLOY_TAG: ${{ steps.deploy-tag.outputs.tag }}
-        run: |
-          echo "$EC2_SSH_KEY" > /tmp/deploy_key.pem
-          chmod 600 /tmp/deploy_key.pem
-
-          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST << DEPLOY
-            # Pull image
-            docker pull ghcr.io/${{ env.IMAGE_NAME }}:${DEPLOY_TAG}
-
-            # Stop and remove existing container
-            docker stop cryptext-server 2>/dev/null || true
-            docker rm cryptext-server 2>/dev/null || true
-
-            # Run new container
-            docker run -d \
-              --name cryptext-server \
-              --restart unless-stopped \
-              -p 8080:8080 \
-              -e AWS_REGION=us-east-2 \
-              -e SECRET_NAME=cryptext/server-config \
-              ghcr.io/${{ env.IMAGE_NAME }}:${DEPLOY_TAG}
-
-            # Cleanup old images
-            docker image prune -f
-          DEPLOY
-
-          rm /tmp/deploy_key.pem
-
-      - name: Verify deployment
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-        run: |
-          echo "$EC2_SSH_KEY" > /tmp/deploy_key.pem
-          chmod 600 /tmp/deploy_key.pem
-
-          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST \
-            "sleep 5; for i in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://localhost:8080/health && echo 'Health check passed!' && exit 0; sleep 3; done; echo 'Health check failed after 35s'; exit 1"
-
-          rm /tmp/deploy_key.pem
