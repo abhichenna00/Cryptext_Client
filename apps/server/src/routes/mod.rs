@@ -9,8 +9,17 @@ use axum::{
     routing::{delete, get, post, put},
     Router,
 };
+use std::sync::Arc;
+use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
 pub fn build_router() -> Router {
+    // Rate limit for message sending: 30 messages per second, burst of 10
+    let msg_rate_limit = GovernorConfigBuilder::default()
+        .per_second(30)
+        .burst_size(10)
+        .finish()
+        .expect("Failed to build message rate limit config");
+
     Router::new()
         // Health
         .route("/health", get(health))
@@ -54,8 +63,15 @@ pub fn build_router() -> Router {
         .route("/conversations", get(conversations::get_conversations))
         .route("/conversations/dm", post(conversations::get_or_create_dm_conversation))
         .route("/conversations/:id/messages", get(conversations::get_messages))
-        .route("/conversations/:id/messages", post(conversations::send_message))
         .route("/conversations/:id/read", post(conversations::mark_conversation_read))
+
+        // Rate-limited message sending
+        .nest("/conversations/:id", Router::new()
+            .route("/messages", post(conversations::send_message))
+            .layer(GovernorLayer {
+                config: Arc::new(msg_rate_limit),
+            })
+        )
 
         // MLS routes
         .route("/mls/key-packages", post(mls::upload_key_packages))
