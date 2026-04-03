@@ -31,6 +31,7 @@ jobs:
       contents: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -102,6 +103,17 @@ jobs:
 
             console.log('Injected version: ${VERSION}');
           "
+
+      - name: Extract changelog for current version
+        id: changelog
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          # Extract the section for this version from CHANGELOG.md
+          CHANGELOG=$(sed -n "/^## \[${VERSION}\]/,/^## \[/{/^## \[${VERSION}\]/d;/^## \[/d;p;}" CHANGELOG.md | sed '/^$/N;/^\n$/d')
+          # Write to output using delimiter for multiline
+          echo "changelog<<CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
+          echo "$CHANGELOG" >> "$GITHUB_OUTPUT"
+          echo "CHANGELOG_EOF" >> "$GITHUB_OUTPUT"
 
       - name: Load Rust environment
         run: |
@@ -237,5 +249,7 @@ jobs:
             latest.json
           body: |
             ## Cryptext v${{ needs.build.outputs.version }}
+
+            ${{ needs.build.outputs.changelog }}
 
             **Commit:** ${{ github.sha }}
