@@ -1,4 +1,4 @@
-name: Deploy Server
+name: Build Server Image
 
 on:
   push:
@@ -6,6 +6,8 @@ on:
       - main
     paths:
       - "apps/server/**"
+    tags:
+      - "v*"
   workflow_dispatch:
 
 env:
@@ -24,6 +26,21 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Determine image tags
+        id: tags
+        run: |
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:sha-${GITHUB_SHA::8}"
+
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/}"
+            TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${VERSION}"
+            TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:stable"
+          else
+            TAGS="$TAGS,${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest"
+          fi
+
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -36,58 +53,4 @@ jobs:
         with:
           context: apps/server
           push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-
-  deploy:
-    name: Deploy to EC2
-    needs: build-and-push
-    runs-on: self-hosted
-
-    steps:
-      - name: Deploy container
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-          REGISTRY: ghcr.io
-          IMAGE_NAME: ${{ github.repository_owner }}/cryptext-server
-        run: |
-          echo "$EC2_SSH_KEY" > /tmp/deploy_key.pem
-          chmod 600 /tmp/deploy_key.pem
-
-          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST << 'DEPLOY'
-            # Pull latest image
-            docker pull ghcr.io/${{ env.IMAGE_NAME }}:latest
-
-            # Stop and remove existing container
-            docker stop cryptext-server 2>/dev/null || true
-            docker rm cryptext-server 2>/dev/null || true
-
-            # Run new container
-            docker run -d \
-              --name cryptext-server \
-              --restart unless-stopped \
-              -p 8080:8080 \
-              -e AWS_REGION=us-east-2 \
-              -e SECRET_NAME=cryptext/server-config \
-              ghcr.io/${{ env.IMAGE_NAME }}:latest
-
-            # Cleanup old images
-            docker image prune -f
-          DEPLOY
-
-          rm /tmp/deploy_key.pem
-
-      - name: Verify deployment
-        env:
-          EC2_HOST: ${{ secrets.EC2_HOST }}
-          EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY }}
-        run: |
-          echo "$EC2_SSH_KEY" > /tmp/deploy_key.pem
-          chmod 600 /tmp/deploy_key.pem
-
-          ssh -i /tmp/deploy_key.pem -o StrictHostKeyChecking=no ubuntu@$EC2_HOST \
-            "sleep 5; for i in 1 2 3 4 5 6 7 8 9 10; do curl -sf http://localhost:8080/health && echo 'Health check passed!' && exit 0; sleep 3; done; echo 'Health check failed after 35s'; exit 1"
-
-          rm /tmp/deploy_key.pem
+          tags: ${{ steps.tags.outputs.tags }}
