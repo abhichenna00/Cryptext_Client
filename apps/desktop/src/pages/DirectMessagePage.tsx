@@ -3,11 +3,12 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useWebSocket, WebSocketMessage } from '@/hooks'
 import { ErrorMessage } from '@/components/ui/ErrorMessage'
-import { ArrowLeft, ArrowDown, Send } from 'lucide-react'
+import { ArrowLeft, ArrowDown, Send, Paperclip, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Status, STATUS_LABELS } from '@/constants/status'
 import Avatar from '@/components/Avatar'
+import MediaMessage from '@/components/MediaMessage'
 import '../styles/DirectMessagePage.css'
 
 interface ProfileInfo {
@@ -79,8 +80,13 @@ export default function DirectMessagePage() {
   const [isAtBottom, setIsAtBottom] = useState(true)
   const [hasMore, setHasMore] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [selectedFile, setSelectedFile] = useState<File | null>(null)
+  const [filePreviewUrl, setFilePreviewUrl] = useState<string | null>(null)
+  const [isDragOver, setIsDragOver] = useState(false)
+  const [sendingMedia, setSendingMedia] = useState(false)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
   const previousMessageCount = useRef(0)
   const conversationIdRef = useRef<string | null>(null)
@@ -317,6 +323,90 @@ export default function DirectMessagePage() {
     }
   }
 
+  const MEDIA_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'webm']
+
+  const handleFileSelect = (file: File) => {
+    const ext = file.name.split('.').pop()?.toLowerCase() || ''
+    if (!MEDIA_EXTENSIONS.includes(ext)) {
+      setError(`Unsupported file type: .${ext}`)
+      return
+    }
+    setSelectedFile(file)
+    if (file.type.startsWith('image/')) {
+      setFilePreviewUrl(URL.createObjectURL(file))
+    } else {
+      setFilePreviewUrl(null)
+    }
+  }
+
+  const clearSelectedFile = () => {
+    if (filePreviewUrl) URL.revokeObjectURL(filePreviewUrl)
+    setSelectedFile(null)
+    setFilePreviewUrl(null)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(true)
+  }
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+  }
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setIsDragOver(false)
+    const file = e.dataTransfer.files[0]
+    if (file) handleFileSelect(file)
+  }
+
+  const sendMedia = async () => {
+    if (!selectedFile || !conversationId || sendingMedia || !userId) return
+
+    setSendingMedia(true)
+    setError(null)
+
+    try {
+      // Write file to a temp path so Rust can read it
+      const arrayBuffer = await selectedFile.arrayBuffer()
+      const bytes = Array.from(new Uint8Array(arrayBuffer))
+
+      const result = await invoke<MessageResult>('send_media', {
+        conversationId,
+        filePath: selectedFile.name,
+        otherUserId: friendId,
+        fileBytes: bytes,
+      })
+
+      if (result.success && result.message_id) {
+        // Reload messages to show the new media message
+        await loadMessages(conversationId)
+        setTimeout(() => scrollToBottom(), 100)
+
+        wsSend({
+          action: 'new_message',
+          message: {
+            id: result.message_id,
+            conversation_id: conversationId,
+            sender_id: userId,
+            timestamp: result.timestamp || Date.now(),
+          },
+        })
+      } else {
+        setError(result.error || 'Failed to send media')
+      }
+    } catch (err) {
+      console.error('Failed to send media:', err)
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setSendingMedia(false)
+      clearSelectedFile()
+    }
+  }
+
   const formatTime = (timestamp: number) =>
     new Date(timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
 
@@ -366,7 +456,14 @@ export default function DirectMessagePage() {
 
       <ErrorMessage error={error} className="dm-error-banner" />
 
-      <main ref={messagesContainerRef} onScroll={handleScroll} className="dm-messages">
+      <main
+        ref={messagesContainerRef}
+        onScroll={handleScroll}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`dm-messages ${isDragOver ? 'dm-messages-dragover' : ''}`}
+      >
         {messages.length === 0 ? (
           <div className="dm-messages-empty">
             <div className="dm-empty-avatar">
@@ -393,7 +490,11 @@ export default function DirectMessagePage() {
                           <span className="dm-message-author">{profile?.nickname || 'Unknown'}</span>
                           <span className="dm-message-timestamp">{formatTime(msg.timestamp)}</span>
                         </div>
-                        <div className="dm-message-content">{msg.content}</div>
+                        {msg.content_type === 'media' ? (
+                          <MediaMessage messageId={msg.id} content={msg.content} conversationId={msg.conversation_id} />
+                        ) : (
+                          <div className="dm-message-content">{msg.content}</div>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -402,7 +503,11 @@ export default function DirectMessagePage() {
                         <span className="dm-message-timestamp-hover">{formatTime(msg.timestamp)}</span>
                       </div>
                       <div className="dm-message-body">
-                        <div className="dm-message-content">{msg.content}</div>
+                        {msg.content_type === 'media' ? (
+                          <MediaMessage messageId={msg.id} content={msg.content} conversationId={msg.conversation_id} />
+                        ) : (
+                          <div className="dm-message-content">{msg.content}</div>
+                        )}
                       </div>
                     </>
                   )}
@@ -422,23 +527,67 @@ export default function DirectMessagePage() {
       )}
 
       <footer className="dm-input-container">
-        <Input
-          type="text"
-          value={newMessage}
-          onChange={(e) => setNewMessage(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
-              e.preventDefault()
-              sendMessage()
-            }
-          }}
-          placeholder={`Message @${partnerProfile?.nickname || 'user'}`}
-          className="dm-input"
-          disabled={sending}
-        />
-        <Button onClick={sendMessage} size="icon" disabled={sending || !newMessage.trim()} className="dm-send-button">
-          <Send className="h-4 w-4" />
-        </Button>
+        {selectedFile && (
+          <div className="dm-media-preview">
+            {filePreviewUrl ? (
+              <img src={filePreviewUrl} alt="Preview" className="dm-media-preview-image" />
+            ) : (
+              <div className="dm-media-preview-file">
+                <span>{selectedFile.name}</span>
+              </div>
+            )}
+            <button className="dm-media-preview-close" onClick={clearSelectedFile}>
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+        <div className="dm-input-row">
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.webm"
+            className="dm-file-input"
+            onChange={(e) => {
+              const file = e.target.files?.[0]
+              if (file) handleFileSelect(file)
+            }}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="dm-attach-button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={sendingMedia}
+          >
+            <Paperclip className="h-4 w-4" />
+          </Button>
+          <Input
+            type="text"
+            value={newMessage}
+            onChange={(e) => setNewMessage(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault()
+                if (selectedFile) {
+                  sendMedia()
+                } else {
+                  sendMessage()
+                }
+              }
+            }}
+            placeholder={`Message @${partnerProfile?.nickname || 'user'}`}
+            className="dm-input"
+            disabled={sending || sendingMedia}
+          />
+          <Button
+            onClick={selectedFile ? sendMedia : sendMessage}
+            size="icon"
+            disabled={(sending || sendingMedia) || (!selectedFile && !newMessage.trim())}
+            className="dm-send-button"
+          >
+            <Send className="h-4 w-4" />
+          </Button>
+        </div>
       </footer>
     </div>
   )

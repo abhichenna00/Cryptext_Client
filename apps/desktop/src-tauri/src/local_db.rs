@@ -77,7 +77,15 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             content_type TEXT NOT NULL DEFAULT 'plaintext'
         );
         CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp
-            ON messages (conversation_id, timestamp);",
+            ON messages (conversation_id, timestamp);
+        CREATE TABLE IF NOT EXISTS media_cache (
+            message_id TEXT NOT NULL,
+            is_thumbnail INTEGER NOT NULL DEFAULT 0,
+            local_path TEXT NOT NULL,
+            file_size INTEGER NOT NULL,
+            cached_at INTEGER NOT NULL,
+            PRIMARY KEY (message_id, is_thumbnail)
+        );",
     )
     .map_err(|e| format!("Failed to init schema: {}", e))
 }

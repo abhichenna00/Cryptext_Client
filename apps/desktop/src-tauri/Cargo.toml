@@ -22,7 +22,7 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 
 # reqwest
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "multipart"] }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -49,6 +49,10 @@ aes-gcm = "0.10"
 zeroize = { version = "1.8", features = ["derive"] }
 rand = "0.8"
 hex = "0.4"
+
+# Image processing (thumbnails)
+image = "0.25"
+urlencoding = "2"
 
 # MLS (E2E Encryption)
 openmls = { version = "0.6", features = ["test-utils"] }

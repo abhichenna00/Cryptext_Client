@@ -1,6 +1,7 @@
 pub mod cognito;
 pub mod conversations;
 pub mod friends;
+pub mod media;
 pub mod mls;
 pub mod profile;
 pub mod google_oauth;
@@ -72,6 +73,10 @@ pub fn build_router() -> Router {
                 config: Arc::new(msg_rate_limit),
             })
         )
+
+        // Media routes
+        .route("/media/upload", post(media::upload))
+        .route("/media/download", get(media::download))
 
         // MLS routes
         .route("/mls/key-packages", post(mls::upload_key_packages))
