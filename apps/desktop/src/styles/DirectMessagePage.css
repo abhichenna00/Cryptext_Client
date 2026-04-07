@@ -234,12 +234,33 @@
   opacity: 0.9;
 }
 
+/* Drag-and-drop overlay */
+.dm-messages-dragover {
+  outline: 2px dashed var(--primary);
+  outline-offset: -4px;
+  background: hsl(var(--primary) / 0.05);
+}
+
 /* Input area */
 .dm-input-container {
   display: flex;
-  align-items: center;
-  gap: 0.75rem;
+  flex-direction: column;
   padding: 0 1rem 1.5rem;
+  flex-shrink: 0;
+  gap: 0.5rem;
+}
+
+.dm-input-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.dm-file-input {
+  display: none;
+}
+
+.dm-attach-button {
   flex-shrink: 0;
 }
 
@@ -258,6 +279,138 @@
 
 .dm-send-button {
   flex-shrink: 0;
+}
+
+/* Media preview above input */
+.dm-media-preview {
+  position: relative;
+  display: inline-flex;
+  align-self: flex-start;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  background: var(--muted);
+}
+
+.dm-media-preview-image {
+  max-width: 200px;
+  max-height: 150px;
+  object-fit: cover;
+  border-radius: 0.5rem;
+}
+
+.dm-media-preview-file {
+  padding: 0.75rem 1rem;
+  font-size: 0.875rem;
+  color: var(--foreground);
+}
+
+.dm-media-preview-close {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  background: var(--background);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  color: var(--foreground);
+}
+
+.dm-media-preview-close:hover {
+  background: var(--destructive);
+  color: white;
+}
+
+/* Media message styles */
+.media-image-container {
+  margin-top: 0.25rem;
+  border-radius: 0.5rem;
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+}
+
+.media-image {
+  width: 100%;
+  height: auto;
+  display: block;
+  border-radius: 0.5rem;
+}
+
+.media-image-placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--muted);
+  border-radius: 0.5rem;
+  color: var(--muted-foreground);
+}
+
+.media-image-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: hsl(0 0% 0% / 0.3);
+  border-radius: 0.5rem;
+}
+
+.media-video-card {
+  margin-top: 0.25rem;
+  cursor: pointer;
+}
+
+.media-video-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 1.5rem 2rem;
+  background: var(--muted);
+  border-radius: 0.5rem;
+  color: var(--muted-foreground);
+  transition: background 0.15s;
+}
+
+.media-video-placeholder:hover {
+  background: var(--accent);
+}
+
+.media-video-player {
+  border-radius: 0.5rem;
+  display: block;
+}
+
+.media-file-name {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.media-file-size {
+  font-size: 0.75rem;
+}
+
+.media-download-icon {
+  opacity: 0.5;
+}
+
+.media-error {
+  font-size: 0.875rem;
+  color: var(--destructive);
+  padding: 0.25rem 0;
+}
+
+.media-loading {
+  padding: 0.5rem 0;
+  color: var(--muted-foreground);
 }
 
 /* Avatar Component */

@@ -67,14 +67,14 @@ struct CreateDmBody {
 }
 
 #[derive(Serialize)]
-struct SendMessageBody {
-    content: String,
+pub struct SendMessageBody {
+    pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content_type: Option<String>,
+    pub content_type: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content_bytes: Option<Vec<u8>>,
+    pub content_bytes: Option<Vec<u8>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    welcome_data: Option<Vec<u8>>,
+    pub welcome_data: Option<Vec<u8>>,
 }
 
 #[command]

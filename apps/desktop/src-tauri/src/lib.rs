@@ -6,6 +6,7 @@ mod conversations;
 mod friends;
 mod http_client;
 mod local_db;
+mod media;
 mod mls;
 mod profile;
 mod sync_utils;
@@ -97,6 +98,10 @@ pub fn run() {
             mls::mls_decrypt_message,
             mls::mls_fetch_welcomes,
             mls::mls_has_group,
+            // Media
+            media::send_media,
+            media::download_media,
+            media::get_cached_media_path,
             // Profile
             profile::get_profile,
             profile::get_profiles_by_ids,

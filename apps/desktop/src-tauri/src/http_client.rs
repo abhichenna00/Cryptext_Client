@@ -121,3 +121,66 @@ pub async fn get_no_auth<T: DeserializeOwned>(path: &str) -> Result<T, String> {
         .map_err(|e| format!("Request failed: {}", e))?;
     handle_response(response).await
 }
+
+/// Upload a multipart form with a binary file and a conversation_id field.
+/// Uses a longer timeout (5 minutes) for large media uploads.
+pub async fn upload_multipart(
+    path: &str,
+    token: &str,
+    conversation_id: &str,
+    file_bytes: Vec<u8>,
+    file_name: &str,
+) -> Result<serde_json::Value, String> {
+    let url = format!("{}{}", server_url(), path);
+    let form = reqwest::multipart::Form::new()
+        .text("conversation_id", conversation_id.to_string())
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(file_bytes)
+                .file_name(file_name.to_string())
+                .mime_str("application/octet-stream")
+                .map_err(|e| format!("Failed to set MIME type: {}", e))?,
+        );
+
+    let response = Client::builder()
+        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build upload client: {}", e))?
+        .post(&url)
+        .bearer_auth(token)
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("Upload failed: {}", e))?;
+
+    handle_response(response).await
+}
+
+/// Download raw bytes from the server.
+/// Uses a longer timeout (5 minutes) for large media downloads.
+pub async fn download_binary(path: &str, token: &str) -> Result<Vec<u8>, String> {
+    let url = format!("{}{}", server_url(), path);
+    let response = Client::builder()
+        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build download client: {}", e))?
+        .get(&url)
+        .bearer_auth(token)
+        .send()
+        .await
+        .map_err(|e| format!("Download failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let _ = response.text().await;
+        return Err(format!("HTTP {}: Download failed", status));
+    }
+
+    response
+        .bytes()
+        .await
+        .map(|b| b.to_vec())
+        .map_err(|e| format!("Failed to read response bytes: {}", e))
+}
