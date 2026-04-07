@@ -1,22 +1,19 @@
-use crate::{config::get_config, error::AppError};
+use crate::{config::get_config, error::AppError, redis::get_redis};
 use axum::{
     extract::FromRequestParts,
     http::{request::Parts, HeaderMap},
 };
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
-use once_cell::sync::OnceCell;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-static JWKS_CACHE: OnceCell<tokio::sync::RwLock<JwksCache>> = OnceCell::new();
+// JWKS cache TTL: 24 hours
+const JWKS_CACHE_TTL_SECS: u64 = 86400;
+const JWKS_CACHE_KEY: &str = "jwks:keys";
 
-#[derive(Debug, Clone)]
-struct JwksCache {
-    keys: HashMap<String, JwkKey>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct JwkKey {
     kid: String,
     n: String,
@@ -164,21 +161,20 @@ fn verify_rsa_signature(token: &str, n: &str, e: &str) -> Result<(), AppError> {
 }
 
 async fn get_jwks() -> Result<HashMap<String, JwkKey>, AppError> {
-    let cache_lock = JWKS_CACHE.get_or_init(|| {
-        tokio::sync::RwLock::new(JwksCache {
-            keys: HashMap::new(),
-        })
-    });
+    // Try Redis cache first
+    let mut conn = get_redis();
+    let cached: Option<String> = conn
+        .get(JWKS_CACHE_KEY)
+        .await
+        .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
 
-    // Try read first (fast path)
-    {
-        let cache = cache_lock.read().await;
-        if !cache.keys.is_empty() {
-            return Ok(cache.keys.clone());
-        }
+    if let Some(json) = cached {
+        let keys: HashMap<String, JwkKey> = serde_json::from_str(&json)
+            .map_err(|e| AppError::Internal(format!("Failed to parse cached JWKS: {}", e)))?;
+        return Ok(keys);
     }
 
-    // Fetch fresh JWKS
+    // Cache miss — fetch fresh JWKS from Cognito
     let config = get_config();
     let jwks_url = format!(
         "https://cognito-idp.{}.amazonaws.com/{}/.well-known/jwks.json",
@@ -200,9 +196,13 @@ async fn get_jwks() -> Result<HashMap<String, JwkKey>, AppError> {
         .map(|k| (k.kid.clone(), k))
         .collect();
 
-    // Write to cache
-    let mut cache = cache_lock.write().await;
-    cache.keys = keys.clone();
+    // Write to Redis with TTL
+    let json = serde_json::to_string(&keys)
+        .map_err(|e| AppError::Internal(format!("Failed to serialize JWKS: {}", e)))?;
+    let _: () = conn
+        .set_ex(JWKS_CACHE_KEY, json, JWKS_CACHE_TTL_SECS)
+        .await
+        .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
 
     Ok(keys)
 }
