@@ -4,7 +4,7 @@ use crate::{
     error::{AppError, AppResult},
 };
 use axum::{
-    extract::{Json, Path},
+    extract::{Json, Path, Query},
     response::IntoResponse,
 };
 use serde::{Deserialize, Serialize};
@@ -197,9 +197,16 @@ pub async fn get_or_create_dm_conversation(
     Ok(Json(serde_json::json!({ "conversation_id": conversation_id })))
 }
 
+#[derive(Deserialize)]
+pub struct MessagesQuery {
+    /// Only return messages with timestamp strictly greater than this value.
+    pub after: Option<i64>,
+}
+
 pub async fn get_messages(
     claims: Claims,
     Path(conversation_id): Path<String>,
+    Query(query): Query<MessagesQuery>,
 ) -> AppResult<impl IntoResponse> {
     if uuid::Uuid::parse_str(&conversation_id).is_err() {
         return Err(AppError::BadRequest("Invalid conversation ID".to_string()));
@@ -221,15 +228,31 @@ pub async fn get_messages(
         ));
     }
 
-    let messages: Vec<Message> = sqlx::query_as(
-        "SELECT id::text, conversation_id::text, sender_id, content, timestamp, content_type, content_bytes, welcome_data
-         FROM messages
-         WHERE conversation_id = $1::uuid
-         ORDER BY timestamp ASC"
-    )
-    .bind(&conversation_id)
-    .fetch_all(pool.as_ref())
-    .await?;
+    let messages: Vec<Message> = match query.after {
+        Some(after_ts) => {
+            sqlx::query_as(
+                "SELECT id::text, conversation_id::text, sender_id, content, timestamp, content_type, content_bytes, welcome_data
+                 FROM messages
+                 WHERE conversation_id = $1::uuid AND timestamp > $2
+                 ORDER BY timestamp ASC"
+            )
+            .bind(&conversation_id)
+            .bind(after_ts)
+            .fetch_all(pool.as_ref())
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                "SELECT id::text, conversation_id::text, sender_id, content, timestamp, content_type, content_bytes, welcome_data
+                 FROM messages
+                 WHERE conversation_id = $1::uuid
+                 ORDER BY timestamp ASC"
+            )
+            .bind(&conversation_id)
+            .fetch_all(pool.as_ref())
+            .await?
+        }
+    };
 
     Ok(Json(messages))
 }

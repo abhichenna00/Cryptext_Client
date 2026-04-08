@@ -105,13 +105,15 @@ export default function DirectMessagePage() {
       // Skip own messages — we already have the plaintext from the optimistic send
       if (notification.sender_id === userIdRef.current) return
 
-      // Fetch the full message from server (includes ciphertext for decryption)
+      // Fetch only new messages (faster than re-fetching everything)
       try {
-        const messages = await invoke<Message[]>('get_messages', {
+        const newMessages = await invoke<Message[]>('fetch_new_messages', {
           conversationId: notification.conversation_id,
         })
 
-        setMessages(messages)
+        if (newMessages.length > 0) {
+          setMessages((prev) => [...prev, ...newMessages])
+        }
 
         if (conversationIdRef.current) {
           invoke('mark_read', { conversationId: conversationIdRef.current }).catch(console.error)
@@ -121,7 +123,7 @@ export default function DirectMessagePage() {
           setTimeout(() => scrollToBottom(), 100)
         }
       } catch (err) {
-        console.error('Failed to fetch messages after notification:', err)
+        console.error('Failed to fetch new messages:', err)
       }
     }
   }, [])
@@ -305,6 +307,7 @@ export default function DirectMessagePage() {
             id: result.message_id,
             conversation_id: conversationId,
             sender_id: userId,
+            recipient_id: friendId,
             timestamp: result.timestamp || optimisticMessage.timestamp,
           },
         })
