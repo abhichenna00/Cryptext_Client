@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-04-08
+
+### Added
+- E2E encrypted image and video sharing — media encrypted client-side with AES-256-GCM, uploaded to S3 as encrypted blobs, decryption key delivered via MLS-encrypted messages
+- Image thumbnail generation for message previews, click-to-expand full resolution
+- Video file sharing with download-and-play (no thumbnail yet)
+- Drag-and-drop media attachment onto chat area
+- File preview before sending with cancel option
+- Local media cache to avoid re-downloading previously viewed media
+- Redis integration for server-side state — OAuth state (5-min TTL) and JWKS cache (24-hour TTL)
+- Server media upload/download endpoints with conversation participant validation
+- `fetch_new_messages` command — only fetches messages newer than latest local timestamp
+- Server-side `?after=` query parameter on messages endpoint for incremental fetching
+
+### Changed
+- WebSocket message notifications now only fetch new messages instead of re-fetching full history
+- WebSocket broadcast includes recipient_id for targeted Lambda delivery
+- EC2 deployment moved from systemd to Docker Compose (Axum + Redis + Watchtower)
+
+### Fixed
+- Message delivery delay — recipients no longer need to refresh to see incoming messages
+
 ## [0.3.0] - 2026-04-03
 
 ### Security
