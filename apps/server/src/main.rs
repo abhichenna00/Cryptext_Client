@@ -2,6 +2,7 @@ mod auth;
 mod config;
 mod db;
 mod error;
+pub mod redis;
 mod routes;
 
 use axum::Router;
@@ -34,6 +35,12 @@ async fn main() {
     // 2. Initialize database pool
     if let Err(e) = db::init_db().await {
         tracing::error!("Failed to initialize database: {}", e);
+        std::process::exit(1);
+    }
+
+    // 3. Initialize Redis
+    if let Err(e) = redis::init_redis().await {
+        tracing::error!("Failed to connect to Redis: {}", e);
         std::process::exit(1);
     }
 

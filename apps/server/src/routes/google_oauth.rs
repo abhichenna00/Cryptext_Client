@@ -1,25 +1,18 @@
-use crate::{config::get_config, error::AppError};
+use crate::{config::get_config, error::AppError, redis::get_redis};
 use axum::{
     extract::Query,
     response::Html,
     Json,
 };
-use once_cell::sync::OnceCell;
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use tokio::sync::RwLock;
 use uuid::Uuid;
 use base64::Engine;
 
-// ── Pending auth store (same pattern as JWKS_CACHE in auth.rs) ──
+// OAuth state TTL: 5 minutes
+const OAUTH_STATE_TTL_SECS: u64 = 300;
 
-static PENDING_AUTHS: OnceCell<RwLock<HashMap<String, AuthStatus>>> = OnceCell::new();
-
-fn pending_auths() -> &'static RwLock<HashMap<String, AuthStatus>> {
-    PENDING_AUTHS.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "status")]
 pub enum AuthStatus {
     #[serde(rename = "pending")]
@@ -60,6 +53,47 @@ struct CognitoTokenResponse {
     refresh_token: Option<String>,
 }
 
+// ── Redis helpers ──
+
+fn oauth_key(state_id: &str) -> String {
+    format!("oauth:{}", state_id)
+}
+
+async fn set_auth_status(state_id: &str, status: &AuthStatus) -> Result<(), AppError> {
+    let mut conn = get_redis();
+    let json = serde_json::to_string(status)
+        .map_err(|e| AppError::Internal(format!("Failed to serialize auth status: {}", e)))?;
+    conn.set_ex::<_, _, ()>(&oauth_key(state_id), json, OAUTH_STATE_TTL_SECS)
+        .await
+        .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
+    Ok(())
+}
+
+async fn get_auth_status(state_id: &str) -> Result<Option<AuthStatus>, AppError> {
+    let mut conn = get_redis();
+    let result: Option<String> = conn
+        .get(&oauth_key(state_id))
+        .await
+        .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
+
+    match result {
+        Some(json) => {
+            let status: AuthStatus = serde_json::from_str(&json)
+                .map_err(|e| AppError::Internal(format!("Failed to parse auth status: {}", e)))?;
+            Ok(Some(status))
+        }
+        None => Ok(None),
+    }
+}
+
+async fn delete_auth_status(state_id: &str) -> Result<(), AppError> {
+    let mut conn = get_redis();
+    conn.del::<_, ()>(&oauth_key(state_id))
+        .await
+        .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
+    Ok(())
+}
+
 // ── Route handlers ──
 
 /// POST /auth/google/start
@@ -68,10 +102,7 @@ pub async fn start_google_auth() -> Result<Json<StartResponse>, AppError> {
     let config = get_config();
     let state_id = Uuid::new_v4().to_string();
 
-    pending_auths()
-        .write()
-        .await
-        .insert(state_id.clone(), AuthStatus::Pending);
+    set_auth_status(&state_id, &AuthStatus::Pending).await?;
 
     let authorize_url = format!(
         "https://{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&scope=openid+email+profile&identity_provider=Google&prompt=select_account",
@@ -94,10 +125,7 @@ pub async fn start_google_auth() -> Result<Json<StartResponse>, AppError> {
 pub async fn google_callback(
     Query(params): Query<CallbackParams>,
 ) -> Html<String> {
-    let exists = {
-        let store = pending_auths().read().await;
-        store.contains_key(&params.state)
-    };
+    let exists = get_auth_status(&params.state).await.ok().flatten().is_some();
 
     if !exists {
         return Html(
@@ -109,14 +137,15 @@ pub async fn google_callback(
 
     match exchange_code_for_tokens(&params.code).await {
         Ok(tokens) => {
-            pending_auths().write().await.insert(
-                params.state,
-                AuthStatus::Complete {
+            let _ = set_auth_status(
+                &params.state,
+                &AuthStatus::Complete {
                     id_token: tokens.id_token,
                     access_token: tokens.access_token,
                     refresh_token: tokens.refresh_token,
                 },
-            );
+            )
+            .await;
 
             Html(
                 "<html><body style=\"font-family: sans-serif; text-align: center; padding-top: 80px;\">\
@@ -129,12 +158,13 @@ pub async fn google_callback(
         Err(e) => {
             tracing::error!("Google OAuth token exchange failed: {}", e);
 
-            pending_auths().write().await.insert(
-                params.state,
-                AuthStatus::Failed {
+            let _ = set_auth_status(
+                &params.state,
+                &AuthStatus::Failed {
                     error: e.to_string(),
                 },
-            );
+            )
+            .await;
 
             Html(
                 "<html><body style=\"font-family: sans-serif; text-align: center; padding-top: 80px;\">\
@@ -152,17 +182,12 @@ pub async fn google_callback(
 pub async fn google_auth_status(
     Query(params): Query<StatusParams>,
 ) -> Result<Json<AuthStatus>, AppError> {
-    let store = pending_auths().read().await;
-
-    match store.get(&params.state) {
+    match get_auth_status(&params.state).await? {
         Some(status) => {
-            let status = status.clone();
-            drop(store);
-
-            // Clean up completed/failed entries so they don't pile up
+            // Clean up completed/failed entries
             match &status {
                 AuthStatus::Complete { .. } | AuthStatus::Failed { .. } => {
-                    pending_auths().write().await.remove(&params.state);
+                    let _ = delete_auth_status(&params.state).await;
                 }
                 _ => {}
             }

@@ -30,6 +30,7 @@ ENV HOST=0.0.0.0
 ENV PORT=8080
 ENV AWS_REGION=us-east-2
 ENV SECRET_NAME=cryptext/server-config
+ENV REDIS_URL=redis://redis:6379
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
   CMD curl -sf http://localhost:8080/health || exit 1
