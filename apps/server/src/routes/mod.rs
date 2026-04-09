@@ -25,7 +25,8 @@ pub fn build_router() -> Router {
         // Health
         .route("/health", get(health))
 
-        //WebsocketAccess
+        // WebSocket
+        .route("/ws", get(crate::ws::handler::ws_handler))
         .route("/config/ws", get(get_ws_config))
 
         // Auth routes (no JWT required)
@@ -95,6 +96,18 @@ async fn health() -> axum::Json<serde_json::Value> {
 }
 
 async fn get_ws_config() -> axum::Json<serde_json::Value> {
+    // Return the server's own /ws endpoint instead of an external API Gateway URL.
+    // The client derives the WS URL from SERVER_URL, so this is a fallback.
     let config = crate::config::get_config();
-    axum::Json(serde_json::json!({ "ws_url": config.websocket_url }))
+    let ws_url = config
+        .websocket_url
+        .replace("https://", "wss://")
+        .replace("http://", "ws://");
+    // If the old config still points to API Gateway, override with self-referencing URL
+    let ws_url = if ws_url.contains("/ws") {
+        ws_url
+    } else {
+        format!("{}/ws", ws_url)
+    };
+    axum::Json(serde_json::json!({ "ws_url": ws_url }))
 }

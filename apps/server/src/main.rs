@@ -1,11 +1,12 @@
-mod auth;
+pub mod auth;
 mod config;
 mod db;
 mod error;
 pub mod redis;
 mod routes;
+mod ws;
 
-use axum::Router;
+use axum::{Extension, Router};
 use std::net::SocketAddr;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -44,9 +45,18 @@ async fn main() {
         std::process::exit(1);
     }
 
+    // 4. Initialize WebSocket infrastructure
+    ws::pubsub::init_instance_id();
+    let registry = ws::state::ConnectionRegistry::new();
+
+    if let Err(e) = ws::pubsub::spawn_subscriber(registry.clone()).await {
+        tracing::error!("Failed to start Redis pub/sub subscriber: {}", e);
+        std::process::exit(1);
+    }
+
     let app_config = config::get_config();
 
-    // 3. Build router
+    // 5. Build router
     let cors = CorsLayer::new()
         .allow_origin(Any) // Tighten this in production if needed
         .allow_methods(Any)
@@ -54,6 +64,7 @@ async fn main() {
 
     let app = Router::new()
         .merge(routes::build_router())
+        .layer(Extension(registry))
         .layer(cors)
         .layer(TraceLayer::new_for_http());
 
