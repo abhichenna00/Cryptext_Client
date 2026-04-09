@@ -72,7 +72,7 @@ fn extract_bearer_token(headers: &HeaderMap) -> Result<String, AppError> {
     Ok(auth_header[7..].to_string())
 }
 
-async fn validate_token(token: &str) -> Result<Claims, AppError> {
+pub async fn validate_token(token: &str) -> Result<Claims, AppError> {
     // 1. Decode header to get kid
     let header = decode_jwt_header(token)?;
     let kid = header["kid"]
