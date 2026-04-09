@@ -277,6 +277,25 @@ pub fn store_messages(db: &LocalDb, msgs: &[LocalMessage]) -> Result<(), String>
     Ok(())
 }
 
+pub fn get_latest_timestamp(
+    db: &LocalDb,
+    conversation_id: &str,
+) -> Result<Option<i64>, String> {
+    let guard = db.conn.lock_or_err()?;
+    let conn = guard.as_ref().ok_or("Local DB not initialized")?;
+
+    let result: Option<i64> = conn
+        .query_row(
+            "SELECT MAX(timestamp) FROM messages WHERE conversation_id = ?1",
+            params![conversation_id],
+            |row| row.get(0),
+        )
+        .ok()
+        .flatten();
+
+    Ok(result)
+}
+
 pub fn get_existing_message_ids(
     db: &LocalDb,
     conversation_id: &str,

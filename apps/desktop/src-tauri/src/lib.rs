@@ -78,6 +78,7 @@ pub fn run() {
             conversations::get_conversations,
             conversations::get_or_create_dm,
             conversations::get_messages,
+            conversations::fetch_new_messages,
             conversations::send_message,
             conversations::mark_read,
             // Local encrypted message storage

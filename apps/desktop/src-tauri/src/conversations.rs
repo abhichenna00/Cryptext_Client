@@ -255,6 +255,99 @@ pub async fn send_message(
     Ok(result)
 }
 
+/// Fetch only new messages since the latest local timestamp.
+/// Much faster than get_messages for WebSocket notifications.
+#[command]
+pub async fn fetch_new_messages(
+    conversation_id: String,
+    session_store: State<'_, SessionStore>,
+    mls_state: State<'_, MlsState>,
+    local_db: State<'_, LocalDb>,
+) -> Result<Vec<Message>, String> {
+    let token = auth::get_token(&session_store)?;
+    let current_user_id = auth::get_user_id_from_session(&session_store)?;
+
+    let latest_ts = local_db::get_latest_timestamp(&local_db, &conversation_id)?;
+    let path = match latest_ts {
+        Some(ts) => format!("/conversations/{}/messages?after={}", conversation_id, ts),
+        None => format!("/conversations/{}/messages", conversation_id),
+    };
+
+    let server_messages: Vec<Message> = http_client::get(&path, &token).await?;
+
+    if server_messages.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let existing_ids =
+        local_db::get_existing_message_ids(&local_db, &conversation_id).unwrap_or_default();
+
+    // Process Welcome data
+    for msg in &server_messages {
+        if let Some(ref welcome_data) = msg.welcome_data {
+            if msg.sender_id != current_user_id {
+                let _ = crate::mls::process_welcome(
+                    &mls_state, welcome_data, Some(&conversation_id),
+                );
+            }
+        }
+    }
+
+    // Decrypt and store new messages
+    let mut new_messages: Vec<Message> = Vec::new();
+    let mut to_store: Vec<LocalMessage> = Vec::new();
+
+    for msg in &server_messages {
+        if existing_ids.contains(&msg.id) {
+            continue;
+        }
+
+        let content = if msg.content_type == "mls" {
+            if msg.sender_id == current_user_id {
+                continue;
+            }
+            if let Some(ref ciphertext) = msg.content_bytes {
+                match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
+                    Ok(plaintext) => plaintext,
+                    Err(_) => "[encrypted message]".to_string(),
+                }
+            } else {
+                "[encrypted message]".to_string()
+            }
+        } else {
+            msg.content.clone()
+        };
+
+        let local_msg = LocalMessage {
+            id: msg.id.clone(),
+            conversation_id: msg.conversation_id.clone(),
+            sender_id: msg.sender_id.clone(),
+            content: content.clone(),
+            timestamp: msg.timestamp,
+            content_type: msg.content_type.clone(),
+        };
+
+        new_messages.push(Message {
+            id: msg.id.clone(),
+            conversation_id: msg.conversation_id.clone(),
+            sender_id: msg.sender_id.clone(),
+            content,
+            timestamp: msg.timestamp,
+            content_type: msg.content_type.clone(),
+            content_bytes: None,
+            welcome_data: None,
+        });
+
+        to_store.push(local_msg);
+    }
+
+    if !to_store.is_empty() {
+        let _ = local_db::store_messages(&local_db, &to_store);
+    }
+
+    Ok(new_messages)
+}
+
 #[command]
 pub async fn mark_read(
     conversation_id: String,
