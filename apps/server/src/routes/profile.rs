@@ -140,7 +140,8 @@ pub async fn get_profile(claims: Claims) -> AppResult<impl IntoResponse> {
     .await?;
 
     match profile {
-        Some(p) => Ok(Json(serde_json::to_value(p).unwrap())),
+        Some(p) => Ok(Json(serde_json::to_value(p)
+            .map_err(|e| AppError::Internal(format!("Serialization error: {}", e)))?)),
         None => Err(AppError::NotFound("Profile not found".to_string())),
     }
 }
@@ -305,7 +306,7 @@ pub async fn get_profiles_by_ids(
     let _ = claims;
 
     if req.user_ids.is_empty() {
-        return Ok(Json(serde_json::to_value(Vec::<ProfileNickname>::new()).unwrap()));
+        return Ok(Json(serde_json::json!([])));
     }
 
     for id in &req.user_ids {
@@ -322,5 +323,6 @@ pub async fn get_profiles_by_ids(
     .fetch_all(pool.as_ref())
     .await?;
 
-    Ok(Json(serde_json::to_value(profiles).unwrap()))
+    Ok(Json(serde_json::to_value(profiles)
+        .map_err(|e| AppError::Internal(format!("Serialization error: {}", e)))?))
 }
