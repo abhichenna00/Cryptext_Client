@@ -114,7 +114,7 @@ pub async fn upload_key_packages(
     .unwrap_or_default();
 
     if !pending.is_empty() {
-        eprintln!("[MLS] Resolved {} pending welcomes for user {}", pending.len(), user_id);
+        tracing::debug!("Resolved {} pending welcomes", pending.len());
     }
 
     Ok(Json(serde_json::json!({
