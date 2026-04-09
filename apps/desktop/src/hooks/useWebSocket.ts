@@ -71,8 +71,8 @@ function getBackoffDelay(attempt: number, baseInterval: number): number {
 }
 
 /**
- * Hook that manages a WebSocket connection to the API Gateway WebSocket endpoint.
- * Retrieves the WebSocket URL and auth token from the Tauri backend.
+ * Hook that manages a WebSocket connection to the Axum server.
+ * Authenticates via first message after connection (not query param).
  */
 export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketReturn {
   const {
@@ -140,22 +140,36 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       const wsUrl = await invoke<string>('get_websocket_url')
       const token = await invoke<string | null>('get_auth_token')
 
-      // Append token as query param for API Gateway authorizer
-      const url = token ? `${wsUrl}?token=${encodeURIComponent(token)}` : wsUrl
-
-      const ws = new WebSocket(url)
+      const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
-        console.log('[WebSocket] Connected')
-        setIsConnected(true)
-        reconnectAttemptsRef.current = 0
-        onOpenRef.current?.()
+        console.log('[WebSocket] Connected, authenticating...')
+        // Send auth token as first message instead of query param
+        if (token) {
+          ws.send(JSON.stringify({ action: 'authenticate', token }))
+        } else {
+          console.error('[WebSocket] No auth token available')
+          ws.close()
+        }
       }
 
       ws.onmessage = (event) => {
         try {
-          const data = JSON.parse(event.data) as WebSocketMessage
-          onMessageRef.current?.(data)
+          const data = JSON.parse(event.data)
+          // Handle auth responses internally
+          if (data.action === 'authenticated') {
+            console.log('[WebSocket] Authenticated as', data.user_id)
+            setIsConnected(true)
+            reconnectAttemptsRef.current = 0
+            onOpenRef.current?.()
+            return
+          }
+          if (data.action === 'auth_error') {
+            console.error('[WebSocket] Auth failed:', data.error)
+            ws.close()
+            return
+          }
+          onMessageRef.current?.(data as WebSocketMessage)
         } catch (err) {
           console.error('[WebSocket] Failed to parse message:', err)
         }

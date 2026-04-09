@@ -408,8 +408,8 @@ pub async fn sync_oauth_session(
 
 /// Get WebSocket URL for realtime connections
 #[tauri::command]
-pub async fn get_websocket_url() -> Result<String, String> {
-    crate::config::websocket_url().await
+pub fn get_websocket_url() -> Result<String, String> {
+    crate::config::websocket_url()
 }
 
 /// Response from POST /auth/google/start
