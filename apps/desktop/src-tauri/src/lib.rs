@@ -33,10 +33,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_single_instance::init(|app, argv, _cwd| {
-            println!("Single instance triggered with args: {:?}", argv);
-
             if let Some(url) = argv.iter().find(|arg| arg.starts_with("cryptex://")) {
-                println!("Deep link URL: {}", url);
                 use tauri::Emitter;
                 let _ = app.emit("deep-link", url);
             }
