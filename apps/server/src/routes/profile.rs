@@ -305,8 +305,17 @@ pub async fn get_profiles_by_ids(
 ) -> AppResult<impl IntoResponse> {
     let _ = claims;
 
+    const MAX_USER_IDS: usize = 200;
+
     if req.user_ids.is_empty() {
         return Ok(Json(serde_json::json!([])));
+    }
+
+    if req.user_ids.len() > MAX_USER_IDS {
+        return Err(AppError::BadRequest(format!(
+            "Too many user IDs (max {})",
+            MAX_USER_IDS
+        )));
     }
 
     for id in &req.user_ids {
