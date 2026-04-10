@@ -55,7 +55,7 @@ image = "0.25"
 urlencoding = "2"
 
 # MLS (E2E Encryption)
-openmls = { version = "0.6", features = ["test-utils"] }
+openmls = "0.6"
 openmls_rust_crypto = "0.3"
 openmls_memory_storage = { version = "0.3", features = ["persistence"] }
 openmls_basic_credential = "0.3"
