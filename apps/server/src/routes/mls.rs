@@ -230,6 +230,28 @@ pub async fn register_group(
         ));
     }
 
+    // Verify every member_id is actually a participant of the conversation.
+    // Prevents registering a group whose MLS membership doesn't match the
+    // conversation's participant list.
+    let participant_rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT user_id FROM conversation_participants WHERE conversation_id = $1::uuid"
+    )
+    .bind(&req.conversation_id)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    let participant_set: std::collections::HashSet<&str> =
+        participant_rows.iter().map(|(u,)| u.as_str()).collect();
+
+    for member_id in &req.member_ids {
+        if !participant_set.contains(member_id.as_str()) {
+            return Err(AppError::BadRequest(format!(
+                "Member {} is not a participant of this conversation",
+                member_id
+            )));
+        }
+    }
+
     // Insert the group mapping
     sqlx::query(
         "INSERT INTO mls_groups (group_id, conversation_id) VALUES ($1, $2::uuid)
