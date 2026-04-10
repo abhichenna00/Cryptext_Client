@@ -59,6 +59,25 @@ interface UseWebSocketReturn {
 }
 
 /**
+ * Validate an incoming WebSocket payload at runtime.
+ * Returns the message if it has a string `action` field, otherwise null.
+ * Callers still need to narrow on specific action values before using
+ * action-specific fields, but this guards against non-objects and
+ * missing/non-string `action` values that TypeScript's `as` cast would
+ * silently accept.
+ */
+function parseWebSocketMessage(raw: unknown): WebSocketMessage | null {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return null
+  }
+  const action = (raw as Record<string, unknown>).action
+  if (typeof action !== 'string') {
+    return null
+  }
+  return raw as WebSocketMessage
+}
+
+/**
  * Compute exponential backoff delay with jitter.
  * Caps at 30 seconds.
  */
@@ -154,25 +173,36 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
       }
 
       ws.onmessage = (event) => {
+        let raw: unknown
         try {
-          const data = JSON.parse(event.data)
-          // Handle auth responses internally
-          if (data.action === 'authenticated') {
-            console.log('[WebSocket] Authenticated as', data.user_id)
-            setIsConnected(true)
-            reconnectAttemptsRef.current = 0
-            onOpenRef.current?.()
-            return
-          }
-          if (data.action === 'auth_error') {
-            console.error('[WebSocket] Auth failed:', data.error)
-            ws.close()
-            return
-          }
-          onMessageRef.current?.(data as WebSocketMessage)
+          raw = JSON.parse(event.data)
         } catch (err) {
-          console.error('[WebSocket] Failed to parse message:', err)
+          console.error('[WebSocket] Failed to parse message JSON:', err)
+          return
         }
+
+        const data = parseWebSocketMessage(raw)
+        if (!data) {
+          console.error('[WebSocket] Rejected malformed message (missing action)')
+          return
+        }
+
+        // Handle auth responses internally
+        if (data.action === 'authenticated') {
+          const userId = (data as Record<string, unknown>).user_id
+          console.log('[WebSocket] Authenticated as', typeof userId === 'string' ? userId : '<unknown>')
+          setIsConnected(true)
+          reconnectAttemptsRef.current = 0
+          onOpenRef.current?.()
+          return
+        }
+        if (data.action === 'auth_error') {
+          const errMsg = (data as Record<string, unknown>).error
+          console.error('[WebSocket] Auth failed:', typeof errMsg === 'string' ? errMsg : '<unknown>')
+          ws.close()
+          return
+        }
+        onMessageRef.current?.(data)
       }
 
       ws.onclose = (event) => {
