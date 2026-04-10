@@ -161,7 +161,7 @@ pub async fn google_callback(
             let _ = set_auth_status(
                 &params.state,
                 &AuthStatus::Failed {
-                    error: e.to_string(),
+                    error: "Google sign-in failed. Please try again.".to_string(),
                 },
             )
             .await;
