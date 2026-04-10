@@ -11,8 +11,7 @@ export default function SplashPage() {
   useEffect(() => {
     async function run() {
       try {
-        const isDev = window.location.port !== '';
-        const update = isDev ? null : await check();
+        const update = import.meta.env.DEV ? null : await check();
 
         if (update) {
           setStatus(`Downloading v${update.version}...`);
