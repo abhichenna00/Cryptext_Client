@@ -19,6 +19,8 @@ pub struct FriendWithProfile {
     pub username: String,
     pub nickname: String,
     pub created_at: String,
+    pub avatar_url: Option<String>,
+    pub status: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -30,8 +32,12 @@ pub struct FriendRequestWithProfile {
     pub created_at: String,
     pub from_username: Option<String>,
     pub from_nickname: Option<String>,
+    pub from_avatar_url: Option<String>,
+    pub from_status: Option<String>,
     pub to_username: Option<String>,
     pub to_nickname: Option<String>,
+    pub to_avatar_url: Option<String>,
+    pub to_status: Option<String>,
 }
 
 /// Intermediate row struct for friend request queries
@@ -44,6 +50,8 @@ struct FriendRequestRow {
     created_at: String,
     username: Option<String>,
     nickname: Option<String>,
+    avatar_url: Option<String>,
+    profile_status: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -59,7 +67,8 @@ pub async fn get_friends(claims: Claims) -> AppResult<impl IntoResponse> {
     let pool = get_pool();
 
     let friends: Vec<FriendWithProfile> = sqlx::query_as(
-        "SELECT f.friend_id, p.username, p.nickname, f.created_at::text
+        "SELECT f.friend_id, p.username, p.nickname, f.created_at::text,
+                p.avatar_url, p.status
          FROM friends f
          JOIN profiles p ON f.friend_id = p.user_id
          WHERE f.user_id = $1
@@ -165,7 +174,7 @@ pub async fn get_incoming_friend_requests(claims: Claims) -> AppResult<impl Into
 
     let rows: Vec<FriendRequestRow> = sqlx::query_as(
         "SELECT fr.id::text, fr.from_user_id, fr.to_user_id, fr.status, fr.created_at::text,
-                p.username, p.nickname
+                p.username, p.nickname, p.avatar_url, p.status AS profile_status
          FROM friend_requests fr
          LEFT JOIN profiles p ON fr.from_user_id = p.user_id
          WHERE fr.to_user_id = $1 AND fr.status = 'pending'
@@ -181,7 +190,9 @@ pub async fn get_incoming_friend_requests(claims: Claims) -> AppResult<impl Into
             id: r.id, from_user_id: r.from_user_id, to_user_id: r.to_user_id,
             status: r.status, created_at: r.created_at,
             from_username: r.username, from_nickname: r.nickname,
+            from_avatar_url: r.avatar_url, from_status: r.profile_status,
             to_username: None, to_nickname: None,
+            to_avatar_url: None, to_status: None,
         })
         .collect();
 
@@ -193,7 +204,7 @@ pub async fn get_outgoing_friend_requests(claims: Claims) -> AppResult<impl Into
 
     let rows: Vec<FriendRequestRow> = sqlx::query_as(
         "SELECT fr.id::text, fr.from_user_id, fr.to_user_id, fr.status, fr.created_at::text,
-                p.username, p.nickname
+                p.username, p.nickname, p.avatar_url, p.status AS profile_status
          FROM friend_requests fr
          LEFT JOIN profiles p ON fr.to_user_id = p.user_id
          WHERE fr.from_user_id = $1 AND fr.status = 'pending'
@@ -209,7 +220,9 @@ pub async fn get_outgoing_friend_requests(claims: Claims) -> AppResult<impl Into
             id: r.id, from_user_id: r.from_user_id, to_user_id: r.to_user_id,
             status: r.status, created_at: r.created_at,
             from_username: None, from_nickname: None,
+            from_avatar_url: None, from_status: None,
             to_username: r.username, to_nickname: r.nickname,
+            to_avatar_url: r.avatar_url, to_status: r.profile_status,
         })
         .collect();
 

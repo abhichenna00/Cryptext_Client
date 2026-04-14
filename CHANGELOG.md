@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-04-14
+
+### Added
+- Conversation intro card above messages showing partner avatar, nickname, and "beginning of history" line
+- Self-profile card pinned to the bottom of the Recent Messages panel (avatar, nickname, current status) that opens the edit profile popup
+- Friend row three-dot menu with "Copy username" and "Remove friend" (destructive confirm dialog)
+- WebSocket server migrated from API Gateway/Lambda onto the Axum server with auth-first-message flow, connection registry, and Redis pub/sub
+- Content Security Policy enabled in Tauri config
+
+### Changed
+- Home screen is now a persistent two-panel layout — Recent Messages stays on the left, and the right pane swaps between the friends list and the active DM (no more full-page navigation when opening a chat)
+- Messages now stack from the bottom of the viewport and grow upward instead of filling from the top
+- DM message list uses the shadcn ScrollArea for consistent scrollbar styling
+- Edit profile is a popup dialog instead of a dedicated page (initial profile setup still uses the full-page flow)
+- Removed the redundant DM header; partner info now lives in the sidebar and intro card
+- Removed the Profile entry from the left icon sidebar (reachable via the profile card)
+- Color palette switched to pure greyscale; destructive red and chart colors kept intact
+- Dialog surfaces use a deliberate mid-grey in light mode and a slightly-elevated dark grey above the card in dark mode
+
+### Fixed
+- Friends list and friend-request rows now show profile pictures and status dots — the `/friends` and `/friends/requests/{incoming,outgoing}` endpoints were not selecting `avatar_url` or `status` from the `profiles` table, so the client always rendered the initial-letter fallback and a grey "offline" dot
+- Dark mode palette never activated — a `.dark` class is now toggled on `<html>` so the dark color tokens (and Tailwind dark variants in portalled content like dialogs) actually apply
+- SplashPage dev-mode detection uses `import.meta.env.DEV` instead of an unreliable check
+- MLS initialization RwLock poison errors now propagate instead of panicking silently
+
+### Security
+- Verify avatar upload magic bytes match the declared content type
+- Reject non-https avatar URLs in the Avatar component
+- Remove openmls `test-utils` feature from production builds
+- Validate that `register_group` members are conversation participants
+- Validate WebSocket payloads at runtime before dispatch
+- Cap `get_messages` response at 500 messages
+- Cap `member_ids` array length in `register_group`
+- Cap `user_ids` array length in `get_profiles_by_ids`
+- Sanitize Google OAuth errors before returning to the client
+- Redact `AppError::Internal` message before returning to the client
+- Add `SameSite=Strict` flag to the sidebar cookie
+- Remove debug `println!` statements from the deep-link handler
+- Replace `eprintln!` with `tracing::debug` so user IDs stop leaking to logs
+- Replace `.unwrap()` with proper error handling in profile routes
+
 ## [0.3.1] - 2026-04-08
 
 ### Added
