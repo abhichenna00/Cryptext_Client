@@ -3,7 +3,9 @@
 .dm-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
   overflow: hidden;
   background: var(--background);
 }
@@ -66,30 +68,46 @@
 /* Messages container */
 .dm-messages {
   flex: 1;
-  overflow-y: auto;
+  min-height: 0;
+}
+
+/* Radix ScrollArea wraps viewport children in a display:table div;
+   override so min-height:100% propagates to our inner container. */
+.dm-messages > [data-slot="scroll-area-viewport"] > div {
+  display: flex !important;
+  flex-direction: column;
+  min-height: 100%;
+}
+
+.dm-messages-inner {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   padding: 1rem 0;
 }
 
-/* Empty state - Discord style */
-.dm-messages-empty {
+/* Conversation intro card — always rendered above messages */
+.dm-conversation-intro {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  padding: 1rem 1rem 2rem;
   gap: 0.5rem;
+  margin: 0 1rem 1rem;
+  padding: 1.25rem;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background: var(--card);
 }
 
-.dm-messages-empty .dm-empty-avatar {
-  margin-bottom: 0.5rem;
-}
-
-.dm-messages-empty h2 {
+.dm-conversation-intro h2 {
   font-size: 1.5rem;
   font-weight: 700;
-  margin: 0;
+  margin: 0.25rem 0 0;
+  color: var(--foreground);
 }
 
-.dm-messages-empty p {
+.dm-conversation-intro p {
   font-size: 0.875rem;
   color: var(--muted-foreground);
   margin: 0;

@@ -3,10 +3,10 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useWebSocket, WebSocketMessage } from '@/hooks'
 import { ErrorMessage } from '@/components/ui/ErrorMessage'
-import { ArrowLeft, ArrowDown, Send, Paperclip, X } from 'lucide-react'
+import { ArrowDown, Send, Paperclip, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Status, STATUS_LABELS } from '@/constants/status'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import Avatar from '@/components/Avatar'
 import MediaMessage from '@/components/MediaMessage'
 import '../styles/DirectMessagePage.css'
@@ -128,7 +128,7 @@ export default function DirectMessagePage() {
     }
   }, [])
 
-  const { isConnected, sendMessage: wsSend } = useWebSocket({ onMessage: handleWsMessage })
+  const { sendMessage: wsSend } = useWebSocket({ onMessage: handleWsMessage })
 
   useEffect(() => { initializeChat() }, [friendId])
 
@@ -429,8 +429,6 @@ export default function DirectMessagePage() {
     return msg.timestamp - prevMsg.timestamp > 5 * 60 * 1000
   }
 
-  const partnerStatus = (partnerProfile?.status as Status) || 'offline'
-
   if (loading) {
     return <div className="dm-page"><div className="dm-loading">Loading...</div></div>
   }
@@ -441,41 +439,26 @@ export default function DirectMessagePage() {
 
   return (
     <div className="dm-page">
-      <header className="dm-header">
-        <Button variant="ghost" size="icon" onClick={() => navigate('/home')}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div className="dm-header-info">
-          <Avatar src={partnerProfile?.avatar_url} fallback={partnerProfile?.nickname || 'U'} size="md" status={partnerProfile?.status} showStatus />
-          <div className="dm-header-details">
-            <h1>{partnerProfile?.nickname || 'Unknown User'}</h1>
-            <span className="dm-header-status">
-              {STATUS_LABELS[partnerStatus]}
-              {!isConnected && ' • Reconnecting...'}
-            </span>
-          </div>
-        </div>
-      </header>
-
       <ErrorMessage error={error} className="dm-error-banner" />
 
-      <main
-        ref={messagesContainerRef}
-        onScroll={handleScroll}
+      <ScrollArea
+        viewportRef={messagesContainerRef}
+        viewportProps={{ onScroll: handleScroll }}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         className={`dm-messages ${isDragOver ? 'dm-messages-dragover' : ''}`}
       >
-        {messages.length === 0 ? (
-          <div className="dm-messages-empty">
-            <div className="dm-empty-avatar">
-              <Avatar src={partnerProfile?.avatar_url} fallback={partnerProfile?.nickname || 'U'} size="lg" status={partnerProfile?.status} showStatus />
-            </div>
-            <h2>{partnerProfile?.nickname || 'Unknown User'}</h2>
-            <p>This is the beginning of your direct message history with <strong>{partnerProfile?.nickname}</strong>.</p>
-          </div>
-        ) : (
+        <div className="dm-messages-inner">
+        <div className="dm-conversation-intro">
+          <Avatar src={partnerProfile?.avatar_url} fallback={partnerProfile?.nickname || 'U'} size="lg" status={partnerProfile?.status} showStatus />
+          <h2>{partnerProfile?.nickname || 'Unknown User'}</h2>
+          <p>
+            This is the beginning of your direct message history with{' '}
+            <strong>{partnerProfile?.nickname || 'this user'}</strong>.
+          </p>
+        </div>
+        {messages.length > 0 && (
           messages.map((msg, index) => {
             const profile = getProfile(msg.sender_id)
             const showHeader = shouldShowHeader(msg, index)
@@ -520,7 +503,8 @@ export default function DirectMessagePage() {
           })
         )}
         <div ref={messagesEndRef} />
-      </main>
+        </div>
+      </ScrollArea>
 
       {newMessageCount > 0 && (
         <div className="dm-new-messages" onClick={scrollToBottom}>
