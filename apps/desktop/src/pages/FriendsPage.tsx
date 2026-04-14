@@ -188,7 +188,7 @@ export default function FriendsPage() {
                     <div className="friend-list-actions">
                       <button 
                         className="friend-action-button primary"
-                        onClick={() => navigate(`/chat/${friend.friend_id}`)}
+                        onClick={() => navigate(`/home/chat/${friend.friend_id}`)}
                       >
                         Message
                       </button>

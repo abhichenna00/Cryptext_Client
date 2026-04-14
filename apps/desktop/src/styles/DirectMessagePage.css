@@ -3,7 +3,9 @@
 .dm-page {
   display: flex;
   flex-direction: column;
-  height: 100vh;
+  flex: 1;
+  min-width: 0;
+  height: 100%;
   overflow: hidden;
   background: var(--background);
 }

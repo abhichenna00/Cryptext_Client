@@ -1,7 +1,7 @@
 // src/App.tsx
 
 import { useEffect, useState } from 'react'
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { Theme } from '@radix-ui/themes'
 import '@radix-ui/themes/styles.css'
@@ -18,6 +18,7 @@ import ChatPage from './pages/ChatPage'
 import ProfilePage from './pages/ProfilePage'
 import FriendsPage from './pages/FriendsPage'
 import DirectMessagePage from './pages/DirectMessagePage'
+import FriendsView from './components/FriendsView'
 
 // Check if running in Tauri
 const isTauri = () => typeof window !== 'undefined' && '__TAURI__' in window
@@ -56,6 +57,11 @@ function useSystemTheme() {
   }, [theme])
 
   return theme
+}
+
+function LegacyChatRedirect() {
+  const { friendId } = useParams<{ friendId: string }>()
+  return <Navigate to={friendId ? `/home/chat/${friendId}` : '/home'} replace />
 }
 
 // ── Layout ──
@@ -234,21 +240,12 @@ export default function App() {
                 !session
                   ? <Navigate to="/" />
                   : hasProfile
-                    ? <Navigate to="/editProfile" />
+                    ? <Navigate to="/home" />
                     : <ProfilePage />
               }
             />
 
-            <Route
-              path="/editProfile"
-              element={
-                !session
-                  ? <Navigate to="/" />
-                  : !hasProfile
-                    ? <Navigate to="/profile" />
-                    : <ProfilePage />
-              }
-            />
+            <Route path="/editProfile" element={<Navigate to="/home" replace />} />
 
             <Route
               path="/chat"
@@ -270,7 +267,10 @@ export default function App() {
                     ? <HomePage />
                     : <Navigate to="/profile" />
               }
-            />
+            >
+              <Route index element={<FriendsView />} />
+              <Route path="chat/:friendId" element={<DirectMessagePage />} />
+            </Route>
 
             <Route
               path="/friends"
@@ -283,16 +283,7 @@ export default function App() {
               }
             />
 
-            <Route
-              path="/chat/:friendId"
-              element={
-                !session
-                  ? <Navigate to="/" />
-                  : hasProfile
-                    ? <DirectMessagePage />
-                    : <Navigate to="/profile" />
-              }
-            />
+            <Route path="/chat/:friendId" element={<LegacyChatRedirect />} />
           </Routes>
         </AppLayout>
       </BrowserRouter>

@@ -1,7 +1,7 @@
 // src/components/AppSidebar.tsx
 
 import { useNavigate, useLocation } from 'react-router-dom'
-import { Home, User, LogOut } from 'lucide-react'
+import { Home, LogOut } from 'lucide-react'
 import {
   Sidebar,
   SidebarContent,
@@ -40,16 +40,6 @@ export function AppSidebar({ onSignOut }: AppSidebarProps) {
                 >
                   <Home className="h-4 w-4" />
                   <span>Home</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton 
-                  onClick={() => navigate('/editProfile')}
-                  isActive={isActive('/editProfile')}
-                  tooltip="Profile"
-                >
-                  <User className="h-4 w-4" />
-                  <span>Profile</span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
             </SidebarMenu>
