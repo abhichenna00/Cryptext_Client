@@ -547,8 +547,10 @@ pub fn process_welcome(
     let mls_msg_in = MlsMessageIn::tls_deserialize(&mut &welcome_data[..])
         .map_err(|e| format!("Failed to deserialize welcome: {:?}", e))?;
 
-    let welcome = mls_msg_in.into_welcome()
-        .ok_or("Message is not a Welcome")?;
+    let welcome = match mls_msg_in.extract() {
+        openmls::framing::MlsMessageBodyIn::Welcome(w) => w,
+        _ => return Err("Message is not a Welcome".to_string()),
+    };
 
     let group_config = MlsGroupJoinConfig::builder().build();
 
