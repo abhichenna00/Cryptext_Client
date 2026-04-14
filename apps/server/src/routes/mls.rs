@@ -204,8 +204,21 @@ pub async fn register_group(
     claims: Claims,
     Json(req): Json<RegisterGroupRequest>,
 ) -> AppResult<impl IntoResponse> {
+    const MAX_GROUP_MEMBERS: usize = 256;
+
     if uuid::Uuid::parse_str(&req.conversation_id).is_err() {
         return Err(AppError::BadRequest("Invalid conversation ID".to_string()));
+    }
+
+    if req.member_ids.is_empty() {
+        return Err(AppError::BadRequest("Member list cannot be empty".to_string()));
+    }
+
+    if req.member_ids.len() > MAX_GROUP_MEMBERS {
+        return Err(AppError::BadRequest(format!(
+            "Too many members (max {})",
+            MAX_GROUP_MEMBERS
+        )));
     }
 
     if !req.member_ids.contains(&claims.user_id().to_string()) {
