@@ -6,6 +6,7 @@ import { ErrorMessage } from '@/components/ui/ErrorMessage'
 import { ArrowLeft, ArrowDown, Send, Paperclip, X } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
+import { ScrollArea } from '@/components/ui/scroll-area'
 import { Status, STATUS_LABELS } from '@/constants/status'
 import Avatar from '@/components/Avatar'
 import MediaMessage from '@/components/MediaMessage'
@@ -459,23 +460,24 @@ export default function DirectMessagePage() {
 
       <ErrorMessage error={error} className="dm-error-banner" />
 
-      <main
-        ref={messagesContainerRef}
-        onScroll={handleScroll}
+      <ScrollArea
+        viewportRef={messagesContainerRef}
+        viewportProps={{ onScroll: handleScroll }}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
         className={`dm-messages ${isDragOver ? 'dm-messages-dragover' : ''}`}
       >
-        {messages.length === 0 ? (
-          <div className="dm-messages-empty">
-            <div className="dm-empty-avatar">
-              <Avatar src={partnerProfile?.avatar_url} fallback={partnerProfile?.nickname || 'U'} size="lg" status={partnerProfile?.status} showStatus />
-            </div>
-            <h2>{partnerProfile?.nickname || 'Unknown User'}</h2>
-            <p>This is the beginning of your direct message history with <strong>{partnerProfile?.nickname}</strong>.</p>
-          </div>
-        ) : (
+        <div className="dm-messages-inner">
+        <div className="dm-conversation-intro">
+          <Avatar src={partnerProfile?.avatar_url} fallback={partnerProfile?.nickname || 'U'} size="lg" status={partnerProfile?.status} showStatus />
+          <h2>{partnerProfile?.nickname || 'Unknown User'}</h2>
+          <p>
+            This is the beginning of your direct message history with{' '}
+            <strong>{partnerProfile?.nickname || 'this user'}</strong>.
+          </p>
+        </div>
+        {messages.length > 0 && (
           messages.map((msg, index) => {
             const profile = getProfile(msg.sender_id)
             const showHeader = shouldShowHeader(msg, index)
@@ -520,7 +522,8 @@ export default function DirectMessagePage() {
           })
         )}
         <div ref={messagesEndRef} />
-      </main>
+        </div>
+      </ScrollArea>
 
       {newMessageCount > 0 && (
         <div className="dm-new-messages" onClick={scrollToBottom}>
