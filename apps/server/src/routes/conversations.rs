@@ -228,29 +228,37 @@ pub async fn get_messages(
         ));
     }
 
+    const MAX_MESSAGES: i64 = 500;
+
     let messages: Vec<Message> = match query.after {
         Some(after_ts) => {
             sqlx::query_as(
                 "SELECT id::text, conversation_id::text, sender_id, content, timestamp, content_type, content_bytes, welcome_data
                  FROM messages
                  WHERE conversation_id = $1::uuid AND timestamp > $2
-                 ORDER BY timestamp ASC"
+                 ORDER BY timestamp ASC
+                 LIMIT $3"
             )
             .bind(&conversation_id)
             .bind(after_ts)
+            .bind(MAX_MESSAGES)
             .fetch_all(pool.as_ref())
             .await?
         }
         None => {
-            sqlx::query_as(
+            let mut recent: Vec<Message> = sqlx::query_as(
                 "SELECT id::text, conversation_id::text, sender_id, content, timestamp, content_type, content_bytes, welcome_data
                  FROM messages
                  WHERE conversation_id = $1::uuid
-                 ORDER BY timestamp ASC"
+                 ORDER BY timestamp DESC
+                 LIMIT $2"
             )
             .bind(&conversation_id)
+            .bind(MAX_MESSAGES)
             .fetch_all(pool.as_ref())
-            .await?
+            .await?;
+            recent.reverse();
+            recent
         }
     };
 
