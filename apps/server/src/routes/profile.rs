@@ -93,6 +93,22 @@ pub struct GetProfilesByIdsRequest {
 // HELPERS
 // ============================================
 
+fn detect_image_format(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.len() >= 8 && &bytes[0..8] == b"\x89PNG\r\n\x1a\n" {
+        return Some("image/png");
+    }
+    if bytes.len() >= 3 && &bytes[0..3] == b"\xFF\xD8\xFF" {
+        return Some("image/jpeg");
+    }
+    if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        return Some("image/webp");
+    }
+    if bytes.len() >= 6 && (&bytes[0..6] == b"GIF87a" || &bytes[0..6] == b"GIF89a") {
+        return Some("image/gif");
+    }
+    None
+}
+
 async fn create_s3_client() -> S3Client {
     let config_ref = get_config();
     let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
@@ -253,6 +269,15 @@ pub async fn upload_profile_image(
 
     if image_bytes.len() > 5 * 1024 * 1024 {
         return Err(AppError::BadRequest("Image must be less than 5MB".to_string()));
+    }
+
+    // Verify the magic bytes match the declared content-type so a spoofed
+    // Content-Type header can't smuggle in a different file format.
+    let detected = detect_image_format(&image_bytes);
+    if detected != Some(req.content_type.as_str()) {
+        return Err(AppError::BadRequest(
+            "Image bytes do not match the declared content type".to_string(),
+        ));
     }
 
     let config = get_config();
