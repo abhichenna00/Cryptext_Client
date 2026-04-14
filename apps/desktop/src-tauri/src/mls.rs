@@ -147,8 +147,15 @@ pub async fn mls_init(
     let provider = OpenMlsRustCrypto::default();
     // Copy loaded state into the provider's storage
     if storage_path.exists() {
-        let loaded_values = storage.values.read().unwrap();
-        let mut provider_values = provider.storage().values.write().unwrap();
+        let loaded_values = storage
+            .values
+            .read()
+            .map_err(|e| format!("MLS storage read lock poisoned: {}", e))?;
+        let mut provider_values = provider
+            .storage()
+            .values
+            .write()
+            .map_err(|e| format!("MLS provider write lock poisoned: {}", e))?;
         for (k, v) in loaded_values.iter() {
             provider_values.insert(k.clone(), v.clone());
         }
