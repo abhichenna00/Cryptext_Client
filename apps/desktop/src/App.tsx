@@ -18,6 +18,7 @@ import ChatPage from './pages/ChatPage'
 import ProfilePage from './pages/ProfilePage'
 import FriendsPage from './pages/FriendsPage'
 import DirectMessagePage from './pages/DirectMessagePage'
+import GroupMessagePage from './pages/GroupMessagePage'
 import FriendsView from './components/FriendsView'
 
 // Check if running in Tauri
@@ -270,6 +271,7 @@ export default function App() {
             >
               <Route index element={<FriendsView />} />
               <Route path="chat/:friendId" element={<DirectMessagePage />} />
+              <Route path="group/:conversationId" element={<GroupMessagePage />} />
             </Route>
 
             <Route

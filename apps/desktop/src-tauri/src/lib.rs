@@ -78,6 +78,8 @@ pub fn run() {
             conversations::fetch_new_messages,
             conversations::send_message,
             conversations::mark_read,
+            conversations::create_group,
+            conversations::get_group_members,
             // Local encrypted message storage
             local_db::has_vault,
             local_db::setup_vault,

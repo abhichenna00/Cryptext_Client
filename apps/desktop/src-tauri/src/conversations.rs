@@ -16,6 +16,7 @@ pub struct ConversationWithDetails {
     pub other_user_nickname: Option<String>,
     pub other_user_avatar_url: Option<String>,
     pub other_user_status: Option<String>,
+    pub member_count: Option<i64>,
     pub last_message: Option<String>,
     pub last_message_time: Option<i64>,
     pub last_message_content_type: Option<String>,
@@ -210,7 +211,11 @@ pub async fn send_message(
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
 
-    // Auto-create MLS group if one doesn't exist and we know the other user
+    // Auto-create MLS group if one doesn't exist and we know the other user.
+    // For group conversations, the MLS group is created eagerly at group-creation
+    // time, so this block should only fire for DMs. If it fires for a group
+    // (e.g. after MLS state loss), we can't auto-recover yet — the user would
+    // need to be re-added to the group.
     let mut welcome_bytes: Option<Vec<u8>> = None;
     if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
         if let Some(ref other_id) = other_user_id {
@@ -222,7 +227,7 @@ pub async fn send_message(
             ).await?;
             welcome_bytes = Some(wb);
         } else {
-            return Err("Cannot send encrypted message: recipient unknown".to_string());
+            return Err("Encryption not initialized for this conversation. For group chats, try restarting the app to re-process pending welcomes.".to_string());
         }
     }
 
@@ -356,4 +361,90 @@ pub async fn mark_read(
     let token = auth::get_token(&session_store)?;
     let path = format!("/conversations/{}/read", conversation_id);
     http_client::post(&path, &token, &http_client::EmptyBody {}).await
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GroupResult {
+    pub success: bool,
+    pub conversation_id: Option<String>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize)]
+struct CreateGroupBody {
+    name: String,
+    member_ids: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct GroupMember {
+    pub user_id: String,
+    pub nickname: String,
+    pub avatar_url: Option<String>,
+    pub status: Option<String>,
+}
+
+#[command]
+pub async fn create_group(
+    name: String,
+    member_ids: Vec<String>,
+    session_store: State<'_, SessionStore>,
+    mls_state: State<'_, MlsState>,
+) -> Result<GroupResult, String> {
+    let token = auth::get_token(&session_store)?;
+    let current_user_id = auth::get_user_id_from_session(&session_store)?;
+
+    let mut all_members = member_ids;
+    if !all_members.contains(&current_user_id) {
+        all_members.push(current_user_id);
+    }
+
+    let body = CreateGroupBody {
+        name,
+        member_ids: all_members.clone(),
+    };
+
+    let json: serde_json::Value = match http_client::post("/conversations/group", &token, &body).await {
+        Ok(j) => j,
+        Err(e) => return Ok(GroupResult {
+            success: false,
+            conversation_id: None,
+            error: Some(e),
+        }),
+    };
+
+    let conversation_id = match json["conversation_id"].as_str() {
+        Some(id) => id.to_string(),
+        None => return Ok(GroupResult {
+            success: false,
+            conversation_id: None,
+            error: Some("No conversation_id returned".to_string()),
+        }),
+    };
+
+    if let Err(e) = crate::mls::create_group_multi_inner(
+        &conversation_id, &all_members, &mls_state, &session_store,
+    ).await {
+        return Ok(GroupResult {
+            success: false,
+            conversation_id: Some(conversation_id),
+            error: Some(format!("Group created but MLS setup failed: {}", e)),
+        });
+    }
+
+    Ok(GroupResult {
+        success: true,
+        conversation_id: Some(conversation_id),
+        error: None,
+    })
+}
+
+#[command]
+pub async fn get_group_members(
+    conversation_id: String,
+    session_store: State<'_, SessionStore>,
+) -> Result<Vec<GroupMember>, String> {
+    let token = auth::get_token(&session_store)?;
+    let path = format!("/conversations/{}/members", conversation_id);
+    http_client::get(&path, &token).await
 }

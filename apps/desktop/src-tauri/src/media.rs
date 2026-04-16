@@ -252,7 +252,7 @@ pub async fn send_media(
     let metadata_json = serde_json::to_string(&metadata)
         .map_err(|e| format!("Failed to serialize metadata: {}", e))?;
 
-    // 6. Auto-create MLS group if needed
+    // 6. Auto-create MLS group if needed (DMs only — groups create MLS eagerly)
     let mut welcome_bytes: Option<Vec<u8>> = None;
     if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
         if let Some(ref other_id) = other_user_id {
@@ -264,7 +264,7 @@ pub async fn send_media(
             ).await?;
             welcome_bytes = Some(wb);
         } else {
-            return Err("Cannot send encrypted message: recipient unknown".to_string());
+            return Err("Encryption not initialized for this conversation. For group chats, try restarting the app to re-process pending welcomes.".to_string());
         }
     }
 

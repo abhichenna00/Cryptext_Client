@@ -416,6 +416,107 @@ pub async fn create_group_inner(
     Ok(welcome_bytes)
 }
 
+/// Creates an MLS group with N members. Welcomes are sent to each other member
+/// via the /mls/welcome endpoint (not embedded in a message like DMs).
+pub async fn create_group_multi_inner(
+    conversation_id: &str,
+    member_ids: &[String],
+    mls_state: &State<'_, MlsState>,
+    session_store: &State<'_, SessionStore>,
+) -> Result<(), String> {
+    let token = auth::get_token(session_store)?;
+    let my_user_id = auth::get_user_id_from_session(session_store)?;
+
+    let other_ids: Vec<&String> = member_ids.iter()
+        .filter(|id| id.as_str() != my_user_id)
+        .collect();
+
+    if other_ids.is_empty() {
+        return Err("No other members to add".to_string());
+    }
+
+    let mut claimed_kps = Vec::new();
+    for other_id in &other_ids {
+        let claimed: ClaimedKeyPackage = http_client::get(
+            &format!("/mls/key-packages/{}", other_id), &token,
+        ).await.map_err(|e| format!("Failed to claim key package for {}: {}", other_id, e))?;
+        claimed_kps.push(claimed.key_package_data);
+    }
+
+    let (group_id_bytes, welcome_bytes, commit_bytes) = {
+        let mut state = mls_state.inner.lock_or_err()?;
+        let inner = state.as_mut().ok_or("MLS not initialized")?;
+
+        let mut validated_kps = Vec::new();
+        for kp_data in &claimed_kps {
+            let kp_in = KeyPackageIn::tls_deserialize(&mut kp_data.as_slice())
+                .map_err(|e| format!("Failed to deserialize key package: {:?}", e))?;
+            let validated = kp_in
+                .validate(inner.provider.crypto(), ProtocolVersion::Mls10)
+                .map_err(|e| format!("Failed to validate key package: {:?}", e))?;
+            validated_kps.push(validated);
+        }
+
+        let group_config = MlsGroupCreateConfig::builder()
+            .ciphersuite(CIPHERSUITE)
+            .use_ratchet_tree_extension(true)
+            .build();
+
+        let group_id = GroupId::from_slice(&uuid::Uuid::new_v4().as_bytes()[..]);
+
+        let mut group = MlsGroup::new_with_group_id(
+            &inner.provider, &inner.signer, &group_config,
+            group_id, inner.credential_with_key.clone(),
+        ).map_err(|e| format!("Failed to create MLS group: {:?}", e))?;
+
+        let (commit, welcome, _) = group
+            .add_members(&inner.provider, &inner.signer, &validated_kps)
+            .map_err(|e| format!("Failed to add members: {:?}", e))?;
+
+        group.merge_pending_commit(&inner.provider)
+            .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
+
+        let gid = group.group_id().as_slice().to_vec();
+        let wb = welcome.tls_serialize_detached()
+            .map_err(|e| format!("Failed to serialize welcome: {:?}", e))?;
+        let cb = commit.tls_serialize_detached()
+            .map_err(|e| format!("Failed to serialize commit: {:?}", e))?;
+
+        inner.conversation_groups.insert(conversation_id.to_string(), gid.clone());
+        inner.groups.insert(gid.clone(), group);
+        inner.save_state()?;
+
+        (gid, wb, cb)
+    };
+
+    let register_body = RegisterGroupBody {
+        group_id: group_id_bytes.clone(),
+        conversation_id: conversation_id.to_string(),
+        member_ids: member_ids.to_vec(),
+    };
+    let _: serde_json::Value =
+        http_client::post("/mls/groups", &token, &register_body).await?;
+
+    for other_id in &other_ids {
+        let welcome_body = serde_json::json!({
+            "recipient_id": other_id,
+            "group_id": group_id_bytes,
+            "welcome_data": welcome_bytes,
+        });
+        let _: serde_json::Value =
+            http_client::post("/mls/welcome", &token, &welcome_body).await?;
+    }
+
+    let commit_body = FanOutCommitBody {
+        group_id: group_id_bytes,
+        commit_data: commit_bytes,
+    };
+    let _: serde_json::Value =
+        http_client::post("/mls/commit", &token, &commit_body).await?;
+
+    Ok(())
+}
+
 pub fn has_group_inner(mls_state: &State<'_, MlsState>, conversation_id: &str) -> bool {
     let state = match mls_state.inner.lock() {
         Ok(s) => s,
