@@ -42,6 +42,7 @@ pub struct ConversationWithDetails {
     pub other_user_nickname: Option<String>,
     pub other_user_avatar_url: Option<String>,  // added
     pub other_user_status: Option<String>,       // added
+    pub member_count: Option<i64>,
     pub last_message: Option<String>,
     pub last_message_time: Option<i64>,
     pub last_message_content_type: Option<String>,
@@ -51,6 +52,20 @@ pub struct ConversationWithDetails {
 #[derive(Deserialize)]
 pub struct CreateDmRequest {
     pub other_user_id: String,
+}
+
+#[derive(Deserialize)]
+pub struct CreateGroupRequest {
+    pub name: String,
+    pub member_ids: Vec<String>,
+}
+
+#[derive(Serialize, Debug, FromRow)]
+pub struct GroupMember {
+    pub user_id: String,
+    pub nickname: String,
+    pub avatar_url: Option<String>,
+    pub status: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -71,24 +86,32 @@ pub async fn get_conversations(claims: Claims) -> AppResult<impl IntoResponse> {
 
     let rows: Vec<(
         String, String, Option<String>, Option<String>, Option<String>,
-        Option<String>, Option<String>, Option<String>, Option<i64>, Option<String>, bool,
+        Option<String>, Option<String>, Option<i64>,
+        Option<String>, Option<i64>, Option<String>, bool,
     )> = sqlx::query_as(
         r#"
         SELECT
             c.id::text as conversation_id,
             c.type as conversation_type,
             c.name,
-            other_cp.user_id as other_user_id,
-            p.nickname as other_user_nickname,
-            p.avatar_url as other_user_avatar_url,
-            p.status as other_user_status,
+            CASE WHEN c.type = 'direct' THEN other_cp.user_id END as other_user_id,
+            CASE WHEN c.type = 'direct' THEN p.nickname END as other_user_nickname,
+            CASE WHEN c.type = 'direct' THEN p.avatar_url END as other_user_avatar_url,
+            CASE WHEN c.type = 'direct' THEN p.status END as other_user_status,
+            (SELECT COUNT(*) FROM conversation_participants cp2
+             WHERE cp2.conversation_id = c.id) as member_count,
             lm.content as last_message,
             lm.timestamp as last_message_time,
             lm.content_type as last_message_content_type,
             COALESCE(lm.timestamp > COALESCE(EXTRACT(EPOCH FROM cp.last_read_at) * 1000, 0), false) as has_unread
         FROM conversations c
         JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = $1
-        LEFT JOIN conversation_participants other_cp ON other_cp.conversation_id = c.id AND other_cp.user_id != $1
+        LEFT JOIN LATERAL (
+            SELECT ocp.user_id
+            FROM conversation_participants ocp
+            WHERE ocp.conversation_id = c.id AND ocp.user_id != $1
+            LIMIT 1
+        ) other_cp ON c.type = 'direct'
         LEFT JOIN profiles p ON p.user_id = other_cp.user_id
         LEFT JOIN LATERAL (
             SELECT m.content, m.timestamp, m.content_type
@@ -106,11 +129,12 @@ pub async fn get_conversations(claims: Claims) -> AppResult<impl IntoResponse> {
 
     let conversations: Vec<ConversationWithDetails> = rows
         .into_iter()
-        .map(|(conversation_id, conversation_type, name, other_user_id, other_user_nickname, other_user_avatar_url, other_user_status, last_message, last_message_time, last_message_content_type, has_unread)| {
+        .map(|(conversation_id, conversation_type, name, other_user_id, other_user_nickname, other_user_avatar_url, other_user_status, member_count, last_message, last_message_time, last_message_content_type, has_unread)| {
             ConversationWithDetails {
                 conversation_id, conversation_type, name,
                 other_user_id, other_user_nickname,
                 other_user_avatar_url, other_user_status,
+                member_count,
                 last_message, last_message_time, last_message_content_type, has_unread,
             }
         })
@@ -374,4 +398,112 @@ pub async fn mark_conversation_read(
     .await?;
 
     Ok(Json(serde_json::json!({ "success": true })))
+}
+
+pub async fn create_group_conversation(
+    claims: Claims,
+    Json(req): Json<CreateGroupRequest>,
+) -> AppResult<impl IntoResponse> {
+    let creator_id = claims.user_id().to_string();
+
+    let name = req.name.trim();
+    if name.is_empty() || name.len() > 100 {
+        return Err(AppError::BadRequest(
+            "Group name must be 1-100 characters".to_string(),
+        ));
+    }
+
+    if req.member_ids.len() < 2 || req.member_ids.len() > 256 {
+        return Err(AppError::BadRequest(
+            "Groups must have 2-256 members".to_string(),
+        ));
+    }
+
+    if !req.member_ids.contains(&creator_id) {
+        return Err(AppError::BadRequest(
+            "Creator must be included in member list".to_string(),
+        ));
+    }
+
+    for id in &req.member_ids {
+        if uuid::Uuid::parse_str(id).is_err() {
+            return Err(AppError::BadRequest(format!("Invalid member ID: {}", id)));
+        }
+    }
+
+    let pool = get_pool();
+
+    let existing_count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM profiles WHERE user_id = ANY($1)"
+    )
+    .bind(&req.member_ids)
+    .fetch_one(pool.as_ref())
+    .await?;
+
+    if existing_count.0 != req.member_ids.len() as i64 {
+        return Err(AppError::BadRequest(
+            "One or more members do not have a profile".to_string(),
+        ));
+    }
+
+    let mut tx = pool.begin().await?;
+
+    let (conversation_id,): (String,) = sqlx::query_as(
+        "INSERT INTO conversations (type, name) VALUES ('group', $1) RETURNING id::text"
+    )
+    .bind(name)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    for member_id in &req.member_ids {
+        sqlx::query(
+            "INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1::uuid, $2)"
+        )
+        .bind(&conversation_id)
+        .bind(member_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
+
+    Ok(Json(serde_json::json!({ "conversation_id": conversation_id })))
+}
+
+pub async fn get_group_members(
+    claims: Claims,
+    Path(conversation_id): Path<String>,
+) -> AppResult<impl IntoResponse> {
+    if uuid::Uuid::parse_str(&conversation_id).is_err() {
+        return Err(AppError::BadRequest("Invalid conversation ID".to_string()));
+    }
+
+    let pool = get_pool();
+
+    let participant: Option<(String,)> = sqlx::query_as(
+        "SELECT user_id FROM conversation_participants WHERE conversation_id = $1::uuid AND user_id = $2"
+    )
+    .bind(&conversation_id)
+    .bind(claims.user_id())
+    .fetch_optional(pool.as_ref())
+    .await?;
+
+    if participant.is_none() {
+        return Err(AppError::Unauthorized(
+            "You are not a participant in this conversation".to_string(),
+        ));
+    }
+
+    let members: Vec<GroupMember> = sqlx::query_as(
+        "SELECT p.user_id, p.nickname, p.avatar_url, p.status
+         FROM conversation_participants cp
+         JOIN profiles p ON p.user_id = cp.user_id
+         WHERE cp.conversation_id = $1::uuid
+         ORDER BY p.nickname"
+    )
+    .bind(&conversation_id)
+    .fetch_all(pool.as_ref())
+    .await?;
+
+    Ok(Json(members))
 }

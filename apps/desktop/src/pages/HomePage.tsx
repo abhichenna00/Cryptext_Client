@@ -2,12 +2,13 @@
 
 import { useState, useEffect } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { useNavigate, useParams, Outlet } from 'react-router-dom'
+import { useNavigate, useParams, useLocation, Outlet } from 'react-router-dom'
 import { ScrollArea } from '../components/ui/scroll-area'
 import { Button } from '../components/ui/button'
-import { Plus, Settings } from 'lucide-react'
+import { Plus, Settings, Users } from 'lucide-react'
 import Avatar from '@/components/Avatar'
 import EditProfileDialog from '@/components/EditProfileDialog'
+import CreateGroupDialog from '@/components/CreateGroupDialog'
 import { STATUS_LABELS, Status } from '@/constants/status'
 import '../styles/HomePage.css'
 
@@ -27,6 +28,7 @@ interface ConversationWithDetails {
   other_user_nickname: string | null
   other_user_avatar_url?: string | null
   other_user_status?: string | null
+  member_count?: number | null
   last_message: string | null
   last_message_time: number | null
   has_unread: boolean
@@ -34,11 +36,13 @@ interface ConversationWithDetails {
 
 export default function HomePage() {
   const navigate = useNavigate()
+  const location = useLocation()
   const { friendId: activeFriendId } = useParams<{ friendId: string }>()
   const [recentChats, setRecentChats] = useState<ConversationWithDetails[]>([])
   const [profile, setProfile] = useState<ProfileData | null>(null)
   const [loading, setLoading] = useState(true)
   const [editProfileOpen, setEditProfileOpen] = useState(false)
+  const [createGroupOpen, setCreateGroupOpen] = useState(false)
 
   const refreshProfile = async () => {
     try {
@@ -69,10 +73,28 @@ export default function HomePage() {
     load()
   }, [])
 
+  const refreshConversations = async () => {
+    try {
+      const conversations = await invoke<ConversationWithDetails[]>('get_conversations').catch(
+        () => [] as ConversationWithDetails[]
+      )
+      setRecentChats(conversations)
+    } catch (err) {
+      console.error('Failed to refresh conversations:', err)
+    }
+  }
+
   const handleOpenChat = (chat: ConversationWithDetails) => {
-    if (chat.other_user_id) {
+    if (chat.conversation_type === 'group') {
+      navigate(`/home/group/${chat.conversation_id}`)
+    } else if (chat.other_user_id) {
       navigate(`/home/chat/${chat.other_user_id}`)
     }
+  }
+
+  const handleGroupCreated = (conversationId: string) => {
+    refreshConversations()
+    navigate(`/home/group/${conversationId}`)
   }
 
   const getChatDisplayName = (chat: ConversationWithDetails) =>
@@ -89,7 +111,7 @@ export default function HomePage() {
         <div className="recent-chats-panel">
           <div className="panel-header">
             <h2 className="panel-title">Recent Messages</h2>
-            <Button variant="ghost" size="icon">
+            <Button variant="ghost" size="icon" onClick={() => setCreateGroupOpen(true)} title="New group">
               <Plus size={18} />
             </Button>
           </div>
@@ -97,21 +119,30 @@ export default function HomePage() {
             <div className="recent-chats">
               {recentChats.length > 0 ? (
                 recentChats.map((chat) => {
-                  const isActive = chat.other_user_id === activeFriendId
+                  const isActive = chat.conversation_type === 'group'
+                    ? location.pathname === `/home/group/${chat.conversation_id}`
+                    : chat.other_user_id === activeFriendId
+                  const isGroup = chat.conversation_type === 'group'
                   return (
                     <button
                       key={chat.conversation_id}
                       className={`recent-chat-item ${chat.has_unread ? 'has-unread' : ''} ${isActive ? 'is-active' : ''}`}
                       onClick={() => handleOpenChat(chat)}
                     >
-                      <Avatar
-                        src={chat.other_user_avatar_url}
-                        fallback={getChatDisplayName(chat)}
-                        size="md"
-                        status={chat.other_user_status}
-                        showStatus
-                        className="recent-chat-avatar"
-                      />
+                      {isGroup ? (
+                        <div className="group-avatar-icon">
+                          <Users size={18} />
+                        </div>
+                      ) : (
+                        <Avatar
+                          src={chat.other_user_avatar_url}
+                          fallback={getChatDisplayName(chat)}
+                          size="md"
+                          status={chat.other_user_status}
+                          showStatus
+                          className="recent-chat-avatar"
+                        />
+                      )}
                       <div className="recent-chat-info">
                         <span className="recent-chat-name">{getChatDisplayName(chat)}</span>
                         <span className="recent-chat-message">
@@ -160,6 +191,12 @@ export default function HomePage() {
         open={editProfileOpen}
         onOpenChange={setEditProfileOpen}
         onSaved={refreshProfile}
+      />
+
+      <CreateGroupDialog
+        open={createGroupOpen}
+        onOpenChange={setCreateGroupOpen}
+        onCreated={handleGroupCreated}
       />
     </div>
   )

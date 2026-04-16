@@ -64,7 +64,9 @@ pub fn build_router() -> Router {
         // Conversation routes
         .route("/conversations", get(conversations::get_conversations))
         .route("/conversations/dm", post(conversations::get_or_create_dm_conversation))
+        .route("/conversations/group", post(conversations::create_group_conversation))
         .route("/conversations/:id/messages", get(conversations::get_messages))
+        .route("/conversations/:id/members", get(conversations::get_group_members))
         .route("/conversations/:id/read", post(conversations::mark_conversation_read))
 
         // Rate-limited message sending

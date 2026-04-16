@@ -107,6 +107,17 @@
   color: var(--foreground);
 }
 
+.group-intro-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted-foreground);
+}
+
 .dm-conversation-intro p {
   font-size: 0.875rem;
   color: var(--muted-foreground);
