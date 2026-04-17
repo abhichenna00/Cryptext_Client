@@ -5,13 +5,17 @@ use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::sync::Mutex;
 use tauri::{command, AppHandle, Manager, State};
+use zeroize::Zeroizing;
 
 use crate::sync_utils::MutexExt;
 use crate::vault;
 
 pub struct LocalDb {
     pub conn: Mutex<Option<Connection>>,
-    pub dek: Mutex<Option<[u8; 32]>>,
+    // Wrapped in Zeroizing so the key bytes are wiped when the slot is
+    // replaced or the process drops the struct. Prevents the DEK from
+    // lingering in freed memory after sign-out or app exit.
+    pub dek: Mutex<Option<Zeroizing<[u8; 32]>>>,
 }
 
 impl Default for LocalDb {
@@ -21,6 +25,16 @@ impl Default for LocalDb {
             dek: Mutex::new(None),
         }
     }
+}
+
+/// Drop the encrypted DB connection and wipe the DEK. Used on sign-out so
+/// the vault is no longer accessible in-process until next unlock.
+pub(crate) fn clear_vault_state(local_db: &State<'_, LocalDb>) -> Result<(), String> {
+    let mut conn_guard = local_db.conn.lock_or_err()?;
+    *conn_guard = None;
+    let mut dek_guard = local_db.dek.lock_or_err()?;
+    *dek_guard = None;
+    Ok(())
 }
 
 /// Open a SQLCipher database with the given DEK.
@@ -99,7 +113,7 @@ pub(crate) fn mount_dek(
     app_data: &Path,
     local_db: &State<'_, LocalDb>,
     user_id: &str,
-    dek: [u8; 32],
+    dek: Zeroizing<[u8; 32]>,
 ) -> Result<(), String> {
     let db_path = app_data.join(format!("messages_{}.db", user_id));
     let conn = open_encrypted_db(&db_path, &dek)?;
@@ -187,7 +201,7 @@ pub fn setup_vault(
     let mut guard = local_db.conn.lock_or_err()?;
     *guard = Some(conn);
     let mut dek_guard = local_db.dek.lock_or_err()?;
-    *dek_guard = Some(*dek);
+    *dek_guard = Some(dek);
     Ok(())
 }
 
@@ -212,7 +226,7 @@ pub fn unlock_vault(
     let mut guard = local_db.conn.lock_or_err()?;
     *guard = Some(conn);
     let mut dek_guard = local_db.dek.lock_or_err()?;
-    *dek_guard = Some(*dek);
+    *dek_guard = Some(dek);
     Ok(())
 }
 
