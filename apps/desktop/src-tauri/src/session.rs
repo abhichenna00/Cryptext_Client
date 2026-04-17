@@ -25,6 +25,7 @@ use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tauri::{command, AppHandle, Manager, State};
+use zeroize::Zeroizing;
 
 const KEYRING_SERVICE: &str = "cryptex.app.com";
 const KEYRING_ACCOUNT: &str = "active_session";
@@ -101,12 +102,12 @@ pub fn session_save(
     local_db: State<'_, LocalDb>,
     session_store: State<'_, SessionStore>,
 ) -> Result<(), String> {
-    let dek = {
+    let dek: Zeroizing<[u8; 32]> = {
         let guard = local_db
             .dek
             .lock()
             .map_err(|_| "DEK mutex poisoned".to_string())?;
-        *guard.as_ref().ok_or("Vault not unlocked")?
+        guard.as_ref().cloned().ok_or("Vault not unlocked")?
     };
     let (user_id, email, refresh_token) = {
         let store = session_store
@@ -135,7 +136,7 @@ pub fn session_save(
     let payload = KeyringPayload {
         user_id,
         email,
-        dek_b64: general_purpose::STANDARD.encode(dek),
+        dek_b64: general_purpose::STANDARD.encode(&*dek),
     };
     let json = serde_json::to_string(&payload)
         .map_err(|e| format!("Serialize failed: {}", e))?;
@@ -198,8 +199,9 @@ pub async fn session_restore(
         wipe(&app_data);
         return Err("Stored DEK has wrong length".to_string());
     }
-    let mut dek = [0u8; 32];
-    dek.copy_from_slice(&dek_bytes);
+    let mut dek_array = [0u8; 32];
+    dek_array.copy_from_slice(&dek_bytes);
+    let dek = Zeroizing::new(dek_array);
 
     let enc_refresh = match std::fs::read(session_file(&app_data)) {
         Ok(bytes) => bytes,
@@ -218,16 +220,42 @@ pub async fn session_restore(
     let refresh_token = String::from_utf8(refresh_bytes)
         .map_err(|e| format!("Refresh token not valid UTF-8: {}", e))?;
 
-    if let Err(e) = local_db::mount_dek(&app_data, &local_db, &payload.user_id, dek) {
+    let stored_user_id = payload.user_id.clone();
+    if let Err(e) = local_db::mount_dek(&app_data, &local_db, &stored_user_id, dek) {
         wipe(&app_data);
         return Err(format!("Local DB mount failed: {}", e));
     }
 
     if let Err(e) =
-        auth::bootstrap_from_refresh_token(&session_store, refresh_token, payload.user_id).await
+        auth::bootstrap_from_refresh_token(&session_store, refresh_token, stored_user_id.clone())
+            .await
     {
         wipe(&app_data);
+        // Also clear in-memory vault state so we don't leave DEK dangling
+        // with no authenticated session to match.
+        let _ = local_db::clear_vault_state(&local_db);
         return Err(format!("Session refresh failed: {}", e));
+    }
+
+    // Defence in depth: confirm the server-side identity matches what we
+    // stored locally. A mismatch would mean the refresh token belongs to a
+    // different user than the DEK, which should never happen normally.
+    let server_user_id = {
+        let store = session_store
+            .session
+            .lock()
+            .map_err(|_| "Session mutex poisoned".to_string())?;
+        store.as_ref().map(|s| s.user_id.clone())
+    };
+    if server_user_id.as_deref() != Some(stored_user_id.as_str()) {
+        wipe(&app_data);
+        let _ = local_db::clear_vault_state(&local_db);
+        let mut store = session_store
+            .session
+            .lock()
+            .map_err(|_| "Session mutex poisoned".to_string())?;
+        *store = None;
+        return Err("Identity mismatch between stored vault and Cognito session".to_string());
     }
 
     Ok(true)
