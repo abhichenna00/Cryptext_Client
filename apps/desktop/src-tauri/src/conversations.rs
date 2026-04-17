@@ -7,6 +7,19 @@ use crate::mls::MlsState;
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
 
+/// Classify MLS-decrypted plaintext so it renders through the right UI
+/// component. The server only knows the transport content_type ("mls")
+/// but the payload itself is either a media metadata JSON blob (sent by
+/// media::send_media) or a plain chat message. Mirror the sender's local
+/// classification (media.rs stores "media" locally) so both ends agree.
+fn classify_decrypted(content: &str) -> String {
+    let is_media = serde_json::from_str::<serde_json::Value>(content)
+        .ok()
+        .and_then(|v| v.get("type").and_then(|t| t.as_str().map(String::from)))
+        == Some("media".to_string());
+    if is_media { "media".to_string() } else { "plaintext".to_string() }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ConversationWithDetails {
     pub conversation_id: String,
@@ -147,21 +160,24 @@ pub async fn get_messages(
             continue;
         }
 
-        let content = if msg.content_type == "mls" {
+        let (content, content_type) = if msg.content_type == "mls" {
             // Never decrypt our own MLS messages — the ratchet already advanced when we encrypted
             if msg.sender_id == current_user_id {
                 continue;
             }
             if let Some(ref ciphertext) = msg.content_bytes {
                 match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
-                    Ok(plaintext) => plaintext,
-                    Err(_) => "[encrypted message]".to_string(),
+                    Ok(plaintext) => {
+                        let ct = classify_decrypted(&plaintext);
+                        (plaintext, ct)
+                    }
+                    Err(_) => ("[encrypted message]".to_string(), "plaintext".to_string()),
                 }
             } else {
-                "[encrypted message]".to_string()
+                ("[encrypted message]".to_string(), "plaintext".to_string())
             }
         } else {
-            msg.content.clone()
+            (msg.content.clone(), msg.content_type.clone())
         };
 
         new_to_store.push(LocalMessage {
@@ -170,7 +186,7 @@ pub async fn get_messages(
             sender_id: msg.sender_id.clone(),
             content,
             timestamp: msg.timestamp,
-            content_type: msg.content_type.clone(),
+            content_type,
         });
     }
 
@@ -307,20 +323,23 @@ pub async fn fetch_new_messages(
             continue;
         }
 
-        let content = if msg.content_type == "mls" {
+        let (content, content_type) = if msg.content_type == "mls" {
             if msg.sender_id == current_user_id {
                 continue;
             }
             if let Some(ref ciphertext) = msg.content_bytes {
                 match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
-                    Ok(plaintext) => plaintext,
-                    Err(_) => "[encrypted message]".to_string(),
+                    Ok(plaintext) => {
+                        let ct = classify_decrypted(&plaintext);
+                        (plaintext, ct)
+                    }
+                    Err(_) => ("[encrypted message]".to_string(), "plaintext".to_string()),
                 }
             } else {
-                "[encrypted message]".to_string()
+                ("[encrypted message]".to_string(), "plaintext".to_string())
             }
         } else {
-            msg.content.clone()
+            (msg.content.clone(), msg.content_type.clone())
         };
 
         let local_msg = LocalMessage {
@@ -329,7 +348,7 @@ pub async fn fetch_new_messages(
             sender_id: msg.sender_id.clone(),
             content: content.clone(),
             timestamp: msg.timestamp,
-            content_type: msg.content_type.clone(),
+            content_type: content_type.clone(),
         };
 
         new_messages.push(Message {
@@ -338,7 +357,7 @@ pub async fn fetch_new_messages(
             sender_id: msg.sender_id.clone(),
             content,
             timestamp: msg.timestamp,
-            content_type: msg.content_type.clone(),
+            content_type,
             content_bytes: None,
             welcome_data: None,
         });
