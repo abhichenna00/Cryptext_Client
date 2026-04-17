@@ -118,6 +118,14 @@ export default function App() {
           }
         }
 
+        // Try to restore a prior session from the OS keyring. If successful,
+        // SessionStore and LocalDb are populated in the backend before
+        // get_session is called below. If the stored refresh token is
+        // revoked or the DB is missing, the command clears the keyring
+        // entry itself and returns an error — we swallow it here and fall
+        // back to the login form.
+        await invoke('session_restore').catch((err) => console.error('session_restore failed:', err))
+
         const currentSession = await invoke<PublicSessionInfo | null>('get_session')
         setSession(currentSession)
 
@@ -130,8 +138,8 @@ export default function App() {
             if (vaultExists) {
               const unlocked = await invoke<boolean>('is_vault_unlocked')
               if (!unlocked) {
-                // Vault exists but is locked (app restart). Force re-login
-                // so the user enters their password to unlock the vault.
+                // Vault exists but is locked (keyring restore failed and no
+                // password login happened yet). Force re-login.
                 await invoke('sign_out').catch(() => {})
                 setSession(null)
                 setHasProfile(false)
@@ -176,6 +184,7 @@ export default function App() {
 
   const handleSignOut = async () => {
     try {
+      await invoke('session_clear').catch((err) => console.error('session_clear failed:', err))
       await invoke('sign_out')
       setSession(null)
       setHasProfile(false)

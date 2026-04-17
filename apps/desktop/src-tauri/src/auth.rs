@@ -382,6 +382,50 @@ pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<b
     }
 }
 
+/// Bootstrap a session from a stored refresh token (used by keyring restore).
+/// Calls /auth/refresh with the given token, then populates SessionStore with
+/// a full Session on success. Leaves SessionStore untouched on failure.
+pub(crate) async fn bootstrap_from_refresh_token(
+    session_store: &State<'_, SessionStore>,
+    refresh_token: String,
+    user_id: String,
+) -> Result<(), String> {
+    let body = RefreshBody {
+        refresh_token: refresh_token.clone(),
+        username: user_id.clone(),
+    };
+    let response: ServerAuthResponse = http_client::post_no_auth("/auth/refresh", &body)
+        .await
+        .map_err(|e| format!("Refresh request failed: {}", e))?;
+
+    if !response.success {
+        return Err(response.error.unwrap_or_else(|| "Refresh rejected".to_string()));
+    }
+
+    let (access_token, id_token, resp_user_id, email, expires_at) = match (
+        response.access_token,
+        response.id_token,
+        response.user_id,
+        response.email,
+        response.expires_at,
+    ) {
+        (Some(a), Some(i), Some(u), Some(e), Some(x)) => (a, i, u, e, x),
+        _ => return Err("Refresh response missing required fields".to_string()),
+    };
+
+    let session = Session {
+        access_token,
+        refresh_token,
+        id_token,
+        user_id: resp_user_id,
+        email,
+        expires_at,
+    };
+    let mut store = session_store.session.lock_or_err()?;
+    *store = Some(session);
+    Ok(())
+}
+
 /// Sync OAuth session (for Google sign-in — future use)
 #[command]
 pub async fn sync_oauth_session(
