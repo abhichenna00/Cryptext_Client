@@ -33,26 +33,53 @@ export default function AuthPage() {
         password,
       })
 
-      if (result.success && result.user_id) {
-        // Set up or unlock the encrypted message database
-        try {
-          const vaultExists = await invoke<boolean>('has_vault', { userId: result.user_id })
-          if (vaultExists) {
-            await invoke('unlock_vault', { userId: result.user_id, pin: password })
-          } else {
-            await invoke('setup_vault', { userId: result.user_id, pin: password })
-          }
-        } catch (vaultErr) {
-          console.error('Vault initialization failed:', vaultErr)
+      if (!result.success) {
+        if (result.needs_confirmation) {
+          setError('Please confirm your email first. Check your inbox for a verification code.')
+        } else {
+          setError(result.error || 'Sign in failed')
         }
-        window.location.href = '/'
-      } else if (result.needs_confirmation) {
-        setError('Please confirm your email first. Check your inbox for a verification code.')
         setLoading(false)
-      } else {
-        setError(result.error || 'Sign in failed')
-        setLoading(false)
+        return
       }
+
+      if (!result.user_id) {
+        setError('Sign in did not return a user id')
+        setLoading(false)
+        return
+      }
+
+      const userId = result.user_id
+
+      // Unlock (or create) the local vault using the password. A failure here
+      // blocks everything downstream — surface it instead of redirecting.
+      try {
+        const vaultExists = await invoke<boolean>('has_vault', { userId })
+        if (vaultExists) {
+          await invoke('unlock_vault', { userId, secret: password })
+        } else {
+          const syncExists = await invoke<boolean>('sync_check_exists').catch(() => false)
+          if (syncExists) {
+            await invoke('sync_download_vault')
+            await invoke('unlock_vault', { userId, secret: password })
+            invoke('sync_restore_mls_state').catch(console.error)
+            invoke('sync_download_messages_db').catch(console.error)
+          } else {
+            await invoke('setup_vault', { userId, password })
+          }
+        }
+      } catch (vaultErr) {
+        console.error('Vault initialization failed:', vaultErr)
+        setError(`Could not unlock local storage: ${vaultErr instanceof Error ? vaultErr.message : String(vaultErr)}`)
+        setLoading(false)
+        return
+      }
+
+      // Fire-and-forget server sync of local state.
+      invoke('sync_upload_vault').catch(console.error)
+      invoke('sync_upload_mls_state').catch(console.error)
+
+      window.location.href = '/'
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setLoading(false)
@@ -98,9 +125,7 @@ export default function AuthPage() {
 
   return (
     <div className="auth-container relative">
-      {/* Full-page background grid */}
       <div className="auth-background">
-        {/* Mask wrapper */}
         <div
           className="absolute inset-0"
           style={{
@@ -129,7 +154,6 @@ export default function AuthPage() {
         </div>
       </div>
 
-      {/* Login card */}
       <Box maxWidth="400px" width="100%" className="relative z-10">
         <Card size="4" variant="surface">
           <Flex direction="column" gap="4">
@@ -166,16 +190,16 @@ export default function AuthPage() {
             </Flex>
 
             <Flex direction="column" gap="2">
-              <Button 
-                size="3" 
-                onClick={signInWithEmail} 
+              <Button
+                size="3"
+                onClick={signInWithEmail}
                 disabled={loading}
               >
                 {loading ? 'Signing in...' : 'Sign In'}
               </Button>
 
-              <Button 
-                size="3" 
+              <Button
+                size="3"
                 variant="soft"
                 onClick={() => navigate('/signup')}
               >

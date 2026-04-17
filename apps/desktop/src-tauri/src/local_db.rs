@@ -11,12 +11,14 @@ use crate::vault;
 
 pub struct LocalDb {
     pub conn: Mutex<Option<Connection>>,
+    pub dek: Mutex<Option<[u8; 32]>>,
 }
 
 impl Default for LocalDb {
     fn default() -> Self {
         Self {
             conn: Mutex::new(None),
+            dek: Mutex::new(None),
         }
     }
 }
@@ -103,13 +105,13 @@ pub fn has_vault(
     Ok(vault::vault_exists(&app_data, &user_id))
 }
 
-/// First-time setup: create vault with PIN and open encrypted database.
+/// First-time setup: create vault with password and open encrypted database.
 #[command]
 pub fn setup_vault(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
     user_id: String,
-    pin: String,
+    password: String,
 ) -> Result<(), String> {
     let app_data = app
         .path()
@@ -121,22 +123,18 @@ pub fn setup_vault(
         return Err("Vault already exists for this user".to_string());
     }
 
-    // Rename existing unencrypted DB for migration before creating encrypted one
     let db_path = app_data.join(format!("messages_{}.db", user_id));
     let unencrypted_path = app_data.join(format!("messages_{}.db.unencrypted", user_id));
     if db_path.exists() && !unencrypted_path.exists() {
         std::fs::rename(&db_path, &unencrypted_path)
             .map_err(|e| format!("Failed to rename old DB for migration: {}", e))?;
-        // Also clean up WAL/SHM files from the old unencrypted DB
         let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-wal", user_id)));
         let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-shm", user_id)));
     }
 
-    let dek = vault::create_vault(&app_data, &user_id, &pin)?;
+    let dek = vault::create_vault(&app_data, &user_id, &password)?;
     let conn = open_encrypted_db(&db_path, &dek)?;
     init_schema(&conn)?;
-
-    // Migrate any existing unencrypted messages
 
     if unencrypted_path.exists() {
         let msgs = {
@@ -154,7 +152,7 @@ pub fn setup_vault(
                 .filter_map(|r| r.ok())
                 .collect();
             results
-        }; // old_conn dropped here
+        };
 
         for msg in &msgs {
             let _ = conn.execute(
@@ -168,12 +166,68 @@ pub fn setup_vault(
 
     let mut guard = local_db.conn.lock_or_err()?;
     *guard = Some(conn);
+    let mut dek_guard = local_db.dek.lock_or_err()?;
+    *dek_guard = Some(*dek);
     Ok(())
 }
 
-/// Unlock existing vault with PIN and open encrypted database.
+/// Unlock vault with password (used on new device or first login).
 #[command]
 pub fn unlock_vault(
+    app: AppHandle,
+    local_db: State<'_, LocalDb>,
+    user_id: String,
+    secret: String,
+) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    let dek = vault::open_vault(&app_data, &user_id, &secret)?;
+    let db_path = app_data.join(format!("messages_{}.db", user_id));
+    let conn = open_encrypted_db(&db_path, &dek)?;
+    init_schema(&conn)?;
+
+    let mut guard = local_db.conn.lock_or_err()?;
+    *guard = Some(conn);
+    let mut dek_guard = local_db.dek.lock_or_err()?;
+    *dek_guard = Some(*dek);
+    Ok(())
+}
+
+// PIN / multi-method commands — disabled for now. Vault is unlocked by
+// password only. Re-enable if we reintroduce a PIN or additional unlock method.
+/*
+/// Ensure the "password" method exists in the vault (handles legacy migration).
+#[command]
+pub fn ensure_password_method(
+    app: AppHandle,
+    local_db: State<'_, LocalDb>,
+    user_id: String,
+    password: String,
+) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    let methods = vault::available_methods(&app_data, &user_id)?;
+    if methods.contains(&"password".to_string()) {
+        return Ok(());
+    }
+
+    let dek_guard = local_db.dek.lock_or_err()?;
+    let dek = dek_guard.ok_or("Vault not unlocked")?;
+
+    let path = vault::vault_path(&app_data, &user_id);
+    let entry = vault::create_wrapped_key_pub(password.as_bytes(), &dek)?;
+    vault::add_method(&app_data, &user_id, "password", entry)
+}
+
+/// Add a PIN convenience unlock method. Requires vault to be already unlocked (DEK in memory).
+#[command]
+pub fn add_pin(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
     user_id: String,
@@ -184,30 +238,70 @@ pub fn unlock_vault(
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
-    let dek = vault::open_vault(&app_data, &user_id, &pin)?;
-    let db_path = app_data.join(format!("messages_{}.db", user_id));
-    let conn = open_encrypted_db(&db_path, &dek)?;
-    init_schema(&conn)?;
+    let dek_guard = local_db.dek.lock_or_err()?;
+    let dek = dek_guard.ok_or("Vault not unlocked")?;
+    vault::add_pin_method(&app_data, &user_id, &dek, &pin)
+}
+*/
 
-    let mut guard = local_db.conn.lock_or_err()?;
-    *guard = Some(conn);
-    Ok(())
+/// Change the password. Re-wraps DEK with new password-derived KEK.
+#[command]
+pub fn change_password(
+    app: AppHandle,
+    user_id: String,
+    old_password: String,
+    new_password: String,
+) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    vault::change_password(&app_data, &user_id, &old_password, &new_password)
 }
 
-/// Change the encryption PIN.
+/*
+/// Change the PIN. Requires vault to be already unlocked (DEK in memory).
 #[command]
 pub fn change_pin(
     app: AppHandle,
+    local_db: State<'_, LocalDb>,
     user_id: String,
-    old_pin: String,
     new_pin: String,
 ) -> Result<(), String> {
     let app_data = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    vault::change_pin(&app_data, &user_id, &old_pin, &new_pin)
+
+    let dek_guard = local_db.dek.lock_or_err()?;
+    let dek = dek_guard.ok_or("Vault not unlocked")?;
+    vault::change_pin(&app_data, &user_id, &dek, &new_pin)
 }
+*/
+
+/// Check if the vault is currently unlocked (DEK in session memory).
+#[command]
+pub fn is_vault_unlocked(
+    local_db: State<'_, LocalDb>,
+) -> Result<bool, String> {
+    let guard = local_db.dek.lock_or_err()?;
+    Ok(guard.is_some())
+}
+
+/*
+/// Check which unlock methods are available for this user's vault.
+#[command]
+pub fn vault_methods(
+    app: AppHandle,
+    user_id: String,
+) -> Result<Vec<String>, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    vault::available_methods(&app_data, &user_id)
+}
+*/
 
 /// Legacy init for unencrypted DB — renamed to prepare for migration.
 #[command]

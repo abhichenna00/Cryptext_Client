@@ -125,18 +125,22 @@ export default function App() {
           const profile = await invoke('get_profile')
           setHasProfile(profile !== null)
 
-          // Initialize local message database
-          // Vault is unlocked at login time (AuthPage/SignupPage).
-          // On app restart with existing session, try legacy init (unencrypted).
-          // If vault exists, the lock screen will handle it.
           try {
             const vaultExists = await invoke<boolean>('has_vault', { userId: currentSession.user_id })
-            if (!vaultExists) {
-              // No vault yet — use legacy unencrypted DB
+            if (vaultExists) {
+              const unlocked = await invoke<boolean>('is_vault_unlocked')
+              if (!unlocked) {
+                // Vault exists but is locked (app restart). Force re-login
+                // so the user enters their password to unlock the vault.
+                await invoke('sign_out').catch(() => {})
+                setSession(null)
+                setHasProfile(false)
+                setLoading(false)
+                return
+              }
+            } else {
               await invoke('init_local_db', { userId: currentSession.user_id })
             }
-            // If vault exists, it was already unlocked during sign_in.
-            // If this is a session restore (app restart), we need the lock screen.
           } catch (dbErr) {
             console.error('Local DB initialization failed:', dbErr)
           }

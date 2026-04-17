@@ -1,9 +1,16 @@
 // src-tauri/src/vault.rs
 //
-// DEK/KEK key management for SQLCipher encryption.
-// The DEK (Data Encryption Key) encrypts the database.
-// The KEK (Key Encryption Key) is derived from the user's PIN via Argon2id and wraps the DEK.
-// The .vault file stores {salt, nonce, tag, encrypted_dek} — useless without the PIN.
+// Multi-method DEK/KEK key management for SQLCipher encryption.
+//
+// The DEK (Data Encryption Key) encrypts the database and MLS state.
+// Multiple unlock methods can independently wrap the same DEK:
+//   - "password" (primary) — derived from login password via Argon2id. Used for
+//     server-side sync/recovery. Always present.
+//   - "pin" (convenience) — derived from a short numeric PIN. Local-only fast unlock.
+//   - "biometric" (future) — OS-provided biometric key wraps the DEK.
+//
+// The .vault file stores one entry per method, each with its own salt/nonce/ciphertext.
+// None of these entries are useful without the corresponding secret.
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
@@ -12,6 +19,7 @@ use aes_gcm::{
 use argon2::{Argon2, Algorithm, Version, Params};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
@@ -22,21 +30,33 @@ const DEK_LEN: usize = 32;
 const SALT_LEN: usize = 16;
 const NONCE_LEN: usize = 12;
 
-#[derive(Serialize, Deserialize)]
-struct VaultFile {
+#[derive(Serialize, Deserialize, Clone)]
+pub struct WrappedKey {
     salt: Vec<u8>,
     nonce: Vec<u8>,
     encrypted_dek: Vec<u8>,
 }
 
-fn derive_kek(pin: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
+#[derive(Serialize, Deserialize)]
+struct VaultFile {
+    methods: HashMap<String, WrappedKey>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct LegacyVaultFile {
+    salt: Vec<u8>,
+    nonce: Vec<u8>,
+    encrypted_dek: Vec<u8>,
+}
+
+fn derive_kek(secret: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
     let params = Params::new(ARGON2_M_COST, ARGON2_T_COST, ARGON2_P_COST, Some(32))
         .map_err(|e| format!("Invalid Argon2 params: {}", e))?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
     let mut kek = Zeroizing::new([0u8; 32]);
     argon2
-        .hash_password_into(pin, salt, kek.as_mut())
+        .hash_password_into(secret, salt, kek.as_mut())
         .map_err(|e| format!("Argon2 derivation failed: {}", e))?;
 
     Ok(kek)
@@ -57,7 +77,7 @@ fn unwrap_dek(kek: &[u8; 32], encrypted_dek: &[u8], nonce_bytes: &[u8]) -> Resul
     let nonce = Nonce::from_slice(nonce_bytes);
     let decrypted = cipher
         .decrypt(nonce, encrypted_dek)
-        .map_err(|_| "Invalid PIN".to_string())?;
+        .map_err(|_| "Invalid credentials".to_string())?;
 
     if decrypted.len() != DEK_LEN {
         return Err("Decrypted DEK has wrong length".to_string());
@@ -68,6 +88,70 @@ fn unwrap_dek(kek: &[u8; 32], encrypted_dek: &[u8], nonce_bytes: &[u8]) -> Resul
     Ok(dek)
 }
 
+fn create_wrapped_key(secret: &[u8], dek: &[u8; 32]) -> Result<WrappedKey, String> {
+    let mut salt = [0u8; SALT_LEN];
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    let mut rng = rand::thread_rng();
+    rng.fill_bytes(&mut salt);
+    rng.fill_bytes(&mut nonce_bytes);
+
+    let kek = derive_kek(secret, &salt)?;
+    let encrypted_dek = wrap_dek(&kek, dek, &nonce_bytes)?;
+
+    Ok(WrappedKey {
+        salt: salt.to_vec(),
+        nonce: nonce_bytes.to_vec(),
+        encrypted_dek,
+    })
+}
+
+fn open_with_method(entry: &WrappedKey, secret: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
+    let kek = derive_kek(secret, &entry.salt)?;
+    unwrap_dek(&kek, &entry.encrypted_dek, &entry.nonce)
+}
+
+fn read_vault(path: &Path) -> Result<VaultFile, String> {
+    let data = std::fs::read(path)
+        .map_err(|e| format!("Failed to read vault file: {}", e))?;
+
+    if let Ok(vault) = serde_json::from_slice::<VaultFile>(&data) {
+        return Ok(vault);
+    }
+
+    // Migrate legacy single-method format. The old vault was created with the
+    // login password (passed as "pin"), so the entry belongs under "password".
+    let legacy: LegacyVaultFile = serde_json::from_slice(&data)
+        .map_err(|e| format!("Failed to parse vault file: {}", e))?;
+
+    let mut methods = HashMap::new();
+    methods.insert("password".to_string(), WrappedKey {
+        salt: legacy.salt,
+        nonce: legacy.nonce,
+        encrypted_dek: legacy.encrypted_dek,
+    });
+
+    let vault = VaultFile { methods };
+
+    let file = std::fs::File::create(path)
+        .map_err(|e| format!("Failed to migrate vault file: {}", e))?;
+    serde_json::to_writer(file, &vault)
+        .map_err(|e| format!("Failed to write migrated vault: {}", e))?;
+
+    Ok(vault)
+}
+
+fn write_vault(path: &Path, vault: &VaultFile) -> Result<(), String> {
+    let file = std::fs::File::create(path)
+        .map_err(|e| format!("Failed to create vault file: {}", e))?;
+    serde_json::to_writer(file, vault)
+        .map_err(|e| format!("Failed to write vault file: {}", e))?;
+    Ok(())
+}
+
+// ============================================
+// PUBLIC API
+// ============================================
+
 pub fn vault_path(app_data_dir: &Path, user_id: &str) -> PathBuf {
     app_data_dir.join(format!("{}.vault", user_id))
 }
@@ -76,72 +160,119 @@ pub fn vault_exists(app_data_dir: &Path, user_id: &str) -> bool {
     vault_path(app_data_dir, user_id).exists()
 }
 
-/// Create a new vault: generate random DEK, wrap with PIN-derived KEK, save to disk.
+/// Create a new vault with password as the primary unlock method.
 /// Returns the raw DEK for opening SQLCipher.
-pub fn create_vault(app_data_dir: &Path, user_id: &str, pin: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+pub fn create_vault(app_data_dir: &Path, user_id: &str, password: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     let mut dek = Zeroizing::new([0u8; DEK_LEN]);
-    let mut salt = [0u8; SALT_LEN];
-    let mut nonce_bytes = [0u8; NONCE_LEN];
+    rand::thread_rng().fill_bytes(dek.as_mut());
 
-    let mut rng = rand::thread_rng();
-    rng.fill_bytes(dek.as_mut());
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut nonce_bytes);
+    let password_entry = create_wrapped_key(password.as_bytes(), &dek)?;
 
-    let kek = derive_kek(pin.as_bytes(), &salt)?;
-    let encrypted_dek = wrap_dek(&kek, &dek, &nonce_bytes)?;
+    let mut methods = HashMap::new();
+    methods.insert("password".to_string(), password_entry);
 
-    let vault = VaultFile {
-        salt: salt.to_vec(),
-        nonce: nonce_bytes.to_vec(),
-        encrypted_dek,
-    };
-
+    let vault = VaultFile { methods };
     let path = vault_path(app_data_dir, user_id);
-    let file = std::fs::File::create(&path)
-        .map_err(|e| format!("Failed to create vault file: {}", e))?;
-    serde_json::to_writer(file, &vault)
-        .map_err(|e| format!("Failed to write vault file: {}", e))?;
+    write_vault(&path, &vault)?;
 
     Ok(dek)
 }
 
-/// Open an existing vault: derive KEK from PIN, unwrap DEK, return it.
-pub fn open_vault(app_data_dir: &Path, user_id: &str, pin: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+/// Open vault using the login password.
+pub fn open_vault_with_password(app_data_dir: &Path, user_id: &str, password: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     let path = vault_path(app_data_dir, user_id);
-    let file = std::fs::File::open(&path)
-        .map_err(|e| format!("Failed to open vault file: {}", e))?;
-    let vault: VaultFile = serde_json::from_reader(file)
-        .map_err(|e| format!("Failed to read vault file: {}", e))?;
+    let vault = read_vault(&path)?;
 
-    let kek = derive_kek(pin.as_bytes(), &vault.salt)?;
-    unwrap_dek(&kek, &vault.encrypted_dek, &vault.nonce)
+    let entry = vault.methods.get("password")
+        .ok_or_else(|| "No password unlock method in vault".to_string())?;
+
+    open_with_method(entry, password.as_bytes())
 }
 
-/// Change the PIN: unwrap DEK with old PIN, re-wrap with new PIN, overwrite vault file.
-pub fn change_pin(app_data_dir: &Path, user_id: &str, old_pin: &str, new_pin: &str) -> Result<(), String> {
-    let dek = open_vault(app_data_dir, user_id, old_pin)?;
+/// Open vault using a local PIN.
+pub fn open_vault_with_pin(app_data_dir: &Path, user_id: &str, pin: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+    let path = vault_path(app_data_dir, user_id);
+    let vault = read_vault(&path)?;
 
-    let mut salt = [0u8; SALT_LEN];
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    let mut rng = rand::thread_rng();
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut nonce_bytes);
+    let entry = vault.methods.get("pin")
+        .ok_or_else(|| "No PIN unlock method in vault. Please sign in with your password.".to_string())?;
 
-    let kek = derive_kek(new_pin.as_bytes(), &salt)?;
-    let encrypted_dek = wrap_dek(&kek, &dek, &nonce_bytes)?;
+    open_with_method(entry, pin.as_bytes())
+}
 
-    let vault = VaultFile {
-        salt: salt.to_vec(),
-        nonce: nonce_bytes.to_vec(),
-        encrypted_dek,
-    };
+/// Open vault with any available method (for backward compat — tries pin first, then password).
+pub fn open_vault(app_data_dir: &Path, user_id: &str, secret: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+    let path = vault_path(app_data_dir, user_id);
+    let vault = read_vault(&path)?;
+
+    for method in &["password", "pin"] {
+        if let Some(entry) = vault.methods.get(*method) {
+            if let Ok(dek) = open_with_method(entry, secret.as_bytes()) {
+                return Ok(dek);
+            }
+        }
+    }
+
+    Err("Invalid credentials".to_string())
+}
+
+/// Add a PIN convenience unlock to an existing vault. Requires the DEK (already unlocked).
+pub fn add_pin_method(app_data_dir: &Path, user_id: &str, dek: &[u8; 32], pin: &str) -> Result<(), String> {
+    let path = vault_path(app_data_dir, user_id);
+    let mut vault = read_vault(&path)?;
+
+    let pin_entry = create_wrapped_key(pin.as_bytes(), dek)?;
+    vault.methods.insert("pin".to_string(), pin_entry);
+
+    write_vault(&path, &vault)
+}
+
+/// Remove a specific unlock method from the vault.
+pub fn remove_method(app_data_dir: &Path, user_id: &str, method: &str) -> Result<(), String> {
+    if method == "password" {
+        return Err("Cannot remove the password method — it is required for sync/recovery".to_string());
+    }
 
     let path = vault_path(app_data_dir, user_id);
-    let file = std::fs::File::create(&path)
-        .map_err(|e| format!("Failed to create vault file: {}", e))?;
-    serde_json::to_writer(file, &vault)
-        .map_err(|e| format!("Failed to write vault file: {}", e))?;
+    let mut vault = read_vault(&path)?;
+    vault.methods.remove(method);
+    write_vault(&path, &vault)
+}
 
-    Ok(())
+/// Change the password: unwrap DEK with old password, re-wrap with new password.
+pub fn change_password(app_data_dir: &Path, user_id: &str, old_password: &str, new_password: &str) -> Result<(), String> {
+    let dek = open_vault_with_password(app_data_dir, user_id, old_password)?;
+
+    let path = vault_path(app_data_dir, user_id);
+    let mut vault = read_vault(&path)?;
+
+    let new_entry = create_wrapped_key(new_password.as_bytes(), &dek)?;
+    vault.methods.insert("password".to_string(), new_entry);
+
+    write_vault(&path, &vault)
+}
+
+/// Change the PIN: given the DEK (already unlocked), re-wrap with new PIN.
+pub fn change_pin(app_data_dir: &Path, user_id: &str, dek: &[u8; 32], new_pin: &str) -> Result<(), String> {
+    add_pin_method(app_data_dir, user_id, dek, new_pin)
+}
+
+/// Public wrapper for creating a wrapped key entry (used by local_db for migration).
+pub fn create_wrapped_key_pub(secret: &[u8], dek: &[u8; 32]) -> Result<WrappedKey, String> {
+    create_wrapped_key(secret, dek)
+}
+
+/// Add a named unlock method to an existing vault.
+pub fn add_method(app_data_dir: &Path, user_id: &str, method_name: &str, entry: WrappedKey) -> Result<(), String> {
+    let path = vault_path(app_data_dir, user_id);
+    let mut vault = read_vault(&path)?;
+    vault.methods.insert(method_name.to_string(), entry);
+    write_vault(&path, &vault)
+}
+
+/// Check which unlock methods are available in the vault.
+pub fn available_methods(app_data_dir: &Path, user_id: &str) -> Result<Vec<String>, String> {
+    let path = vault_path(app_data_dir, user_id);
+    let vault = read_vault(&path)?;
+    Ok(vault.methods.keys().cloned().collect())
 }
