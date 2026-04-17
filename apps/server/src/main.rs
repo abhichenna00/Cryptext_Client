@@ -6,12 +6,12 @@ pub mod redis;
 mod routes;
 mod ws;
 
-use axum::{Extension, Router};
-use std::net::SocketAddr;
-use tower_http::{
-    cors::{Any, CorsLayer},
-    trace::TraceLayer,
+use axum::{
+    http::{header, Method},
+    Extension, Router,
 };
+use std::net::SocketAddr;
+use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -57,10 +57,18 @@ async fn main() {
     let app_config = config::get_config();
 
     // 5. Build router
+    // Scoped CORS: the Tauri client reaches this server from reqwest in the
+    // Rust backend and doesn't send an Origin header, so this policy is
+    // primarily for future browser clients and dev tooling. Explicit allow
+    // list stops any random web origin from calling these endpoints.
     let cors = CorsLayer::new()
-        .allow_origin(Any) // Tighten this in production if needed
-        .allow_methods(Any)
-        .allow_headers(Any);
+        .allow_origin([
+            "tauri://localhost".parse().expect("valid origin"),
+            "https://tauri.localhost".parse().expect("valid origin"),
+            "http://localhost:1420".parse().expect("valid origin"),
+        ])
+        .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+        .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
     let app = Router::new()
         .merge(routes::build_router())

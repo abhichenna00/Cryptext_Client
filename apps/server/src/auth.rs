@@ -9,8 +9,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::HashMap;
 
-// JWKS cache TTL: 24 hours
-const JWKS_CACHE_TTL_SECS: u64 = 86400;
+// JWKS cache TTL: 1 hour. Short enough to pick up emergency Cognito key
+// rotation within a reasonable window; long enough to absorb normal traffic.
+const JWKS_CACHE_TTL_SECS: u64 = 3600;
 const JWKS_CACHE_KEY: &str = "jwks:keys";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
