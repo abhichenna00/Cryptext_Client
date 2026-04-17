@@ -5,6 +5,7 @@ pub mod media;
 pub mod mls;
 pub mod profile;
 pub mod google_oauth;
+pub mod sync;
 
 use axum::{
     routing::{delete, get, post, put},
@@ -80,6 +81,16 @@ pub fn build_router() -> Router {
         // Media routes
         .route("/media/upload", post(media::upload))
         .route("/media/download", get(media::download))
+
+        // Sync routes (encrypted state backup)
+        .route("/sync/vault", put(sync::upload_vault))
+        .route("/sync/vault", get(sync::download_vault))
+        .route("/sync/mls-state", put(sync::upload_mls_state))
+        .route("/sync/mls-state", get(sync::download_mls_state))
+        .route("/sync/messages-db", put(sync::upload_messages_db))
+        .route("/sync/messages-db", get(sync::download_messages_db))
+        .route("/sync", delete(sync::delete_all_sync_data))
+        .route("/sync/exists", get(sync::check_sync_exists))
 
         // MLS routes
         .route("/mls/key-packages", post(mls::upload_key_packages))

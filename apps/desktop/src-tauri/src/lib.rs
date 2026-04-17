@@ -9,6 +9,7 @@ mod local_db;
 mod media;
 mod mls;
 mod profile;
+mod sync;
 mod sync_utils;
 mod updates;
 mod vault;
@@ -110,6 +111,14 @@ pub fn run() {
             profile::update_status,
             profile::upload_avatar,
             profile::generate_placeholder,
+            // Sync (encrypted state backup)
+            sync::sync_upload_vault,
+            sync::sync_upload_mls_state,
+            sync::sync_upload_messages_db,
+            sync::sync_check_exists,
+            sync::sync_download_vault,
+            sync::sync_restore_mls_state,
+            sync::sync_download_messages_db,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
