@@ -9,6 +9,7 @@ mod local_db;
 mod media;
 mod mls;
 mod profile;
+mod sync;
 mod sync_utils;
 mod updates;
 mod vault;
@@ -84,7 +85,13 @@ pub fn run() {
             local_db::has_vault,
             local_db::setup_vault,
             local_db::unlock_vault,
-            local_db::change_pin,
+            // PIN / multi-method commands disabled — re-enable with local_db.rs.
+            // local_db::change_pin,
+            // local_db::ensure_password_method,
+            // local_db::add_pin,
+            // local_db::vault_methods,
+            local_db::change_password,
+            local_db::is_vault_unlocked,
             local_db::init_local_db,
             local_db::get_local_messages,
             local_db::store_decrypted_message,
@@ -110,6 +117,14 @@ pub fn run() {
             profile::update_status,
             profile::upload_avatar,
             profile::generate_placeholder,
+            // Sync (encrypted state backup)
+            sync::sync_upload_vault,
+            sync::sync_upload_mls_state,
+            sync::sync_upload_messages_db,
+            sync::sync_check_exists,
+            sync::sync_download_vault,
+            sync::sync_restore_mls_state,
+            sync::sync_download_messages_db,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

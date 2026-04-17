@@ -97,14 +97,12 @@ export default function SignupPage() {
         })
 
         if (signInResult.success && signInResult.user_id) {
-          // Create encrypted vault for message storage
           try {
-            await invoke('setup_vault', { userId: signInResult.user_id, pin: password })
+            await invoke('setup_vault', { userId: signInResult.user_id, password })
           } catch (vaultErr) {
             console.error('Vault setup failed:', vaultErr)
           }
 
-          // Generate and upload MLS key packages immediately after signup
           try {
             await invoke('mls_init')
             await invoke('mls_upload_key_packages')
@@ -114,6 +112,11 @@ export default function SignupPage() {
             setLoading(false)
             return
           }
+
+          // Initial sync upload — vault + MLS state to server
+          invoke('sync_upload_vault').catch(console.error)
+          invoke('sync_upload_mls_state').catch(console.error)
+
           navigate('/profile')
         } else {
           // Confirmed but sign-in failed, send to login page

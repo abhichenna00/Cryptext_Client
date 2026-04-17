@@ -122,6 +122,35 @@ pub async fn get_no_auth<T: DeserializeOwned>(path: &str) -> Result<T, String> {
     handle_response(response).await
 }
 
+/// Upload raw bytes with a PUT request.
+pub async fn put_bytes(path: &str, token: &str, body: Vec<u8>) -> Result<(), String> {
+    let url = format!("{}{}", server_url(), path);
+    let response = Client::builder()
+        .timeout(Duration::from_secs(300))
+        .connect_timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| format!("Failed to build upload client: {}", e))?
+        .put(&url)
+        .bearer_auth(token)
+        .header("content-type", "application/octet-stream")
+        .body(body)
+        .send()
+        .await
+        .map_err(|e| format!("Upload failed: {}", e))?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let _ = response.text().await;
+        return Err(format!("HTTP {}: Upload failed", status));
+    }
+    Ok(())
+}
+
+/// Download raw bytes with a GET request.
+pub async fn get_bytes(path: &str, token: &str) -> Result<Vec<u8>, String> {
+    download_binary(path, token).await
+}
+
 /// Upload a multipart form with a binary file and a conversation_id field.
 /// Uses a longer timeout (5 minutes) for large media uploads.
 pub async fn upload_multipart(
