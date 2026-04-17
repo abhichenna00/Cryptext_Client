@@ -228,14 +228,18 @@ async fn exchange_code_for_tokens(code: &str) -> Result<CognitoTokenResponse, Ap
 
     if !response.status().is_success() {
         let status = response.status();
+        // Body may contain Cognito-reflected user identifiers or other PII.
+        // Keep it at DEBUG (off by default in prod) and strip it from
+        // structured error messages that land in INFO/ERROR logs.
         let body = response
             .text()
             .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        tracing::error!("Cognito token exchange failed ({}): {}", status, body);
+            .unwrap_or_else(|_| String::new());
+        tracing::error!("Cognito token exchange failed: status {}", status);
+        tracing::debug!(status = %status, body = %body, "token exchange body");
         return Err(AppError::Internal(format!(
-            "Token exchange failed ({}): {}",
-            status, body
+            "Token exchange failed (status {})",
+            status
         )));
     }
 

@@ -15,12 +15,46 @@ use std::sync::Arc;
 use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 
 pub fn build_router() -> Router {
-    // Rate limit for message sending: 30 messages per second, burst of 10
+    // Per-IP rate limits.
+    //
+    //   - Global: 60 req/s, burst 30. Applied to the whole router below.
+    //     Covers /profile, /profiles, /friends/*, /media/*, /sync/*, /mls/*,
+    //     /conversations (read-only), etc.
+    //
+    //   - Auth sublayer: tight limit (1 req/5s, burst 5 = effectively ~5/min
+    //     sustained with brief bursts) wrapping /auth/*. Makes credential
+    //     stuffing, signup flooding, and confirmation-code brute force
+    //     (10^6 code space) infeasible without distributed traffic.
+    //
+    //   - Per-route: message send keeps its existing 30/s burst 10 on top
+    //     of the global layer.
+    let global_rate_limit = GovernorConfigBuilder::default()
+        .per_second(60)
+        .burst_size(30)
+        .finish()
+        .expect("Failed to build global rate limit config");
+    let auth_rate_limit = GovernorConfigBuilder::default()
+        .per_millisecond(5_000)
+        .burst_size(5)
+        .finish()
+        .expect("Failed to build auth rate limit config");
     let msg_rate_limit = GovernorConfigBuilder::default()
         .per_second(30)
         .burst_size(10)
         .finish()
         .expect("Failed to build message rate limit config");
+
+    let auth_routes = Router::new()
+        .route("/auth/signin", post(cognito::sign_in))
+        .route("/auth/signup", post(cognito::sign_up))
+        .route("/auth/confirm", post(cognito::confirm_sign_up))
+        .route("/auth/refresh", post(cognito::refresh_token))
+        .route("/auth/google/start", post(google_oauth::start_google_auth))
+        .route("/auth/google/callback", get(google_oauth::google_callback))
+        .route("/auth/google/status", get(google_oauth::google_auth_status))
+        .layer(GovernorLayer {
+            config: Arc::new(auth_rate_limit),
+        });
 
     Router::new()
         // Health
@@ -30,16 +64,8 @@ pub fn build_router() -> Router {
         .route("/ws", get(crate::ws::handler::ws_handler))
         .route("/config/ws", get(get_ws_config))
 
-        // Auth routes (no JWT required)
-        .route("/auth/signin", post(cognito::sign_in))
-        .route("/auth/signup", post(cognito::sign_up))
-        .route("/auth/confirm", post(cognito::confirm_sign_up))
-        .route("/auth/refresh", post(cognito::refresh_token))
-
-        // Google Auth Routes
-        .route("/auth/google/start", post(google_oauth::start_google_auth))
-        .route("/auth/google/callback", get(google_oauth::google_callback))
-        .route("/auth/google/status", get(google_oauth::google_auth_status))
+        // Auth routes (no JWT required, tight per-IP limit)
+        .merge(auth_routes)
 
         // Profile routes
         .route("/profile", get(profile::get_profile))
@@ -102,6 +128,12 @@ pub fn build_router() -> Router {
         .route("/mls/welcome", get(mls::fetch_welcomes))
         .route("/mls/commit", post(mls::fan_out_commit))
         .route("/mls/welcome-ack", post(mls::welcome_ack))
+
+        // Global per-IP rate limit applied to everything above.
+        // The auth and message-send sublayers above stack on top of this.
+        .layer(GovernorLayer {
+            config: Arc::new(global_rate_limit),
+        })
 }
 
 async fn health() -> axum::Json<serde_json::Value> {
