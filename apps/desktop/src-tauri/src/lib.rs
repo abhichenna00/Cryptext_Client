@@ -86,11 +86,6 @@ pub fn run() {
             local_db::has_vault,
             local_db::setup_vault,
             local_db::unlock_vault,
-            // PIN / multi-method commands disabled — re-enable with local_db.rs.
-            // local_db::change_pin,
-            // local_db::ensure_password_method,
-            // local_db::add_pin,
-            // local_db::vault_methods,
             local_db::change_password,
             local_db::is_vault_unlocked,
             local_db::init_local_db,

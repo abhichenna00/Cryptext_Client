@@ -189,18 +189,10 @@ pub fn open_vault_with_password(app_data_dir: &Path, user_id: &str, password: &s
     open_with_method(entry, password.as_bytes())
 }
 
-/// Open vault using a local PIN.
-pub fn open_vault_with_pin(app_data_dir: &Path, user_id: &str, pin: &str) -> Result<Zeroizing<[u8; 32]>, String> {
-    let path = vault_path(app_data_dir, user_id);
-    let vault = read_vault(&path)?;
-
-    let entry = vault.methods.get("pin")
-        .ok_or_else(|| "No PIN unlock method in vault. Please sign in with your password.".to_string())?;
-
-    open_with_method(entry, pin.as_bytes())
-}
-
-/// Open vault with any available method (for backward compat — tries pin first, then password).
+/// Open vault with any available method. Tries password first, then falls
+/// back to any other registered method. Today that's just the password
+/// entry — this shape is kept so the legacy-migration path from `read_vault`
+/// keeps working when it rewrites older single-method vault files.
 pub fn open_vault(app_data_dir: &Path, user_id: &str, secret: &str) -> Result<Zeroizing<[u8; 32]>, String> {
     let path = vault_path(app_data_dir, user_id);
     let vault = read_vault(&path)?;
@@ -216,29 +208,6 @@ pub fn open_vault(app_data_dir: &Path, user_id: &str, secret: &str) -> Result<Ze
     Err("Invalid credentials".to_string())
 }
 
-/// Add a PIN convenience unlock to an existing vault. Requires the DEK (already unlocked).
-pub fn add_pin_method(app_data_dir: &Path, user_id: &str, dek: &[u8; 32], pin: &str) -> Result<(), String> {
-    let path = vault_path(app_data_dir, user_id);
-    let mut vault = read_vault(&path)?;
-
-    let pin_entry = create_wrapped_key(pin.as_bytes(), dek)?;
-    vault.methods.insert("pin".to_string(), pin_entry);
-
-    write_vault(&path, &vault)
-}
-
-/// Remove a specific unlock method from the vault.
-pub fn remove_method(app_data_dir: &Path, user_id: &str, method: &str) -> Result<(), String> {
-    if method == "password" {
-        return Err("Cannot remove the password method — it is required for sync/recovery".to_string());
-    }
-
-    let path = vault_path(app_data_dir, user_id);
-    let mut vault = read_vault(&path)?;
-    vault.methods.remove(method);
-    write_vault(&path, &vault)
-}
-
 /// Change the password: unwrap DEK with old password, re-wrap with new password.
 pub fn change_password(app_data_dir: &Path, user_id: &str, old_password: &str, new_password: &str) -> Result<(), String> {
     let dek = open_vault_with_password(app_data_dir, user_id, old_password)?;
@@ -250,29 +219,4 @@ pub fn change_password(app_data_dir: &Path, user_id: &str, old_password: &str, n
     vault.methods.insert("password".to_string(), new_entry);
 
     write_vault(&path, &vault)
-}
-
-/// Change the PIN: given the DEK (already unlocked), re-wrap with new PIN.
-pub fn change_pin(app_data_dir: &Path, user_id: &str, dek: &[u8; 32], new_pin: &str) -> Result<(), String> {
-    add_pin_method(app_data_dir, user_id, dek, new_pin)
-}
-
-/// Public wrapper for creating a wrapped key entry (used by local_db for migration).
-pub fn create_wrapped_key_pub(secret: &[u8], dek: &[u8; 32]) -> Result<WrappedKey, String> {
-    create_wrapped_key(secret, dek)
-}
-
-/// Add a named unlock method to an existing vault.
-pub fn add_method(app_data_dir: &Path, user_id: &str, method_name: &str, entry: WrappedKey) -> Result<(), String> {
-    let path = vault_path(app_data_dir, user_id);
-    let mut vault = read_vault(&path)?;
-    vault.methods.insert(method_name.to_string(), entry);
-    write_vault(&path, &vault)
-}
-
-/// Check which unlock methods are available in the vault.
-pub fn available_methods(app_data_dir: &Path, user_id: &str) -> Result<Vec<String>, String> {
-    let path = vault_path(app_data_dir, user_id);
-    let vault = read_vault(&path)?;
-    Ok(vault.methods.keys().cloned().collect())
 }
