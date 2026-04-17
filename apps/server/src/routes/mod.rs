@@ -44,17 +44,27 @@ pub fn build_router() -> Router {
         .finish()
         .expect("Failed to build message rate limit config");
 
-    let auth_routes = Router::new()
+    // Credential-submission endpoints — tight limit. These are the
+    // brute-force targets (passwords, 6-digit confirmation codes, refresh
+    // tokens) and legitimate clients only call them at most a handful of
+    // times per session.
+    let credential_auth_routes = Router::new()
         .route("/auth/signin", post(cognito::sign_in))
         .route("/auth/signup", post(cognito::sign_up))
         .route("/auth/confirm", post(cognito::confirm_sign_up))
         .route("/auth/refresh", post(cognito::refresh_token))
         .route("/auth/google/start", post(google_oauth::start_google_auth))
-        .route("/auth/google/callback", get(google_oauth::google_callback))
-        .route("/auth/google/status", get(google_oauth::google_auth_status))
         .layer(GovernorLayer {
             config: Arc::new(auth_rate_limit),
         });
+
+    // Google OAuth polling + callback — only the global rate limit applies.
+    // The client polls /auth/google/status every 2s for up to 5min during
+    // the browser consent flow; the callback is hit once by Google's
+    // redirect in the user's browser. Neither is brute-forceable.
+    let oauth_flow_routes = Router::new()
+        .route("/auth/google/callback", get(google_oauth::google_callback))
+        .route("/auth/google/status", get(google_oauth::google_auth_status));
 
     Router::new()
         // Health
@@ -64,8 +74,9 @@ pub fn build_router() -> Router {
         .route("/ws", get(crate::ws::handler::ws_handler))
         .route("/config/ws", get(get_ws_config))
 
-        // Auth routes (no JWT required, tight per-IP limit)
-        .merge(auth_routes)
+        // Auth routes (no JWT required)
+        .merge(credential_auth_routes)
+        .merge(oauth_flow_routes)
 
         // Profile routes
         .route("/profile", get(profile::get_profile))
