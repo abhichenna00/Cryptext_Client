@@ -117,6 +117,9 @@ export default function SignupPage() {
           invoke('sync_upload_vault').catch(console.error)
           invoke('sync_upload_mls_state').catch(console.error)
 
+          // Persist session to OS keyring for auto-unlock on future launches.
+          await invoke('session_save').catch((err) => console.error('session_save failed:', err))
+
           navigate('/profile')
         } else {
           // Confirmed but sign-in failed, send to login page

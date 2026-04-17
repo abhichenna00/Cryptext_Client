@@ -92,6 +92,26 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("Failed to init schema: {}", e))
 }
 
+/// Mount a recovered DEK into LocalDb: open the encrypted DB, init schema,
+/// stash the connection and DEK in state. Used by session restore when the
+/// DEK comes from the OS keyring instead of password-derived unlock.
+pub(crate) fn mount_dek(
+    app_data: &Path,
+    local_db: &State<'_, LocalDb>,
+    user_id: &str,
+    dek: [u8; 32],
+) -> Result<(), String> {
+    let db_path = app_data.join(format!("messages_{}.db", user_id));
+    let conn = open_encrypted_db(&db_path, &dek)?;
+    init_schema(&conn)?;
+
+    let mut guard = local_db.conn.lock_or_err()?;
+    *guard = Some(conn);
+    let mut dek_guard = local_db.dek.lock_or_err()?;
+    *dek_guard = Some(dek);
+    Ok(())
+}
+
 /// Check if a vault (encryption PIN) has been set up for this user.
 #[command]
 pub fn has_vault(

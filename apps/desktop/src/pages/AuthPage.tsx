@@ -79,6 +79,12 @@ export default function AuthPage() {
       invoke('sync_upload_vault').catch(console.error)
       invoke('sync_upload_mls_state').catch(console.error)
 
+      // Persist session (DEK + refresh token) to OS keyring so subsequent
+      // launches can auto-restore without a login prompt. Non-fatal if it
+      // fails (e.g. no keyring daemon on headless Linux) — the user can
+      // still sign in manually next launch.
+      await invoke('session_save').catch((err) => console.error('session_save failed:', err))
+
       window.location.href = '/'
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))

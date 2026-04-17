@@ -9,6 +9,7 @@ mod local_db;
 mod media;
 mod mls;
 mod profile;
+mod session;
 mod sync;
 mod sync_utils;
 mod updates;
@@ -117,6 +118,11 @@ pub fn run() {
             profile::update_status,
             profile::upload_avatar,
             profile::generate_placeholder,
+            // Session persistence (OS keyring)
+            session::session_save,
+            session::session_stored,
+            session::session_restore,
+            session::session_clear,
             // Sync (encrypted state backup)
             sync::sync_upload_vault,
             sync::sync_upload_mls_state,
