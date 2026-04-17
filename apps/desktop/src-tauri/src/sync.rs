@@ -7,6 +7,7 @@ use aes_gcm::{aead::{Aead, KeyInit}, Aes256Gcm, Nonce};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use tauri::{command, AppHandle, Manager, State};
+use zeroize::Zeroizing;
 use crate::sync_utils::MutexExt;
 
 const NONCE_LEN: usize = 12;
@@ -44,9 +45,12 @@ fn decrypt_with_dek(dek: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>, String>
         .map_err(|_| "Decryption failed — wrong key or corrupted data".to_string())
 }
 
-fn get_dek(local_db: &State<'_, LocalDb>) -> Result<[u8; 32], String> {
+fn get_dek(local_db: &State<'_, LocalDb>) -> Result<Zeroizing<[u8; 32]>, String> {
     let guard = local_db.dek.lock_or_err()?;
-    guard.ok_or_else(|| "Vault not unlocked — no DEK available".to_string())
+    guard
+        .as_ref()
+        .cloned()
+        .ok_or_else(|| "Vault not unlocked — no DEK available".to_string())
 }
 
 // ============================================

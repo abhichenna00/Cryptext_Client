@@ -271,11 +271,18 @@ pub async fn confirm_sign_up(
     })
 }
 
-/// Sign out and clear the local session
+/// Sign out and clear the local session.
+/// Also wipes the in-memory DEK and closes the encrypted DB so the vault
+/// is no longer accessible in-process until the next unlock.
 #[command]
-pub async fn sign_out(session_store: State<'_, SessionStore>) -> Result<bool, String> {
+pub async fn sign_out(
+    session_store: State<'_, SessionStore>,
+    local_db: State<'_, crate::local_db::LocalDb>,
+) -> Result<bool, String> {
     let mut store = session_store.session.lock_or_err()?;
     *store = None;
+    drop(store);
+    let _ = crate::local_db::clear_vault_state(&local_db);
     Ok(true)
 }
 
