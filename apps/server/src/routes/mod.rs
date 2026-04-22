@@ -17,7 +17,11 @@ use tower_governor::{governor::GovernorConfigBuilder, GovernorLayer};
 pub fn build_router() -> Router {
     // Per-IP rate limits.
     //
-    //   - Global: 60 req/s, burst 30. Applied to the whole router below.
+    // Note on tower_governor's API: per_second/per_millisecond set the
+    // REPLENISHMENT PERIOD — i.e., "1 token every N units" — not the rate.
+    // So "60 req/s" needs period = 1000ms / 60 ≈ 17ms.
+    //
+    //   - Global: ~60 req/s, burst 30. Applied to the whole router below.
     //     Covers /profile, /profiles, /friends/*, /media/*, /sync/*, /mls/*,
     //     /conversations (read-only), etc.
     //
@@ -26,10 +30,10 @@ pub fn build_router() -> Router {
     //     stuffing, signup flooding, and confirmation-code brute force
     //     (10^6 code space) infeasible without distributed traffic.
     //
-    //   - Per-route: message send keeps its existing 30/s burst 10 on top
+    //   - Per-route: message send keeps its existing ~30/s burst 10 on top
     //     of the global layer.
     let global_rate_limit = GovernorConfigBuilder::default()
-        .per_second(60)
+        .per_millisecond(17)
         .burst_size(30)
         .finish()
         .expect("Failed to build global rate limit config");
@@ -39,7 +43,7 @@ pub fn build_router() -> Router {
         .finish()
         .expect("Failed to build auth rate limit config");
     let msg_rate_limit = GovernorConfigBuilder::default()
-        .per_second(30)
+        .per_millisecond(34)
         .burst_size(10)
         .finish()
         .expect("Failed to build message rate limit config");
