@@ -14,7 +14,7 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Tauri core
-tauri = { version = "2.10", features = [] }
+tauri = { version = "2.10", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = "2"
@@ -55,6 +55,7 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "linux-
 
 # Image processing (thumbnails)
 image = "0.25"
+blurhash = "0.2"
 urlencoding = "2"
 
 # MLS (E2E Encryption)

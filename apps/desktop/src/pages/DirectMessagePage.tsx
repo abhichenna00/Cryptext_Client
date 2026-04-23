@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import Avatar from '@/components/Avatar'
 import MediaMessage from '@/components/MediaMessage'
+import { extractVideoFirstFrame } from '@/lib/videoThumbnail'
 import '../styles/DirectMessagePage.css'
 
 interface ProfileInfo {
@@ -377,11 +378,20 @@ export default function DirectMessagePage() {
       const arrayBuffer = await selectedFile.arrayBuffer()
       const bytes = Array.from(new Uint8Array(arrayBuffer))
 
+      // For videos, extract the first frame client-side (WebView has the codec;
+      // Rust doesn't have ffmpeg). Null on failure → recipient sees a black card.
+      let videoThumbnailBytes: number[] | null = null
+      if (selectedFile.type.startsWith('video/')) {
+        const frame = await extractVideoFirstFrame(selectedFile)
+        if (frame) videoThumbnailBytes = Array.from(frame)
+      }
+
       const result = await invoke<MessageResult>('send_media', {
         conversationId,
         filePath: selectedFile.name,
         otherUserId: friendId,
         fileBytes: bytes,
+        videoThumbnailBytes,
       })
 
       if (result.success && result.message_id) {

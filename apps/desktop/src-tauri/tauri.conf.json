@@ -30,7 +30,11 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob:; connect-src 'self' https: wss:; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'; worker-src 'none'; manifest-src 'self'"
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data: blob: http://asset.localhost; media-src 'self' blob: http://asset.localhost; connect-src 'self' https: wss: http://asset.localhost; font-src 'self' data:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'none'; worker-src 'none'; manifest-src 'self'",
+      "assetProtocol": {
+        "enable": true,
+        "scope": ["$APPDATA/media_cache/**"]
+      }
     }
   },
   "bundle": {

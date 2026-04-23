@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import Avatar from '@/components/Avatar'
 import MediaMessage from '@/components/MediaMessage'
+import { extractVideoFirstFrame } from '@/lib/videoThumbnail'
 import '../styles/DirectMessagePage.css'
 
 interface ProfileInfo {
@@ -326,10 +327,18 @@ export default function GroupMessagePage() {
     try {
       const arrayBuffer = await selectedFile.arrayBuffer()
       const bytes = Array.from(new Uint8Array(arrayBuffer))
+
+      let videoThumbnailBytes: number[] | null = null
+      if (selectedFile.type.startsWith('video/')) {
+        const frame = await extractVideoFirstFrame(selectedFile)
+        if (frame) videoThumbnailBytes = Array.from(frame)
+      }
+
       const result = await invoke<MessageResult>('send_media', {
         conversationId,
         filePath: selectedFile.name,
         fileBytes: bytes,
+        videoThumbnailBytes,
       })
       if (result.success && result.message_id) {
         await loadMessages(conversationId)

@@ -34,6 +34,9 @@ pub struct MediaMetadata {
     pub thumb_s3_key: Option<String>,
     pub width: Option<u32>,
     pub height: Option<u32>,
+    pub thumb_width: Option<u32>,
+    pub thumb_height: Option<u32>,
+    pub blur_hash: Option<String>,
 }
 
 // ============================================
@@ -71,6 +74,18 @@ fn get_mime_type(ext: &str) -> Result<String, String> {
     }
 }
 
+fn ext_from_mime(mime: &str) -> &'static str {
+    match mime {
+        "image/jpeg" => "jpg",
+        "image/png" => "png",
+        "image/webp" => "webp",
+        "image/gif" => "gif",
+        "video/mp4" => "mp4",
+        "video/webm" => "webm",
+        _ => "bin",
+    }
+}
+
 fn is_image(ext: &str) -> bool {
     IMAGE_EXTENSIONS.contains(&ext)
 }
@@ -105,20 +120,43 @@ fn decrypt_bytes(key_b64: &str, nonce_b64: &str, ciphertext: &[u8]) -> Result<Ve
         .map_err(|e| format!("Decryption failed: {}", e))
 }
 
-fn generate_thumbnail(image_bytes: &[u8]) -> Result<(Vec<u8>, u32, u32), String> {
+struct ThumbnailOutput {
+    jpeg_bytes: Vec<u8>,
+    orig_w: u32,
+    orig_h: u32,
+    thumb_w: u32,
+    thumb_h: u32,
+    blur_hash: String,
+}
+
+/// Downscale arbitrary image bytes (PNG/JPEG/WebP/GIF/raw decoded video frame)
+/// into a JPEG thumbnail + blurhash in a single decode pass.
+fn generate_thumbnail(image_bytes: &[u8]) -> Result<ThumbnailOutput, String> {
     let img = image::load_from_memory(image_bytes)
         .map_err(|e| format!("Failed to load image: {}", e))?;
 
     let (orig_w, orig_h) = img.dimensions();
     let thumb = img.thumbnail(THUMBNAIL_MAX_DIM, THUMBNAIL_MAX_DIM);
-    let (_thumb_w, _thumb_h) = thumb.dimensions();
+    let (thumb_w, thumb_h) = thumb.dimensions();
+
+    let rgba = thumb.to_rgba8();
+    let (cx, cy) = if thumb_w >= thumb_h { (4, 3) } else { (3, 4) };
+    let blur_hash = blurhash::encode(cx, cy, thumb_w, thumb_h, rgba.as_raw())
+        .map_err(|e| format!("Failed to encode blurhash: {}", e))?;
 
     let mut buf = Cursor::new(Vec::new());
     thumb
         .write_to(&mut buf, image::ImageFormat::Jpeg)
         .map_err(|e| format!("Failed to encode thumbnail: {}", e))?;
 
-    Ok((buf.into_inner(), orig_w, orig_h))
+    Ok(ThumbnailOutput {
+        jpeg_bytes: buf.into_inner(),
+        orig_w,
+        orig_h,
+        thumb_w,
+        thumb_h,
+        blur_hash,
+    })
 }
 
 fn media_cache_dir(app: &AppHandle, conversation_id: &str) -> Result<PathBuf, String> {
@@ -153,6 +191,7 @@ pub async fn send_media(
     conversation_id: String,
     file_path: String,       // Original file name (for extension and display)
     file_bytes: Vec<u8>,     // Raw file bytes from frontend
+    video_thumbnail_bytes: Option<Vec<u8>>, // First-frame JPEG from frontend (videos only)
     other_user_id: Option<String>,
     session_store: State<'_, SessionStore>,
     mls_state: State<'_, MlsState>,
@@ -176,12 +215,31 @@ pub async fn send_media(
         return Err(format!("Unsupported file type: {}", ext));
     }
 
-    // 2. Generate thumbnail (images only)
-    let (thumbnail_bytes, width, height) = if is_image(&ext) {
-        let (thumb, w, h) = generate_thumbnail(&file_bytes)?;
-        (Some(thumb), Some(w), Some(h))
+    // 2. Generate thumbnail + blurhash.
+    //    - Images: decode the full file and downscale.
+    //    - Videos: use the pre-extracted first frame from the frontend (canvas).
+    //      If the frontend couldn't decode the codec, we skip thumbnail and blurhash —
+    //      the recipient renders a black placeholder card.
+    let thumb_output = if is_image(&ext) {
+        Some(generate_thumbnail(&file_bytes)?)
+    } else if let Some(ref frame_bytes) = video_thumbnail_bytes {
+        // Don't fail the whole send if the frame is somehow unreadable —
+        // degrade to no thumbnail rather than blocking the upload.
+        generate_thumbnail(frame_bytes).ok()
     } else {
-        (None, None, None)
+        None
+    };
+
+    let (thumbnail_bytes, width, height, thumb_width, thumb_height, blur_hash) = match &thumb_output {
+        Some(t) => (
+            Some(t.jpeg_bytes.clone()),
+            Some(t.orig_w),
+            Some(t.orig_h),
+            Some(t.thumb_w),
+            Some(t.thumb_h),
+            Some(t.blur_hash.clone()),
+        ),
+        None => (None, None, None, None, None, None),
     };
 
     // 3. Encrypt with random AES-256-GCM key
@@ -247,6 +305,9 @@ pub async fn send_media(
         thumb_s3_key,
         width,
         height,
+        thumb_width,
+        thumb_height,
+        blur_hash,
     };
 
     let metadata_json = serde_json::to_string(&metadata)
@@ -320,6 +381,7 @@ pub async fn download_media(
     s3_key: String,
     media_key: String,
     nonce: String,
+    media_type: String,
     conversation_id: String,
     message_id: String,
     is_thumbnail: bool,
@@ -339,17 +401,11 @@ pub async fn download_media(
 
     let decrypted = decrypt_bytes(&media_key, &nonce, &encrypted_bytes)?;
 
-    // Determine file extension from s3_key or default
-    let ext = if is_thumbnail {
-        "jpg".to_string()
-    } else {
-        s3_key
-            .rsplit('.')
-            .nth(1) // skip ".enc", get the part before
-            .and_then(|s| s.rsplit('.').next())
-            .unwrap_or("bin")
-            .to_string()
-    };
+    // The s3_key carries no original extension (server stores as {uuid}.enc),
+    // so derive it from the MLS-authenticated media_type. Tauri's asset
+    // protocol sets Content-Type from the extension via mime_guess — wrong
+    // extension means <video> tags won't play on WebView2.
+    let ext = if is_thumbnail { "jpg" } else { ext_from_mime(&media_type) };
 
     let cache_dir = media_cache_dir(&app, &conversation_id)?;
     let suffix = if is_thumbnail { "_thumb" } else { "" };
