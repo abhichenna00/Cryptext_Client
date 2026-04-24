@@ -341,6 +341,35 @@ pub fn get_latest_timestamp(
     Ok(result)
 }
 
+/// Return the most recent stored (decrypted) message per conversation, for
+/// the given ids. Used to render sidebar previews — the server only has the
+/// `[encrypted]` placeholder, so last-message text lives here.
+pub fn get_latest_messages_for_conversations(
+    db: &LocalDb,
+    conversation_ids: &[String],
+) -> Result<std::collections::HashMap<String, LocalMessage>, String> {
+    let guard = db.conn.lock_or_err()?;
+    let conn = guard.as_ref().ok_or("Local DB not initialized")?;
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, conversation_id, sender_id, content, timestamp, content_type
+             FROM messages
+             WHERE conversation_id = ?1
+             ORDER BY timestamp DESC, id DESC
+             LIMIT 1",
+        )
+        .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+    let mut result = std::collections::HashMap::new();
+    for cid in conversation_ids {
+        if let Ok(row) = stmt.query_row(params![cid], local_message_from_row) {
+            result.insert(cid.clone(), row);
+        }
+    }
+    Ok(result)
+}
+
 pub fn get_existing_message_ids(
     db: &LocalDb,
     conversation_id: &str,
