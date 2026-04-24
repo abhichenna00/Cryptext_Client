@@ -94,9 +94,27 @@ pub struct SendMessageBody {
 #[command]
 pub async fn get_conversations(
     session_store: State<'_, SessionStore>,
+    local_db: State<'_, LocalDb>,
 ) -> Result<Vec<ConversationWithDetails>, String> {
     let token = auth::get_token(&session_store)?;
-    http_client::get("/conversations", &token).await
+    let mut conversations: Vec<ConversationWithDetails> =
+        http_client::get("/conversations", &token).await?;
+
+    // The server only holds ciphertext, so its `last_message` is a generic
+    // `[encrypted]` placeholder. Substitute with the latest decrypted message
+    // from the local DB so the sidebar preview is readable.
+    let ids: Vec<String> = conversations.iter().map(|c| c.conversation_id.clone()).collect();
+    if let Ok(latest) = local_db::get_latest_messages_for_conversations(&local_db, &ids) {
+        for conv in &mut conversations {
+            if let Some(msg) = latest.get(&conv.conversation_id) {
+                conv.last_message = Some(msg.content.clone());
+                conv.last_message_time = Some(msg.timestamp);
+                conv.last_message_content_type = Some(msg.content_type.clone());
+            }
+        }
+    }
+
+    Ok(conversations)
 }
 
 #[command]
