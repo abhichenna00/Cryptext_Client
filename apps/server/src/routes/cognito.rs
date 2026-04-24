@@ -201,8 +201,17 @@ pub async fn sign_up(Json(req): Json<SignUpRequest>) -> AppResult<Json<AuthRespo
     if req.email.trim().is_empty() {
         return Ok(Json(error_response("Email is required")));
     }
+    if req.email.len() > 254 {
+        return Ok(Json(error_response("Email is too long")));
+    }
     if req.password.len() < 8 {
         return Ok(Json(error_response("Password must be at least 8 characters")));
+    }
+    if req.password.len() > 128 {
+        return Ok(Json(error_response("Password must be at most 128 characters")));
+    }
+    if req.password.trim().is_empty() {
+        return Ok(Json(error_response("Password cannot be all whitespace")));
     }
 
     let config = get_config();
