@@ -1,19 +1,27 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useParams } from 'react-router-dom'
+import {
+  ArrowDown,
+  Lock,
+  MoreVertical,
+  Paperclip,
+  Send,
+  X,
+} from 'lucide-react'
+
 import { useWebSocket, WebSocketMessage } from '@/hooks'
 import { ErrorMessage } from '@/components/ui/ErrorMessage'
-import { ArrowDown, Send, Paperclip, X } from 'lucide-react'
-import { Input } from '@/components/ui/input'
-import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import Avatar from '@/components/Avatar'
 import MediaMessage from '@/components/MediaMessage'
+import StatusPill from '@/components/StatusPill'
 import { extractVideoFirstFrame } from '@/lib/videoThumbnail'
-import '../styles/DirectMessagePage.css'
+import { cn } from '@/lib/utils'
 
 interface ProfileInfo {
   user_id: string
+  username?: string
   nickname: string
   avatar_url: string | null
   status: string | null
@@ -43,24 +51,44 @@ interface MessageResult {
   timestamp: number | null
 }
 
-function DateSeparator({ timestamp }: { timestamp: number }) {
-  const formatDate = (ts: number) => {
-    const date = new Date(ts)
-    const today = new Date()
-    const yesterday = new Date(today)
-    yesterday.setDate(yesterday.getDate() - 1)
+const MEDIA_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'webm']
 
-    if (date.toDateString() === today.toDateString()) return 'Today'
-    if (date.toDateString() === yesterday.toDateString()) return 'Yesterday'
-    return date.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })
-  }
+function formatDateLabel(ts: number) {
+  const date = new Date(ts)
+  const today = new Date()
+  const yesterday = new Date(today)
+  yesterday.setDate(yesterday.getDate() - 1)
+  if (date.toDateString() === today.toDateString()) return 'Today'
+  if (date.toDateString() === yesterday.toDateString()) return 'Yesterday'
+  return date.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' })
+}
 
+function formatTime(timestamp: number) {
+  return new Date(timestamp).toLocaleTimeString('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  })
+}
+
+function DaySeparator({ timestamp }: { timestamp: number }) {
   return (
-    <div className="dm-date-separator">
-      <div className="dm-date-separator-line" />
-      <span className="dm-date-separator-text">{formatDate(timestamp)}</span>
-      <div className="dm-date-separator-line" />
+    <div className="my-3 flex items-center gap-3 px-1">
+      <div className="h-px flex-1 bg-border" />
+      <span className="font-mono text-[10.5px] tracking-[0.08em] text-fg-muted uppercase">
+        {formatDateLabel(timestamp)}
+      </span>
+      <div className="h-px flex-1 bg-border" />
     </div>
+  )
+}
+
+function EncryptionChip() {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-[3px] font-mono text-[10.5px] tracking-[0.04em] text-[var(--ok)]">
+      <Lock size={10} strokeWidth={2} />
+      Encrypted
+    </span>
   )
 }
 
@@ -99,33 +127,22 @@ export default function DirectMessagePage() {
   useEffect(() => { isAtBottomRef.current = isAtBottom }, [isAtBottom])
 
   const handleWsMessage = useCallback(async (data: WebSocketMessage) => {
-    if (data.action === 'new_message') {
-      const notification = data.message as Message
-      if (notification.conversation_id !== conversationIdRef.current) return
+    if (data.action !== 'new_message') return
+    const notification = data.message as Message
+    if (notification.conversation_id !== conversationIdRef.current) return
+    if (notification.sender_id === userIdRef.current) return
 
-      // Skip own messages — we already have the plaintext from the optimistic send
-      if (notification.sender_id === userIdRef.current) return
-
-      // Fetch only new messages (faster than re-fetching everything)
-      try {
-        const newMessages = await invoke<Message[]>('fetch_new_messages', {
-          conversationId: notification.conversation_id,
-        })
-
-        if (newMessages.length > 0) {
-          setMessages((prev) => [...prev, ...newMessages])
-        }
-
-        if (conversationIdRef.current) {
-          invoke('mark_read', { conversationId: conversationIdRef.current }).catch(console.error)
-        }
-
-        if (isAtBottomRef.current) {
-          setTimeout(() => scrollToBottom(), 100)
-        }
-      } catch (err) {
-        console.error('Failed to fetch new messages:', err)
+    try {
+      const newMessages = await invoke<Message[]>('fetch_new_messages', {
+        conversationId: notification.conversation_id,
+      })
+      if (newMessages.length > 0) setMessages((prev) => [...prev, ...newMessages])
+      if (conversationIdRef.current) {
+        invoke('mark_read', { conversationId: conversationIdRef.current }).catch(console.error)
       }
+      if (isAtBottomRef.current) setTimeout(() => scrollToBottom(), 100)
+    } catch (err) {
+      console.error('Failed to fetch new messages:', err)
     }
   }, [])
 
@@ -137,7 +154,7 @@ export default function DirectMessagePage() {
     if (messages.length > previousMessageCount.current) {
       const newCount = messages.length - previousMessageCount.current
       if (!isAtBottom && previousMessageCount.current > 0) {
-        setNewMessageCount(prev => prev + newCount)
+        setNewMessageCount((prev) => prev + newCount)
       }
     }
     previousMessageCount.current = messages.length
@@ -146,7 +163,6 @@ export default function DirectMessagePage() {
   const loadMoreMessages = useCallback(async () => {
     if (!conversationIdRef.current || loadingMore || !hasMore) return
     setLoadingMore(true)
-
     try {
       const oldestMessage = messages.length > 0 ? messages[0] : undefined
       const older = await invoke<Message[]>('get_local_messages', {
@@ -155,19 +171,14 @@ export default function DirectMessagePage() {
         beforeTimestamp: oldestMessage?.timestamp,
         beforeId: oldestMessage?.id,
       })
-
       if (older.length === 0) {
         setHasMore(false)
       } else {
         const container = messagesContainerRef.current
         const prevScrollHeight = container?.scrollHeight || 0
-
         setMessages((prev) => [...older, ...prev])
-
         requestAnimationFrame(() => {
-          if (container) {
-            container.scrollTop = container.scrollHeight - prevScrollHeight
-          }
+          if (container) container.scrollTop = container.scrollHeight - prevScrollHeight
         })
       }
     } catch (err) {
@@ -183,10 +194,7 @@ export default function DirectMessagePage() {
     const atBottom = scrollHeight - scrollTop - clientHeight < 50
     setIsAtBottom(atBottom)
     if (atBottom) setNewMessageCount(0)
-
-    if (scrollTop < 100 && hasMore && !loadingMore) {
-      loadMoreMessages()
-    }
+    if (scrollTop < 100 && hasMore && !loadingMore) loadMoreMessages()
   }, [hasMore, loadingMore, loadMoreMessages])
 
   const scrollToBottom = () => {
@@ -200,7 +208,6 @@ export default function DirectMessagePage() {
       setLoading(false)
       return
     }
-
     try {
       const id = await invoke<string | null>('get_user_id')
       if (!id) {
@@ -208,7 +215,6 @@ export default function DirectMessagePage() {
         return
       }
       setUserId(id)
-
       await loadProfiles(id)
 
       const result = await invoke<DmResult>('get_or_create_dm', { otherUserId: friendId })
@@ -217,15 +223,9 @@ export default function DirectMessagePage() {
         setLoading(false)
         return
       }
-
       setConversationId(result.conversation_id)
 
-      // Fetch any pending Welcome messages to join MLS groups
-      try {
-        await invoke('mls_fetch_welcomes')
-      } catch (err) {
-        console.error('Failed to fetch welcomes:', err)
-      }
+      await invoke('mls_fetch_welcomes').catch((err) => console.error('Failed to fetch welcomes:', err))
 
       await loadMessages(result.conversation_id)
       await invoke('mark_read', { conversationId: result.conversation_id })
@@ -243,7 +243,7 @@ export default function DirectMessagePage() {
       const profiles = await invoke<ProfileInfo[]>('get_profiles_by_ids', {
         userIds: [friendId, currentUserId],
       })
-      profiles.forEach(profile => {
+      profiles.forEach((profile) => {
         if (profile.user_id === friendId) setPartnerProfile(profile)
         else if (profile.user_id === currentUserId) setMyProfile(profile)
       })
@@ -267,7 +267,6 @@ export default function DirectMessagePage() {
 
   const sendMessage = async () => {
     if (!newMessage.trim() || !conversationId || sending || !userId) return
-
     const messageContent = newMessage.trim()
     setNewMessage('')
     setSending(true)
@@ -280,7 +279,6 @@ export default function DirectMessagePage() {
       content: messageContent,
       timestamp: Date.now(),
     }
-
     setMessages((prev) => [...prev, optimisticMessage])
     setTimeout(() => scrollToBottom(), 100)
 
@@ -290,18 +288,14 @@ export default function DirectMessagePage() {
         content: messageContent,
         otherUserId: friendId,
       })
-
       if (result.success && result.message_id) {
-        // Replace optimistic message with real server ID
         setMessages((prev) =>
           prev.map((m) =>
             m.id === optimisticMessage.id
               ? { ...m, id: result.message_id!, timestamp: result.timestamp || m.timestamp }
-              : m
-          )
+              : m,
+          ),
         )
-
-        // Notify other clients via WebSocket that a new message is available
         wsSend({
           action: 'new_message',
           message: {
@@ -326,8 +320,6 @@ export default function DirectMessagePage() {
       setSending(false)
     }
   }
-
-  const MEDIA_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp', 'gif', 'mp4', 'webm']
 
   const handleFileSelect = (file: File) => {
     const ext = file.name.split('.').pop()?.toLowerCase() || ''
@@ -369,17 +361,12 @@ export default function DirectMessagePage() {
 
   const sendMedia = async () => {
     if (!selectedFile || !conversationId || sendingMedia || !userId) return
-
     setSendingMedia(true)
     setError(null)
-
     try {
-      // Write file to a temp path so Rust can read it
       const arrayBuffer = await selectedFile.arrayBuffer()
       const bytes = Array.from(new Uint8Array(arrayBuffer))
 
-      // For videos, extract the first frame client-side (WebView has the codec;
-      // Rust doesn't have ffmpeg). Null on failure → recipient sees a black card.
       let videoThumbnailBytes: number[] | null = null
       if (selectedFile.type.startsWith('video/')) {
         const frame = await extractVideoFirstFrame(selectedFile)
@@ -395,10 +382,8 @@ export default function DirectMessagePage() {
       })
 
       if (result.success && result.message_id) {
-        // Reload messages to show the new media message
         await loadMessages(conversationId)
         setTimeout(() => scrollToBottom(), 100)
-
         wsSend({
           action: 'new_message',
           message: {
@@ -420,9 +405,6 @@ export default function DirectMessagePage() {
     }
   }
 
-  const formatTime = (timestamp: number) =>
-    new Date(timestamp).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true })
-
   const getProfile = (senderId: string): ProfileInfo | null =>
     senderId === userId ? myProfile : partnerProfile
 
@@ -440,150 +422,253 @@ export default function DirectMessagePage() {
   }
 
   if (loading) {
-    return <div className="dm-page"><div className="dm-loading">Loading...</div></div>
+    return <div className="grid h-full place-items-center text-fg-muted">Loading…</div>
   }
 
   if (!friendId) {
-    return <div className="dm-page"><div className="dm-error">Invalid conversation</div></div>
+    return <div className="grid h-full place-items-center text-[var(--danger)]">Invalid conversation</div>
   }
 
   return (
-    <div className="dm-page">
-      <ErrorMessage error={error} className="dm-error-banner" />
-
-      <ScrollArea
-        viewportRef={messagesContainerRef}
-        viewportProps={{ onScroll: handleScroll }}
-        onDragOver={handleDragOver}
-        onDragLeave={handleDragLeave}
-        onDrop={handleDrop}
-        className={`dm-messages ${isDragOver ? 'dm-messages-dragover' : ''}`}
-      >
-        <div className="dm-messages-inner">
-        <div className="dm-conversation-intro">
-          <Avatar src={partnerProfile?.avatar_url} fallback={partnerProfile?.nickname || 'U'} size="lg" status={partnerProfile?.status} showStatus />
-          <h2>{partnerProfile?.nickname || 'Unknown User'}</h2>
-          <p>
-            This is the beginning of your direct message history with{' '}
-            <strong>{partnerProfile?.nickname || 'this user'}</strong>.
-          </p>
-        </div>
-        {messages.length > 0 && (
-          messages.map((msg, index) => {
-            const profile = getProfile(msg.sender_id)
-            const showHeader = shouldShowHeader(msg, index)
-            const showDateSeparator = isNewDay(msg, index)
-
-            return (
-              <div key={msg.id}>
-                {showDateSeparator && <DateSeparator timestamp={msg.timestamp} />}
-                <div className={`dm-message ${showHeader ? 'dm-message-with-header' : 'dm-message-grouped'}`}>
-                  {showHeader ? (
-                    <>
-                      <Avatar src={profile?.avatar_url} fallback={profile?.nickname || 'U'} size="md" className="dm-message-avatar" />
-                      <div className="dm-message-body">
-                        <div className="dm-message-header">
-                          <span className="dm-message-author">{profile?.nickname || 'Unknown'}</span>
-                          <span className="dm-message-timestamp">{formatTime(msg.timestamp)}</span>
-                        </div>
-                        {msg.content_type === 'media' ? (
-                          <MediaMessage messageId={msg.id} content={msg.content} conversationId={msg.conversation_id} />
-                        ) : (
-                          <div className="dm-message-content">{msg.content}</div>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="dm-message-gutter">
-                        <span className="dm-message-timestamp-hover">{formatTime(msg.timestamp)}</span>
-                      </div>
-                      <div className="dm-message-body">
-                        {msg.content_type === 'media' ? (
-                          <MediaMessage messageId={msg.id} content={msg.content} conversationId={msg.conversation_id} />
-                        ) : (
-                          <div className="dm-message-content">{msg.content}</div>
-                        )}
-                      </div>
-                    </>
-                  )}
-                </div>
-              </div>
-            )
-          })
-        )}
-        <div ref={messagesEndRef} />
-        </div>
-      </ScrollArea>
-
-      {newMessageCount > 0 && (
-        <div className="dm-new-messages" onClick={scrollToBottom}>
-          <span>{newMessageCount} new message{newMessageCount > 1 ? 's' : ''} below</span>
-          <ArrowDown className="h-4 w-4" />
+    <div className="flex h-full min-h-0 flex-col bg-bg">
+      {error && (
+        <div className="border-b border-border">
+          <ErrorMessage error={error} />
         </div>
       )}
 
-      <footer className="dm-input-container">
+      {/* Header */}
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4">
+        <div className="flex items-center gap-3">
+          <Avatar
+            src={partnerProfile?.avatar_url}
+            fallback={partnerProfile?.nickname || 'U'}
+            size="md"
+            status={partnerProfile?.status}
+            showStatus
+          />
+          <div className="min-w-0">
+            <div className="truncate text-[14px] font-semibold tracking-[-0.005em] text-fg">
+              {partnerProfile?.nickname || 'Unknown User'}
+            </div>
+            <div className="flex items-center gap-2 leading-none">
+              {partnerProfile?.username && (
+                <span className="truncate font-mono text-[10.5px] tracking-[0.02em] text-fg-muted">
+                  @{partnerProfile.username}
+                </span>
+              )}
+              <StatusPill status={partnerProfile?.status} />
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <EncryptionChip />
+          <button
+            type="button"
+            className="grid size-7 place-items-center rounded-md text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg"
+            title="More"
+          >
+            <MoreVertical size={16} strokeWidth={1.75} />
+          </button>
+        </div>
+      </header>
+
+      {/* Body */}
+      <div
+        className={cn(
+          'relative flex-1 min-h-0',
+          isDragOver && 'after:pointer-events-none after:absolute after:inset-2 after:rounded-lg after:border-2 after:border-dashed after:border-[var(--brand)] after:bg-[var(--brand-soft)]',
+        )}
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
+        <ScrollArea
+          viewportRef={messagesContainerRef}
+          viewportProps={{ onScroll: handleScroll }}
+          className="h-full"
+        >
+          <div className="flex flex-col gap-0.5 px-5 py-4">
+            {/* Intro block */}
+            <div className="mb-4 flex flex-col items-center gap-3 py-6 text-center">
+              <Avatar
+                src={partnerProfile?.avatar_url}
+                fallback={partnerProfile?.nickname || 'U'}
+                size="xl"
+                status={partnerProfile?.status}
+                showStatus
+              />
+              <div>
+                <h2 className="text-[18px] font-semibold tracking-[-0.01em] text-fg">
+                  {partnerProfile?.nickname || 'Unknown User'}
+                </h2>
+                <p className="mt-1 text-[13px] text-fg-muted">
+                  This is the beginning of your direct message history with{' '}
+                  {partnerProfile?.username ? (
+                    <span className="font-mono text-fg">@{partnerProfile.username}</span>
+                  ) : (
+                    <strong className="text-fg">{partnerProfile?.nickname || 'this user'}</strong>
+                  )}
+                  .
+                </p>
+              </div>
+            </div>
+
+            {/* Messages */}
+            {messages.map((msg, index) => {
+              const profile = getProfile(msg.sender_id)
+              const showHeader = shouldShowHeader(msg, index)
+              const showDate = isNewDay(msg, index)
+              const isMedia = msg.content_type === 'media'
+
+              return (
+                <div key={msg.id}>
+                  {showDate && <DaySeparator timestamp={msg.timestamp} />}
+                  <div
+                    className={cn(
+                      'group/msg grid grid-cols-[36px_1fr] gap-x-2',
+                      showHeader ? 'mt-3' : 'mt-0.5',
+                    )}
+                  >
+                    {showHeader ? (
+                      <Avatar
+                        src={profile?.avatar_url}
+                        fallback={profile?.nickname || 'U'}
+                        size="sm"
+                        className="mt-0.5"
+                      />
+                    ) : (
+                      <span className="select-none pt-[3px] text-right font-mono text-[10px] text-fg-dim opacity-0 transition-opacity group-hover/msg:opacity-100">
+                        {formatTime(msg.timestamp)}
+                      </span>
+                    )}
+                    <div className="min-w-0">
+                      {showHeader && (
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-[13.5px] font-semibold tracking-[-0.005em] text-fg">
+                            {profile?.nickname || 'Unknown'}
+                          </span>
+                          <span className="font-mono text-[10.5px] tracking-[0.02em] text-fg-dim">
+                            {formatTime(msg.timestamp)}
+                          </span>
+                        </div>
+                      )}
+                      {isMedia ? (
+                        <div className="mt-0.5">
+                          <MediaMessage
+                            messageId={msg.id}
+                            content={msg.content}
+                            conversationId={msg.conversation_id}
+                          />
+                        </div>
+                      ) : (
+                        <div className="text-[14px] leading-[1.5] tracking-[-0.003em] text-fg break-words whitespace-pre-wrap">
+                          {msg.content}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )
+            })}
+
+            <div ref={messagesEndRef} />
+          </div>
+        </ScrollArea>
+
+        {newMessageCount > 0 && (
+          <button
+            onClick={scrollToBottom}
+            className={cn(
+              'absolute right-4 bottom-4 flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-[12.5px] text-fg shadow-[var(--shadow-card)]',
+              'hover:bg-surface-2 transition-colors',
+            )}
+          >
+            <span>{newMessageCount} new message{newMessageCount > 1 ? 's' : ''} below</span>
+            <ArrowDown size={14} strokeWidth={1.75} />
+          </button>
+        )}
+      </div>
+
+      {/* Composer */}
+      <footer className="shrink-0 border-t border-border bg-surface px-4 py-3">
         {selectedFile && (
-          <div className="dm-media-preview">
+          <div className="mb-2 flex items-center gap-2 rounded-md border border-border bg-surface-2 p-2">
             {filePreviewUrl ? (
-              <img src={filePreviewUrl} alt="Preview" className="dm-media-preview-image" />
+              <img src={filePreviewUrl} alt="" className="size-10 rounded object-cover" />
             ) : (
-              <div className="dm-media-preview-file">
-                <span>{selectedFile.name}</span>
+              <div className="grid size-10 place-items-center rounded bg-surface-3 font-mono text-[10px] text-fg-dim">
+                {(selectedFile.name.split('.').pop() || 'file').toUpperCase()}
               </div>
             )}
-            <button className="dm-media-preview-close" onClick={clearSelectedFile}>
-              <X className="h-4 w-4" />
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-fg">
+              {selectedFile.name}
+            </span>
+            <button
+              type="button"
+              onClick={clearSelectedFile}
+              className="grid size-6 place-items-center rounded text-fg-muted hover:bg-surface-3 hover:text-fg"
+            >
+              <X size={14} strokeWidth={1.75} />
             </button>
           </div>
         )}
-        <div className="dm-input-row">
+
+        <div className="flex items-end gap-2">
           <input
             ref={fileInputRef}
             type="file"
             accept=".jpg,.jpeg,.png,.webp,.gif,.mp4,.webm"
-            className="dm-file-input"
+            className="hidden"
             onChange={(e) => {
               const file = e.target.files?.[0]
               if (file) handleFileSelect(file)
             }}
           />
-          <Button
-            variant="ghost"
-            size="icon"
-            className="dm-attach-button"
+          <button
+            type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={sendingMedia}
+            className="grid size-8 shrink-0 place-items-center rounded-md text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg disabled:cursor-not-allowed disabled:opacity-50"
+            title="Attach file"
           >
-            <Paperclip className="h-4 w-4" />
-          </Button>
-          <Input
-            type="text"
+            <Paperclip size={16} strokeWidth={1.75} />
+          </button>
+          <textarea
+            rows={1}
             value={newMessage}
             onChange={(e) => setNewMessage(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault()
-                if (selectedFile) {
-                  sendMedia()
-                } else {
-                  sendMessage()
-                }
+                if (selectedFile) sendMedia()
+                else sendMessage()
               }
             }}
-            placeholder={`Message @${partnerProfile?.nickname || 'user'}`}
-            className="dm-input"
+            placeholder={`Message @${partnerProfile?.username || partnerProfile?.nickname || 'user'}`}
             disabled={sending || sendingMedia}
+            className={cn(
+              'max-h-40 min-h-[32px] w-full resize-none rounded-md border border-border bg-bg px-3 py-1.5 text-[13.5px] text-fg placeholder:text-fg-dim',
+              'focus:outline-none focus-visible:border-[var(--brand)] focus-visible:ring-2 focus-visible:ring-[var(--brand-soft)]',
+              'disabled:cursor-not-allowed disabled:opacity-60',
+            )}
           />
-          <Button
+          <button
+            type="button"
             onClick={selectedFile ? sendMedia : sendMessage}
-            size="icon"
             disabled={(sending || sendingMedia) || (!selectedFile && !newMessage.trim())}
-            className="dm-send-button"
+            className={cn(
+              'grid size-8 shrink-0 place-items-center rounded-full bg-[var(--brand)] text-[var(--brand-fg)] transition-opacity',
+              'hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40',
+            )}
+            title="Send"
           >
-            <Send className="h-4 w-4" />
-          </Button>
+            <Send size={14} strokeWidth={1.75} />
+          </button>
+        </div>
+
+        <div className="mt-1.5 px-0.5 font-mono text-[10.5px] tracking-[0.02em] text-fg-dim">
+          enter to send · shift+enter for newline
         </div>
       </footer>
     </div>
