@@ -7,12 +7,10 @@ import { Theme } from '@radix-ui/themes'
 import '@radix-ui/themes/styles.css'
 import './App.css'
 
-import { AppSidebar } from '@/components/AppSidebar'
-import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
+import { useTheme } from '@/hooks'
 
 import SplashPage from './pages/SplashPage'
 import AuthPage from './pages/AuthPage'
-import SignupPage from './pages/SignupPage'
 import HomePage from './pages/HomePage'
 import ChatPage from './pages/ChatPage'
 import ProfilePage from './pages/ProfilePage'
@@ -30,70 +28,13 @@ interface PublicSessionInfo {
   is_authenticated: boolean
 }
 
-// ── Hooks ──
-
-function useSystemTheme() {
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof window !== 'undefined') {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-    }
-    return 'light'
-  })
-
-  useEffect(() => {
-    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
-    const handler = (e: MediaQueryListEvent) => setTheme(e.matches ? 'dark' : 'light')
-
-    mediaQuery.addEventListener('change', handler)
-    return () => mediaQuery.removeEventListener('change', handler)
-  }, [])
-
-  useEffect(() => {
-    const root = document.documentElement
-    if (theme === 'dark') {
-      root.classList.add('dark')
-    } else {
-      root.classList.remove('dark')
-    }
-  }, [theme])
-
-  return theme
-}
-
 function LegacyChatRedirect() {
   const { friendId } = useParams<{ friendId: string }>()
   return <Navigate to={friendId ? `/home/chat/${friendId}` : '/home'} replace />
 }
 
-// ── Layout ──
-
-function AppLayout({
-  children,
-  showSidebar,
-  onSignOut
-}: {
-  children: React.ReactNode
-  showSidebar: boolean
-  onSignOut: () => void
-}) {
-  if (!showSidebar) {
-    return <>{children}</>
-  }
-
-  return (
-    <SidebarProvider defaultOpen={false}>
-      <AppSidebar onSignOut={onSignOut} />
-      <SidebarInset>
-        {children}
-      </SidebarInset>
-    </SidebarProvider>
-  )
-}
-
-// ── App ──
-
 export default function App() {
-  const systemTheme = useSystemTheme()
+  const { theme } = useTheme()
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<PublicSessionInfo | null>(null)
   const [hasProfile, setHasProfile] = useState(false)
@@ -118,12 +59,10 @@ export default function App() {
           }
         }
 
-        // Try to restore a prior session from the OS keyring. If successful,
-        // SessionStore and LocalDb are populated in the backend before
-        // get_session is called below. If the stored refresh token is
-        // revoked or the DB is missing, the command clears the keyring
-        // entry itself and returns an error — we swallow it here and fall
-        // back to the login form.
+        // Try to restore a prior session from the OS keyring. If the stored
+        // refresh token is revoked or the DB is missing, the command clears
+        // the keyring entry itself and returns an error — we swallow it here
+        // and fall back to the login form.
         await invoke('session_restore').catch((err) => console.error('session_restore failed:', err))
 
         const currentSession = await invoke<PublicSessionInfo | null>('get_session')
@@ -138,8 +77,7 @@ export default function App() {
             if (vaultExists) {
               const unlocked = await invoke<boolean>('is_vault_unlocked')
               if (!unlocked) {
-                // Vault exists but is locked (keyring restore failed and no
-                // password login happened yet). Force re-login.
+                // Vault exists but is locked. Force re-login.
                 await invoke('sign_out').catch(() => {})
                 setSession(null)
                 setHasProfile(false)
@@ -153,15 +91,12 @@ export default function App() {
             console.error('Local DB initialization failed:', dbErr)
           }
 
-          // Initialize MLS encryption
           try {
             const signerRegenerated = await invoke<boolean>('mls_init')
             if (signerRegenerated) {
-              // Signer changed — old key packages on server are invalid
               await invoke('mls_delete_key_packages')
               await invoke('mls_upload_key_packages')
             } else {
-              // Signer intact — only upload if running low
               await invoke('mls_check_key_packages')
             }
             await invoke('mls_fetch_welcomes')
@@ -195,112 +130,96 @@ export default function App() {
   }
 
   if (loading) {
-    return <div>Loading...</div>
+    return (
+      <div className="grid h-screen place-items-center bg-bg text-fg-muted">
+        Loading…
+      </div>
+    )
   }
 
-  const showSidebar = !!session && hasProfile
-
   return (
-    <Theme appearance={systemTheme}>
+    <Theme appearance={theme}>
       <BrowserRouter>
-        <AppLayout showSidebar={showSidebar} onSignOut={handleSignOut}>
-          {mlsWarning && (
-            <div style={{
-              background: '#b91c1c',
-              color: 'white',
-              padding: '8px 16px',
-              fontSize: '13px',
-              display: 'flex',
-              justifyContent: 'space-between',
-              alignItems: 'center',
-            }}>
-              <span>{mlsWarning}</span>
-              <button
-                onClick={() => setMlsWarning(null)}
-                style={{ background: 'none', border: 'none', color: 'white', cursor: 'pointer', fontSize: '16px' }}
-              >
-                ×
-              </button>
-            </div>
-          )}
-          <Routes>
-            <Route path="/splash" element={<SplashPage />} />
-
-            <Route
-              path="/"
-              element={
-                !session
-                  ? <AuthPage />
-                  : hasProfile
-                    ? <Navigate to="/home" />
-                    : <Navigate to="/profile" />
-              }
-            />
-
-            <Route
-              path="/signup"
-              element={
-                !session
-                  ? <SignupPage />
-                  : hasProfile
-                    ? <Navigate to="/home" />
-                    : <Navigate to="/profile" />
-              }
-            />
-
-            <Route
-              path="/profile"
-              element={
-                !session
-                  ? <Navigate to="/" />
-                  : hasProfile
-                    ? <Navigate to="/home" />
-                    : <ProfilePage />
-              }
-            />
-
-            <Route path="/editProfile" element={<Navigate to="/home" replace />} />
-
-            <Route
-              path="/chat"
-              element={
-                !session
-                  ? <Navigate to="/" />
-                  : hasProfile
-                    ? <ChatPage />
-                    : <Navigate to="/profile" />
-              }
-            />
-
-            <Route
-              path="/home"
-              element={
-                !session
-                  ? <Navigate to="/" />
-                  : hasProfile
-                    ? <HomePage />
-                    : <Navigate to="/profile" />
-              }
+        {mlsWarning && (
+          <div className="flex items-center justify-between bg-[var(--danger)] px-4 py-2 text-[13px] text-white">
+            <span>{mlsWarning}</span>
+            <button
+              onClick={() => setMlsWarning(null)}
+              className="cursor-pointer border-none bg-transparent text-base text-white"
             >
-              <Route index element={<FriendsView />} />
-              <Route path="chat/:friendId" element={<DirectMessagePage />} />
-              <Route path="group/:conversationId" element={<GroupMessagePage />} />
-            </Route>
+              ×
+            </button>
+          </div>
+        )}
+        <Routes>
+          <Route path="/splash" element={<SplashPage />} />
 
-            <Route
-              path="/friends"
-              element={
-                !session
-                  ? <Navigate to="/" />
-                  : hasProfile
-                    ? <FriendsPage />
-                    : <Navigate to="/profile" />
-              }
-            />
+          <Route
+            path="/"
+            element={
+              !session
+                ? <AuthPage />
+                : hasProfile
+                  ? <Navigate to="/home" />
+                  : <Navigate to="/profile" />
+            }
+          />
 
-            <Route path="/chat/:friendId" element={<LegacyChatRedirect />} />
-          </Routes>
-        </AppLayout>
+          {/* /signup absorbed into AuthPage; redirect legacy links. */}
+          <Route path="/signup" element={<Navigate to="/" replace />} />
+
+          <Route
+            path="/profile"
+            element={
+              !session
+                ? <Navigate to="/" />
+                : hasProfile
+                  ? <Navigate to="/home" />
+                  : <ProfilePage />
+            }
+          />
+
+          <Route path="/editProfile" element={<Navigate to="/home" replace />} />
+
+          <Route
+            path="/chat"
+            element={
+              !session
+                ? <Navigate to="/" />
+                : hasProfile
+                  ? <ChatPage />
+                  : <Navigate to="/profile" />
+            }
+          />
+
+          <Route
+            path="/home"
+            element={
+              !session
+                ? <Navigate to="/" />
+                : hasProfile
+                  ? <HomePage onSignOut={handleSignOut} />
+                  : <Navigate to="/profile" />
+            }
+          >
+            <Route index element={<FriendsView />} />
+            <Route path="chat/:friendId" element={<DirectMessagePage />} />
+            <Route path="group/:conversationId" element={<GroupMessagePage />} />
+          </Route>
+
+          <Route
+            path="/friends"
+            element={
+              !session
+                ? <Navigate to="/" />
+                : hasProfile
+                  ? <FriendsPage />
+                  : <Navigate to="/profile" />
+            }
+          />
+
+          <Route path="/chat/:friendId" element={<LegacyChatRedirect />} />
+        </Routes>
       </BrowserRouter>
     </Theme>
   )
