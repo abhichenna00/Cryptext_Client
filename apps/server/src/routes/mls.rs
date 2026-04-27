@@ -303,6 +303,10 @@ pub async fn store_welcome(
         return Err(AppError::BadRequest("Welcome data too large (max 32KB)".to_string()));
     }
 
+    if uuid::Uuid::parse_str(&req.recipient_id).is_err() {
+        return Err(AppError::BadRequest("Invalid recipient ID".to_string()));
+    }
+
     let pool = get_pool();
 
     // Verify the caller is a confirmed member of the group
