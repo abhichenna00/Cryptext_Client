@@ -1,11 +1,14 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
 import { useNavigate } from 'react-router-dom'
-import { ScrollArea } from './ui/scroll-area'
-import { Separator } from './ui/separator'
-import { Button } from './ui/button'
-import { ButtonGroup } from './ui/button-group'
-import { Input } from './ui/input'
+import { Copy, MessageCircle, MoreVertical, Search, UserMinus } from 'lucide-react'
+
+import Avatar from '@/components/Avatar'
+import StatusPill from '@/components/StatusPill'
+import { useFriendActions } from '@/hooks'
+import { Button } from '@/components/ui/button'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import {
   Dialog,
   DialogContent,
@@ -13,18 +16,15 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
-} from './ui/dialog'
+} from '@/components/ui/dialog'
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from './ui/dropdown-menu'
-import { MessageCircle, MoreVertical, Check, X, Copy, UserMinus } from 'lucide-react'
-import Avatar from './Avatar'
-import { useFriendActions } from '@/hooks'
+} from '@/components/ui/dropdown-menu'
+import { cn } from '@/lib/utils'
 
 type FriendsTab = 'online' | 'all' | 'pending'
 
@@ -33,7 +33,6 @@ interface FriendWithProfile {
   username: string
   nickname: string
   created_at: string
-  is_online?: boolean
   avatar_url?: string | null
   status?: string | null
 }
@@ -59,50 +58,92 @@ interface FriendResult {
   error?: string
 }
 
+function isActiveStatus(status?: string | null) {
+  return status === 'online' || status === 'idle' || status === 'dnd'
+}
+
+function FriendRow({
+  avatar,
+  name,
+  handle,
+  status,
+  right,
+}: {
+  avatar: React.ReactNode
+  name: string
+  handle: string
+  status?: string | null
+  right: React.ReactNode
+}) {
+  return (
+    <div className="flex items-center gap-3 rounded-md px-3 py-2 transition-colors hover:bg-surface-2">
+      {avatar}
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[13.5px] font-medium text-fg">{name}</div>
+        <div className="flex items-center gap-2 text-[11.5px]">
+          <span className="truncate font-mono text-fg-dim">@{handle}</span>
+          <span className="text-fg-dim">·</span>
+          <StatusPill status={status} />
+        </div>
+      </div>
+      <div className="flex items-center gap-1">{right}</div>
+    </div>
+  )
+}
+
+function IconButton({
+  onClick,
+  title,
+  disabled,
+  tone = 'ghost',
+  children,
+}: {
+  onClick: () => void
+  title: string
+  disabled?: boolean
+  tone?: 'ghost' | 'accept' | 'danger'
+  children: React.ReactNode
+}) {
+  const toneClass =
+    tone === 'accept'
+      ? 'text-[var(--ok)] hover:bg-[var(--ok)]/10'
+      : tone === 'danger'
+        ? 'text-[var(--danger)] hover:bg-[var(--danger)]/10'
+        : 'text-fg-muted hover:bg-surface-3 hover:text-fg'
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        'grid size-8 place-items-center rounded-md transition-colors disabled:cursor-not-allowed disabled:opacity-50',
+        toneClass,
+      )}
+    >
+      {children}
+    </button>
+  )
+}
+
 export default function FriendsView() {
   const navigate = useNavigate()
+
   const [friends, setFriends] = useState<FriendWithProfile[]>([])
   const [incomingRequests, setIncomingRequests] = useState<FriendRequest[]>([])
   const [outgoingRequests, setOutgoingRequests] = useState<FriendRequest[]>([])
   const [searchQuery, setSearchQuery] = useState('')
-  const [friendsTab, setFriendsTab] = useState<FriendsTab>('all')
+  const [tab, setTab] = useState<FriendsTab>('all')
   const [error, setError] = useState<string | null>(null)
 
-  const [searchUsername, setSearchUsername] = useState('')
-  const [addFriendLoading, setAddFriendLoading] = useState(false)
-  const [addFriendError, setAddFriendError] = useState<string | null>(null)
-  const [addFriendSuccess, setAddFriendSuccess] = useState<string | null>(null)
+  const [addOpen, setAddOpen] = useState(false)
+  const [addUsername, setAddUsername] = useState('')
+  const [addLoading, setAddLoading] = useState(false)
+  const [addError, setAddError] = useState<string | null>(null)
+  const [addSuccess, setAddSuccess] = useState<string | null>(null)
 
   const [friendToRemove, setFriendToRemove] = useState<FriendWithProfile | null>(null)
   const [removeLoading, setRemoveLoading] = useState(false)
-
-  const handleCopyUsername = async (username: string) => {
-    try {
-      await navigator.clipboard.writeText(username)
-    } catch (err) {
-      console.error('Failed to copy username:', err)
-    }
-  }
-
-  const handleRemoveFriend = async () => {
-    if (!friendToRemove) return
-    setRemoveLoading(true)
-    try {
-      const result = await invoke<FriendResult>('remove_friend', {
-        friendId: friendToRemove.friend_id,
-      })
-      if (!result.success) {
-        setError(result.error || 'Failed to remove friend')
-      } else {
-        await loadData()
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err))
-    } finally {
-      setRemoveLoading(false)
-      setFriendToRemove(null)
-    }
-  }
 
   const loadData = async () => {
     try {
@@ -132,246 +173,347 @@ export default function FriendsView() {
     loadData()
   }, [])
 
-  const filteredFriends = useMemo(() => {
-    let filtered = friends
-    if (friendsTab === 'online') {
-      filtered = filtered.filter(f =>
-        f.status === 'online' || f.status === 'idle' || f.status === 'dnd'
-      )
-    }
-    if (searchQuery.trim()) {
-      const query = searchQuery.toLowerCase()
-      filtered = filtered.filter(
-        f => f.nickname.toLowerCase().includes(query) || f.username.toLowerCase().includes(query)
-      )
-    }
-    return filtered
-  }, [friends, searchQuery, friendsTab])
-
-  const onlineFriendsCount = useMemo(() =>
-    friends.filter(f => f.status === 'online' || f.status === 'idle' || f.status === 'dnd').length,
-    [friends]
-  )
-
+  const onlineCount = useMemo(() => friends.filter((f) => isActiveStatus(f.status)).length, [friends])
   const pendingCount = incomingRequests.length + outgoingRequests.length
 
+  const filteredFriends = useMemo(() => {
+    let list = friends
+    if (tab === 'online') list = list.filter((f) => isActiveStatus(f.status))
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      list = list.filter(
+        (f) => f.nickname.toLowerCase().includes(q) || f.username.toLowerCase().includes(q),
+      )
+    }
+    return list
+  }, [friends, tab, searchQuery])
+
+  const handleCopyUsername = async (username: string) => {
+    try {
+      await navigator.clipboard.writeText(username)
+    } catch (err) {
+      console.error('Failed to copy username:', err)
+    }
+  }
+
+  const handleRemoveFriend = async () => {
+    if (!friendToRemove) return
+    setRemoveLoading(true)
+    try {
+      const result = await invoke<FriendResult>('remove_friend', {
+        friendId: friendToRemove.friend_id,
+      })
+      if (!result.success) setError(result.error || 'Failed to remove friend')
+      else await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setRemoveLoading(false)
+      setFriendToRemove(null)
+    }
+  }
+
   const handleSendFriendRequest = async () => {
-    if (!searchUsername.trim()) {
-      setAddFriendError('Please enter a username')
+    if (!addUsername.trim()) {
+      setAddError('Please enter a username')
       return
     }
-    setAddFriendLoading(true)
-    setAddFriendError(null)
-    setAddFriendSuccess(null)
+    setAddLoading(true)
+    setAddError(null)
+    setAddSuccess(null)
     try {
       const result = await invoke<FriendResult>('send_friend_request', {
-        toUsername: searchUsername.trim(),
+        toUsername: addUsername.trim(),
       })
       if (result.success) {
-        setAddFriendSuccess(`Friend request sent to ${searchUsername}!`)
-        setSearchUsername('')
+        setAddSuccess(`Friend request sent to @${addUsername.trim()}`)
+        setAddUsername('')
         loadData()
-        setTimeout(() => setAddFriendSuccess(null), 1500)
+        setTimeout(() => {
+          setAddSuccess(null)
+          setAddOpen(false)
+        }, 1200)
       } else {
-        setAddFriendError(result.error || 'Failed to send friend request')
+        setAddError(result.error || 'Failed to send friend request')
       }
     } catch (err) {
-      setAddFriendError(err instanceof Error ? err.message : String(err))
+      setAddError(err instanceof Error ? err.message : String(err))
     } finally {
-      setAddFriendLoading(false)
+      setAddLoading(false)
     }
   }
 
   return (
-    <div className="home-content">
-      <div className="panel-header">
-        <h2 className="panel-title">Friends</h2>
-        <ButtonGroup>
-          <Button variant={friendsTab === 'online' ? 'default' : 'outline'} size="sm" onClick={() => setFriendsTab('online')}>
-            Online ({onlineFriendsCount})
-          </Button>
-          <Button variant={friendsTab === 'all' ? 'default' : 'outline'} size="sm" onClick={() => setFriendsTab('all')}>
-            All ({friends.length})
-          </Button>
-          <Button variant={friendsTab === 'pending' ? 'default' : 'outline'} size="sm" onClick={() => setFriendsTab('pending')}>
-            Pending ({pendingCount})
-          </Button>
-        </ButtonGroup>
-        <Dialog>
-          <DialogTrigger asChild>
-            <Button variant="outline" size="sm" className="border-green-600 text-green-600 hover:bg-green-600 hover:text-white">
-              Add Friend
-            </Button>
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Add Friend</DialogTitle>
-              <DialogDescription>
-                Enter the username of the person you want to add as a friend.
-              </DialogDescription>
-            </DialogHeader>
-            <div className="add-friend-dialog-content">
-              {addFriendError && <p className="add-friend-dialog-error">{addFriendError}</p>}
-              {addFriendSuccess && <p className="add-friend-dialog-success">{addFriendSuccess}</p>}
-              <Input
-                type="text"
-                placeholder="Username"
-                value={searchUsername}
-                onChange={(e) => setSearchUsername(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSendFriendRequest()}
-                disabled={addFriendLoading}
-              />
-            </div>
-            <DialogFooter>
-              <Button onClick={handleSendFriendRequest} disabled={addFriendLoading || !searchUsername.trim()}>
-                {addFriendLoading ? 'Sending...' : 'Send Request'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
-      </div>
+    <div className="flex h-full min-h-0 flex-col bg-bg">
+      {/* Header */}
+      <header className="flex items-center justify-between gap-4 border-b border-border px-5 py-4">
+        <div className="flex items-center gap-4">
+          <h2 className="text-[18px] font-semibold tracking-[-0.01em] text-fg">Friends</h2>
+          <Tabs value={tab} onValueChange={(v) => setTab(v as FriendsTab)}>
+            <TabsList>
+              <TabsTrigger value="online">
+                Online <span className="ml-1 font-mono text-fg-dim">{onlineCount}</span>
+              </TabsTrigger>
+              <TabsTrigger value="all">
+                All <span className="ml-1 font-mono text-fg-dim">{friends.length}</span>
+              </TabsTrigger>
+              <TabsTrigger value="pending">
+                Pending <span className="ml-1 font-mono text-fg-dim">{pendingCount}</span>
+              </TabsTrigger>
+            </TabsList>
+          </Tabs>
+        </div>
+        <Button
+          onClick={() => setAddOpen(true)}
+          className="h-8 bg-[var(--brand)] text-[var(--brand-fg)] hover:opacity-90"
+        >
+          + Add friend
+        </Button>
+      </header>
 
-      {friendsTab !== 'pending' && (
-        <div className="home-search">
-          <input
-            type="text"
-            className="home-search-input"
-            placeholder="Search friends..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-          />
+      {/* Search (hidden on Pending) */}
+      {tab !== 'pending' && (
+        <div className="px-5 py-3">
+          <div className="relative">
+            <Search
+              size={14}
+              strokeWidth={1.75}
+              className="absolute top-1/2 left-2.5 -translate-y-1/2 text-fg-dim"
+            />
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search friends"
+              className={cn(
+                'h-9 w-full rounded-md border border-border bg-surface-2 pr-2 pl-8 text-[13px] text-fg placeholder:text-fg-dim',
+                'focus:outline-none focus-visible:border-[var(--brand)] focus-visible:ring-2 focus-visible:ring-[var(--brand-soft)]',
+              )}
+            />
+          </div>
         </div>
       )}
 
-      {(error || friendActionError) && <p className="home-error">{error || friendActionError}</p>}
-
-      {friendsTab === 'pending' ? (
-        <ScrollArea className="friends-list-container">
-          <div className="friends-list">
-            {incomingRequests.length > 0 && (
-              <>
-                <div className="requests-section-header">Incoming ({incomingRequests.length})</div>
-                {incomingRequests.map((request, index) => (
-                  <div key={request.id}>
-                    <div className="friend-row">
-                      <div className="friend-row-left">
-                        <Avatar src={request.from_avatar_url} fallback={request.from_nickname || 'U'} size="sm" status={request.from_status} showStatus className="friend-avatar" />
-                        <div className="friend-info">
-                          <span className="friend-name">{request.from_nickname || 'Unknown'}</span>
-                          <span className="friend-username">@{request.from_username || 'unknown'}</span>
-                        </div>
-                      </div>
-                      <div className="friend-row-actions">
-                        <button className="friend-action-icon accept" onClick={() => handleAcceptRequest(request.id)} disabled={actionLoading} title="Accept">
-                          <Check size={18} />
-                        </button>
-                        <button className="friend-action-icon decline" onClick={() => handleDeclineRequest(request.id)} disabled={actionLoading} title="Decline">
-                          <X size={18} />
-                        </button>
-                      </div>
-                    </div>
-                    {index < incomingRequests.length - 1 && <Separator />}
-                  </div>
-                ))}
-              </>
-            )}
-
-            {incomingRequests.length > 0 && outgoingRequests.length > 0 && <div className="requests-divider" />}
-
-            {outgoingRequests.length > 0 && (
-              <>
-                <div className="requests-section-header">Outgoing ({outgoingRequests.length})</div>
-                {outgoingRequests.map((request, index) => (
-                  <div key={request.id}>
-                    <div className="friend-row">
-                      <div className="friend-row-left">
-                        <Avatar src={request.to_avatar_url} fallback={request.to_nickname || 'U'} size="sm" status={request.to_status} showStatus className="friend-avatar" />
-                        <div className="friend-info">
-                          <span className="friend-name">{request.to_nickname || 'Unknown'}</span>
-                          <span className="friend-username">@{request.to_username || 'unknown'}</span>
-                        </div>
-                      </div>
-                      <div className="friend-row-actions">
-                        <button className="friend-action-icon decline" onClick={() => handleCancelRequest(request.id)} disabled={actionLoading} title="Cancel Request">
-                          <X size={18} />
-                        </button>
-                      </div>
-                    </div>
-                    {index < outgoingRequests.length - 1 && <Separator />}
-                  </div>
-                ))}
-              </>
-            )}
-
-            {incomingRequests.length === 0 && outgoingRequests.length === 0 && (
-              <p className="home-empty">No pending friend requests.</p>
-            )}
-          </div>
-        </ScrollArea>
-      ) : (
-        friends.length > 0 ? (
-          <ScrollArea className="friends-list-container">
-            <div className="friends-list">
-              {filteredFriends.length > 0 ? (
-                filteredFriends.map((friend, index) => (
-                  <div key={friend.friend_id}>
-                    <div className="friend-row">
-                      <div className="friend-row-left">
-                        <Avatar src={friend.avatar_url} fallback={friend.nickname} size="sm" status={friend.status} showStatus className="friend-avatar" />
-                        <div className="friend-info">
-                          <span className="friend-name">{friend.nickname}</span>
-                          <span className="friend-username">@{friend.username}</span>
-                        </div>
-                      </div>
-                      <div className="friend-row-actions">
-                        <button className="friend-action-icon" onClick={() => navigate(`/home/chat/${friend.friend_id}`)} title="Message">
-                          <MessageCircle size={18} />
-                        </button>
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <button className="friend-action-icon" title="More options">
-                              <MoreVertical size={18} />
-                            </button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => handleCopyUsername(friend.username)}>
-                              <Copy size={14} />
-                              <span>Copy username</span>
-                            </DropdownMenuItem>
-                            <DropdownMenuSeparator />
-                            <DropdownMenuItem
-                              onClick={() => setFriendToRemove(friend)}
-                              variant="destructive"
-                            >
-                              <UserMinus size={14} />
-                              <span>Remove friend</span>
-                            </DropdownMenuItem>
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </div>
-                    </div>
-                    {index < filteredFriends.length - 1 && <Separator />}
-                  </div>
-                ))
-              ) : (
-                <p className="home-empty">
-                  {friendsTab === 'online' ? 'No friends online.' : 'No friends match your search.'}
-                </p>
-              )}
-            </div>
-          </ScrollArea>
-        ) : (
-          <p className="home-empty">No friends yet. Add some friends to start chatting!</p>
-        )
+      {(error || friendActionError) && (
+        <div className="px-5 pb-2 text-[12.5px] text-[var(--danger)]">
+          {error || friendActionError}
+        </div>
       )}
 
-      <Dialog open={!!friendToRemove} onOpenChange={(open) => !open && setFriendToRemove(null)}>
+      {/* Body */}
+      <ScrollArea className="flex-1 min-h-0">
+        <div className="flex flex-col gap-0.5 px-3 pb-4">
+          {tab === 'pending' ? (
+            <>
+              {incomingRequests.length > 0 && (
+                <section>
+                  <div className="px-3 pt-3 pb-1 font-mono text-[11px] tracking-[0.08em] text-fg-muted uppercase">
+                    Incoming <span className="text-fg-dim">{incomingRequests.length}</span>
+                  </div>
+                  {incomingRequests.map((request) => (
+                    <FriendRow
+                      key={request.id}
+                      avatar={
+                        <Avatar
+                          src={request.from_avatar_url}
+                          fallback={request.from_nickname || 'U'}
+                          size="md"
+                          status={request.from_status}
+                        />
+                      }
+                      name={request.from_nickname || 'Unknown'}
+                      handle={request.from_username || 'unknown'}
+                      status={request.from_status}
+                      right={
+                        <>
+                          <Button
+                            onClick={() => handleAcceptRequest(request.id)}
+                            disabled={actionLoading}
+                            className="h-7 bg-[var(--brand)] text-[var(--brand-fg)] hover:opacity-90"
+                          >
+                            Accept
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            onClick={() => handleDeclineRequest(request.id)}
+                            disabled={actionLoading}
+                            className="h-7"
+                          >
+                            Decline
+                          </Button>
+                        </>
+                      }
+                    />
+                  ))}
+                </section>
+              )}
+
+              {outgoingRequests.length > 0 && (
+                <section className="mt-2">
+                  <div className="px-3 pt-3 pb-1 font-mono text-[11px] tracking-[0.08em] text-fg-muted uppercase">
+                    Outgoing <span className="text-fg-dim">{outgoingRequests.length}</span>
+                  </div>
+                  {outgoingRequests.map((request) => (
+                    <FriendRow
+                      key={request.id}
+                      avatar={
+                        <Avatar
+                          src={request.to_avatar_url}
+                          fallback={request.to_nickname || 'U'}
+                          size="md"
+                          status={request.to_status}
+                        />
+                      }
+                      name={request.to_nickname || 'Unknown'}
+                      handle={request.to_username || 'unknown'}
+                      status={request.to_status}
+                      right={
+                        <>
+                          <span className="font-mono text-[10.5px] tracking-[0.08em] text-fg-dim uppercase">
+                            awaiting
+                          </span>
+                          <Button
+                            variant="ghost"
+                            onClick={() => handleCancelRequest(request.id)}
+                            disabled={actionLoading}
+                            className="h-7"
+                          >
+                            Cancel
+                          </Button>
+                        </>
+                      }
+                    />
+                  ))}
+                </section>
+              )}
+
+              {incomingRequests.length === 0 && outgoingRequests.length === 0 && (
+                <p className="px-4 py-8 text-center text-[13px] text-fg-dim">
+                  No pending friend requests.
+                </p>
+              )}
+            </>
+          ) : friends.length === 0 ? (
+            <p className="px-4 py-8 text-center text-[13px] text-fg-dim">
+              No friends yet. Add some friends to start chatting!
+            </p>
+          ) : filteredFriends.length === 0 ? (
+            <p className="px-4 py-8 text-center text-[13px] text-fg-dim">
+              {tab === 'online' ? 'No friends online.' : 'No friends match your search.'}
+            </p>
+          ) : (
+            filteredFriends.map((friend) => (
+              <FriendRow
+                key={friend.friend_id}
+                avatar={
+                  <Avatar
+                    src={friend.avatar_url}
+                    fallback={friend.nickname}
+                    size="md"
+                    status={friend.status}
+                  />
+                }
+                name={friend.nickname}
+                handle={friend.username}
+                status={friend.status}
+                right={
+                  <>
+                    <Button
+                      variant="ghost"
+                      onClick={() => navigate(`/home/chat/${friend.friend_id}`)}
+                      className="h-7"
+                    >
+                      <MessageCircle size={14} strokeWidth={1.75} />
+                      Message
+                    </Button>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <IconButton onClick={() => {}} title="More">
+                          <MoreVertical size={16} strokeWidth={1.75} />
+                        </IconButton>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="end">
+                        <DropdownMenuItem onClick={() => handleCopyUsername(friend.username)}>
+                          <Copy size={14} strokeWidth={1.75} />
+                          <span>Copy username</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          onClick={() => setFriendToRemove(friend)}
+                          variant="destructive"
+                        >
+                          <UserMinus size={14} strokeWidth={1.75} />
+                          <span>Remove friend</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </>
+                }
+              />
+            ))
+          )}
+        </div>
+      </ScrollArea>
+
+      {/* Add-friend dialog */}
+      <Dialog open={addOpen} onOpenChange={(open) => {
+        setAddOpen(open)
+        if (!open) {
+          setAddUsername('')
+          setAddError(null)
+          setAddSuccess(null)
+        }
+      }}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle>Add friend</DialogTitle>
+            <DialogDescription>
+              Send a friend request by username. Requests must be accepted before messaging.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-3">
+            <label className="flex flex-col gap-1.5">
+              <span className="text-[12px] font-medium text-fg-muted">Username</span>
+              <input
+                type="text"
+                value={addUsername}
+                onChange={(e) => setAddUsername(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSendFriendRequest()}
+                placeholder="@username"
+                disabled={addLoading}
+                className={cn(
+                  'h-9 w-full rounded-md border border-border bg-surface px-3 text-[13px] text-fg placeholder:text-fg-dim',
+                  'focus:outline-none focus-visible:border-[var(--brand)] focus-visible:ring-2 focus-visible:ring-[var(--brand-soft)]',
+                )}
+              />
+            </label>
+            {addError && <p className="text-[12.5px] text-[var(--danger)]">{addError}</p>}
+            {addSuccess && <p className="text-[12.5px] text-[var(--ok)]">{addSuccess}</p>}
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setAddOpen(false)} disabled={addLoading}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSendFriendRequest}
+              disabled={addLoading || !addUsername.trim()}
+              className="bg-[var(--brand)] text-[var(--brand-fg)] hover:opacity-90"
+            >
+              {addLoading ? 'Sending…' : 'Send request'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Remove-friend confirmation */}
+      <Dialog
+        open={!!friendToRemove}
+        onOpenChange={(open) => !open && setFriendToRemove(null)}
+      >
         <DialogContent className="sm:max-w-[400px]">
           <DialogHeader>
             <DialogTitle>Remove friend?</DialogTitle>
             <DialogDescription>
-              Are you sure you want to remove <strong>{friendToRemove?.nickname}</strong> (@{friendToRemove?.username})
-              from your friends? You can send a new friend request later.
+              Remove <strong className="text-fg">{friendToRemove?.nickname}</strong> (<span className="font-mono">@{friendToRemove?.username}</span>) from your friends? You can send a new friend request later.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -379,7 +521,7 @@ export default function FriendsView() {
               Cancel
             </Button>
             <Button variant="destructive" onClick={handleRemoveFriend} disabled={removeLoading}>
-              {removeLoading ? 'Removing...' : 'Remove'}
+              {removeLoading ? 'Removing…' : 'Remove'}
             </Button>
           </DialogFooter>
         </DialogContent>

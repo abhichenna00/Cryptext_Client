@@ -3,5 +3,6 @@ export { useFriendActions } from './useFriendActions'
 export { useWebSocket } from './useWebSocket'
 export { useWindowSize } from './useWindowSize'
 export { useAutoDownloadMedia } from './useAutoDownloadMedia'
+export { useTheme } from './useTheme'
 
 export type { WebSocketMessage, WsNewMessage, WsStatusUpdate } from './useWebSocket'

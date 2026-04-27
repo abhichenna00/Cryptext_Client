@@ -1,12 +1,43 @@
+/* IBM Plex trio — bundled via @fontsource so the app doesn't phone home
+   to Google Fonts on every launch. Privacy + offline + no CSP exposure. */
+@import "@fontsource/ibm-plex-sans/400.css";
+@import "@fontsource/ibm-plex-sans/500.css";
+@import "@fontsource/ibm-plex-sans/600.css";
+@import "@fontsource/ibm-plex-sans/700.css";
+@import "@fontsource/ibm-plex-sans/400-italic.css";
+@import "@fontsource/ibm-plex-mono/400.css";
+@import "@fontsource/ibm-plex-mono/500.css";
+@import "@fontsource/ibm-plex-mono/600.css";
+@import "@fontsource/ibm-plex-mono/400-italic.css";
+@import "@fontsource/ibm-plex-serif/400.css";
+@import "@fontsource/ibm-plex-serif/600.css";
+@import "@fontsource/ibm-plex-serif/400-italic.css";
+
 @import "tailwindcss";
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
 
+/* ============================================================
+   Redesign design tokens
+   ------------------------------------------------------------
+   Naming note: the handoff README uses `--accent` for the brand
+   color (slate / indigo / emerald / amber / rose). shadcn+Tailwind
+   already claim `--accent` for the subtle hover surface. To avoid
+   the collision we use `--brand` / `--brand-fg` / `--brand-soft`
+   here. Any prototype CSS referencing `var(--accent)` should be
+   translated to `var(--brand)` on port.
+   ============================================================ */
+
 :root {
-  font-family: Inter, Avenir, Helvetica, Arial, sans-serif;
-  font-size: 16px;
-  line-height: 24px;
+  /* Typography — `--font-mono` is defined via @theme inline below to avoid
+     a self-referential collision with Tailwind v4's token of the same name. */
+  --font-ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-accent: "IBM Plex Serif", ui-serif, Georgia, serif;
+
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.5;
   font-weight: 400;
 
   font-synthesis: none;
@@ -17,74 +48,126 @@
 
   color-scheme: light dark;
 
-  --radius: 0.625rem;
+  /* Radii */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 10px;
+  --r-xl: 14px;
+  --r-pill: 999px;
+  --radius: var(--r-lg);
 
-  --background: oklch(1 0 0);
+  /* Shadow + focus ring */
+  --shadow-card: 0 8px 32px -8px oklch(0 0 0 / 0.12);
+  --focus-ring: 0 0 0 3px var(--brand-soft);
 
-  --foreground: oklch(0.145 0 0);
+  /* ----- Redesign · light (default) ----- */
+  --bg: oklch(0.985 0.006 80);
+  --surface: oklch(0.975 0.008 80);
+  --surface-2: oklch(0.95 0.010 80);
+  --surface-3: oklch(0.92 0.012 80);
+  --border: oklch(0.88 0.012 80);
+  --border-strong: oklch(0.75 0.015 80);
+  --fg: oklch(0.14 0.010 260);
+  --fg-muted: oklch(0.42 0.012 260);
+  --fg-dim: oklch(0.60 0.012 260);
+  --chrome: oklch(0.15 0.010 260);
+  --chrome-fg: oklch(0.96 0.004 80);
+  --bubble-me: oklch(0.14 0.010 260);
+  --bubble-me-fg: oklch(0.98 0.004 80);
+  --bubble-them: oklch(1 0 0);
+  --bubble-them-fg: oklch(0.14 0.010 260);
 
-  --card: oklch(1 0 0);
+  /* Status */
+  --ok: oklch(0.65 0.15 150);
+  --warn: oklch(0.72 0.16 70);
+  --danger: oklch(0.58 0.22 25);
 
-  --card-foreground: oklch(0.145 0 0);
+  /* Brand (default accent: slate; override by adding .accent-* to a root) */
+  --brand: oklch(0.65 0.04 260);
+  --brand-fg: oklch(0.985 0 0);
+  --brand-soft: oklch(0.65 0.04 260 / 0.14);
 
-  --popover: oklch(1 0 0);
-
-  --popover-foreground: oklch(0.145 0 0);
-
-  --primary: oklch(0.205 0 0);
-
-  --primary-foreground: oklch(0.985 0 0);
-
-  --secondary: oklch(0.97 0 0);
-
-  --secondary-foreground: oklch(0.205 0 0);
-
-  --muted: oklch(0.97 0 0);
-
-  --muted-foreground: oklch(0.556 0 0);
-
-  --accent: oklch(0.97 0 0);
-
-  --accent-foreground: oklch(0.205 0 0);
-
-  --destructive: oklch(0.577 0.245 27.325);
-
-  --border: oklch(0.922 0 0);
-
-  --input: oklch(0.922 0 0);
-
-  --ring: oklch(0.708 0 0);
-
+  /* ----- shadcn compatibility aliases -----
+     Existing shadcn components (button.tsx, dialog.tsx, etc.) reference
+     these. Mapping them to redesign tokens keeps those components
+     visually consistent with the new system. As components get
+     rewritten to use redesign tokens directly, these aliases can be
+     thinned out. */
+  --background: var(--bg);
+  --foreground: var(--fg);
+  --card: var(--surface);
+  --card-foreground: var(--fg);
+  --popover: var(--surface-2);
+  --popover-foreground: var(--fg);
+  --primary: var(--brand);
+  --primary-foreground: var(--brand-fg);
+  --secondary: var(--surface-2);
+  --secondary-foreground: var(--fg);
+  --muted: var(--surface-2);
+  --muted-foreground: var(--fg-muted);
+  --accent: var(--surface-2);             /* shadcn's subtle hover — NOT the redesign brand */
+  --accent-foreground: var(--fg);
+  --destructive: var(--danger);
+  --input: var(--border);
+  --ring: var(--brand-soft);
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--fg);
+  --sidebar-primary: var(--brand);
+  --sidebar-primary-foreground: var(--brand-fg);
+  --sidebar-accent: var(--surface-2);
+  --sidebar-accent-foreground: var(--fg);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--brand-soft);
   --chart-1: oklch(0.646 0.222 41.116);
-
   --chart-2: oklch(0.6 0.118 184.704);
-
   --chart-3: oklch(0.398 0.07 227.392);
-
   --chart-4: oklch(0.828 0.189 84.429);
-
   --chart-5: oklch(0.769 0.188 70.08);
-
-  --sidebar: oklch(0.985 0 0);
-
-  --sidebar-foreground: oklch(0.145 0 0);
-
-  --sidebar-primary: oklch(0.205 0 0);
-
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-
-  --sidebar-accent: oklch(0.97 0 0);
-
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-
-  --sidebar-border: oklch(0.922 0 0);
-
-  --sidebar-ring: oklch(0.708 0 0);
 }
 
-/* ============================================
-   CRITICAL LAYOUT FIXES
-   ============================================ */
+/* ----- Redesign · dark ----- */
+.dark {
+  --bg: oklch(0.125 0.008 260);
+  --surface: oklch(0.155 0.010 260);
+  --surface-2: oklch(0.19 0.012 260);
+  --surface-3: oklch(0.23 0.014 260);
+  --border: oklch(0.27 0.014 260);
+  --border-strong: oklch(0.40 0.016 260);
+  --fg: oklch(0.97 0.006 80);
+  --fg-muted: oklch(0.70 0.010 80);
+  --fg-dim: oklch(0.52 0.012 80);
+  --chrome: oklch(0.09 0.010 260);
+  --chrome-fg: oklch(0.96 0.006 80);
+  --bubble-me: oklch(0.97 0.006 80);
+  --bubble-me-fg: oklch(0.14 0.010 260);
+  --bubble-them: oklch(0.205 0.012 260);
+  --bubble-them-fg: oklch(0.97 0.006 80);
+  --ok: oklch(0.72 0.17 150);
+  --warn: oklch(0.80 0.16 75);
+  --danger: oklch(0.70 0.20 25);
+
+  --shadow-card: 0 8px 32px -8px oklch(0 0 0 / 0.4);
+
+  /* Dark-mode variants of the shadcn chart palette (kept for any chart usage) */
+  --chart-1: oklch(0.488 0.243 264.376);
+  --chart-2: oklch(0.696 0.17 162.48);
+  --chart-3: oklch(0.769 0.188 70.08);
+  --chart-4: oklch(0.627 0.265 303.9);
+  --chart-5: oklch(0.645 0.246 16.439);
+}
+
+/* Accent presets. Apply to any ancestor of the region you want re-tinted.
+   Default root is slate; add e.g. `accent-indigo` to <html> or <body>
+   to theme the whole app. */
+.accent-slate    { --brand: oklch(0.65 0.04 260); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.04 260 / 0.14); }
+.accent-indigo   { --brand: oklch(0.65 0.14 265); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.14 265 / 0.14); }
+.accent-emerald  { --brand: oklch(0.65 0.14 150); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.14 150 / 0.14); }
+.accent-amber    { --brand: oklch(0.72 0.14 70);  --brand-fg: oklch(0.15 0 0);  --brand-soft: oklch(0.72 0.14 70 / 0.14); }
+.accent-rose     { --brand: oklch(0.65 0.14 18);  --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.14 18 / 0.14); }
+
+/* ============================================================
+   LAYOUT GUARDS
+   ============================================================ */
 
 html, body {
   height: 100%;
@@ -98,13 +181,16 @@ html, body {
   overflow: hidden;
 }
 
-/* Radix Theme wrapper */
+body {
+  color: var(--fg);
+  background: var(--bg);
+}
+
 .radix-themes {
   height: 100%;
   overflow: hidden;
 }
 
-/* Sidebar wrapper - contains sidebar + main content */
 [data-slot="sidebar-wrapper"] {
   display: flex !important;
   height: 100% !important;
@@ -112,7 +198,6 @@ html, body {
   overflow: hidden !important;
 }
 
-/* Main content area next to sidebar */
 [data-slot="sidebar-inset"] {
   display: flex !important;
   flex-direction: column !important;
@@ -122,70 +207,9 @@ html, body {
   overflow: hidden !important;
 }
 
-/* ============================================
-   END LAYOUT FIXES
-   ============================================ */
-
-.app-layout {
-  display: flex;
-  height: 100vh;
-}
-
-.main-content {
-  flex: 1;
-  overflow: auto;
-}
-
-.container {
-  margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
-}
-
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: 0.75s;
-}
-
-.logo.tauri:hover {
-  filter: drop-shadow(0 0 2em #24c8db);
-}
-
-.logo.vite:hover {
-  filter: drop-shadow(0 0 2em #747bff);
-}
-
-.logo.react:hover {
-  filter: drop-shadow(0 0 2em #61dafb);
-}
-
-.row {
-  display: flex;
-  justify-content: center;
-}
-
-a {
-  font-weight: 500;
-  color: #646cff;
-  text-decoration: inherit;
-}
-
-a:hover {
-  color: #535bf2;
-}
-
-h1 {
-  text-align: center;
-}
-
-#greet-input {
-  margin-right: 5px;
-}
+/* ============================================================
+   TAILWIND THEME MAPPING (shadcn-compatible)
+   ============================================================ */
 
 @theme inline {
   --radius-sm: calc(var(--radius) - 4px);
@@ -195,6 +219,11 @@ h1 {
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
   --radius-4xl: calc(var(--radius) + 16px);
+
+  --font-sans: var(--font-ui);
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-serif: var(--font-accent);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --color-card: var(--card);
@@ -226,40 +255,29 @@ h1 {
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
-}
 
-.dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.556 0 0);
+  /* Redesign-specific tokens exposed as Tailwind utilities.
+     Use as `bg-surface-2`, `text-fg-muted`, `bg-brand`, etc. */
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border-strong: var(--border-strong);
+  --color-fg: var(--fg);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-dim: var(--fg-dim);
+  --color-chrome: var(--chrome);
+  --color-chrome-fg: var(--chrome-fg);
+  --color-bubble-me: var(--bubble-me);
+  --color-bubble-me-fg: var(--bubble-me-fg);
+  --color-bubble-them: var(--bubble-them);
+  --color-bubble-them-fg: var(--bubble-them-fg);
+  --color-ok: var(--ok);
+  --color-warn: var(--warn);
+  --color-danger: var(--danger);
+  --color-brand: var(--brand);
+  --color-brand-fg: var(--brand-fg);
+  --color-brand-soft: var(--brand-soft);
 }
 
 @layer base {
@@ -271,11 +289,20 @@ h1 {
   }
 }
 
-/* Dialog surface — darker grey in light mode, stays dark in dark mode */
+/* Force `.font-mono` to resolve to IBM Plex Mono regardless of Tailwind v4
+   theme-token indirection. Declared outside any @layer so it beats both
+   Tailwind's layered utility and Radix Themes' unlayered .radix-themes
+   font-family cascade on descendants of font-mono elements. */
+.font-mono,
+.font-mono * {
+  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+/* Dialog surface retains the explicit override for the slightly darker card look */
 [data-slot="dialog-content"] {
-  background-color: oklch(0.86 0 0);
+  background-color: var(--surface-3);
 }
 
 .dark [data-slot="dialog-content"] {
-  background-color: oklch(0.225 0 0);
+  background-color: var(--surface-2);
 }
