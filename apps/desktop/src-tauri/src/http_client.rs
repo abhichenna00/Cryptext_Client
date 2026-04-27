@@ -24,9 +24,11 @@ fn client() -> &'static Client {
 async fn handle_response<T: DeserializeOwned>(response: Response) -> Result<T, String> {
     if !response.status().is_success() {
         let status = response.status().as_u16();
-        let text = response.text().await.unwrap_or_default();
-        eprintln!("[HTTP] Error {}: {}", status, text);
-        // Return generic message to frontend — don't leak server internals
+        // Drain the body without logging it — response text can contain user
+        // data or sensitive server diagnostics and ends up on stderr in prod.
+        let _ = response.text().await;
+        #[cfg(debug_assertions)]
+        eprintln!("[HTTP] Error status {}", status);
         let message = match status {
             400 => "Bad request",
             401 => "Not authorized",
@@ -38,8 +40,9 @@ async fn handle_response<T: DeserializeOwned>(response: Response) -> Result<T, S
         };
         return Err(format!("HTTP {}: {}", status, message));
     }
-    response.json::<T>().await.map_err(|e| {
-        eprintln!("[HTTP] Parse error: {}", e);
+    response.json::<T>().await.map_err(|_| {
+        #[cfg(debug_assertions)]
+        eprintln!("[HTTP] Failed to parse response");
         "Failed to parse server response".to_string()
     })
 }
