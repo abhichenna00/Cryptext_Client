@@ -7,11 +7,13 @@ mod routes;
 mod ws;
 
 use axum::{
-    http::{header, Method},
+    http::{header, HeaderValue, Method},
     Extension, Router,
 };
 use std::net::SocketAddr;
-use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tower_http::{
+    cors::CorsLayer, set_header::SetResponseHeaderLayer, trace::TraceLayer,
+};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
@@ -70,10 +72,36 @@ async fn main() {
         .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
         .allow_headers([header::AUTHORIZATION, header::CONTENT_TYPE]);
 
+    // Security headers applied to every response. This is a JSON API, so the
+    // CSP is deliberately restrictive (blocks any content from loading if a
+    // response is ever interpreted as HTML by a browser).
+    let security_headers = tower::ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::STRICT_TRANSPORT_SECURITY,
+            HeaderValue::from_static("max-age=31536000; includeSubDomains"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static("default-src 'none'; frame-ancestors 'none'"),
+        ));
+
     let app = Router::new()
         .merge(routes::build_router())
         .layer(Extension(registry))
         .layer(cors)
+        .layer(security_headers)
         .layer(TraceLayer::new_for_http());
 
     // 4. Bind and serve
