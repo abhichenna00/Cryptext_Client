@@ -18,7 +18,7 @@ struct EncryptedBlob {
     ciphertext: Vec<u8>,
 }
 
-fn encrypt_with_dek(dek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn encrypt_with_dek(dek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
     let cipher = Aes256Gcm::new_from_slice(dek)
         .map_err(|e| format!("Failed to create cipher: {}", e))?;
     let mut nonce_bytes = [0u8; NONCE_LEN];
@@ -34,7 +34,7 @@ fn encrypt_with_dek(dek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String>
     serde_json::to_vec(&blob).map_err(|e| format!("Serialization failed: {}", e))
 }
 
-fn decrypt_with_dek(dek: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>, String> {
+pub(crate) fn decrypt_with_dek(dek: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>, String> {
     let blob: EncryptedBlob =
         serde_json::from_slice(encrypted).map_err(|e| format!("Deserialization failed: {}", e))?;
     let cipher = Aes256Gcm::new_from_slice(dek)
@@ -45,7 +45,7 @@ fn decrypt_with_dek(dek: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>, String>
         .map_err(|_| "Decryption failed — wrong key or corrupted data".to_string())
 }
 
-fn get_dek(local_db: &State<'_, LocalDb>) -> Result<Zeroizing<[u8; 32]>, String> {
+pub(crate) fn get_dek(local_db: &State<'_, LocalDb>) -> Result<Zeroizing<[u8; 32]>, String> {
     let guard = local_db.dek.lock_or_err()?;
     guard
         .as_ref()

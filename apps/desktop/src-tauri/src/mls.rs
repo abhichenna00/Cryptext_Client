@@ -1,5 +1,7 @@
 use crate::auth::{self, SessionStore};
 use crate::http_client;
+use crate::local_db::LocalDb;
+use crate::sync;
 use crate::sync_utils::MutexExt;
 use openmls::prelude::*;
 use openmls::prelude::tls_codec::{Deserialize as TlsDeserializeTrait, Serialize as TlsSerializeTrait};
@@ -7,9 +9,10 @@ use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{command, Manager, State};
+use zeroize::Zeroizing;
 
 // ============================================
 // STATE
@@ -36,24 +39,29 @@ struct MlsInner {
     conversation_groups: HashMap<String, Vec<u8>>,
     /// Path to persist state
     storage_path: PathBuf,
+    /// DEK held while the vault is unlocked, used to encrypt state on disk.
+    dek: Zeroizing<[u8; 32]>,
 }
+
+// 4-byte magic prefix marking the encrypted MLS file format. Anything not
+// starting with this is treated as the legacy plaintext layout and migrated.
+const MLS_FILE_MAGIC: &[u8; 4] = b"MLS1";
 
 impl MlsInner {
     fn save_state(&self) -> Result<(), String> {
-        let file = std::fs::File::create(&self.storage_path)
-            .map_err(|e| format!("Failed to create MLS state file: {}", e))?;
-        self.provider.storage().save_to_file(&file)
-            .map_err(|e| format!("Failed to save MLS state: {}", e))?;
+        let storage_bytes = Zeroizing::new(serialize_storage(self.provider.storage())?);
+        write_encrypted(&self.storage_path, &self.dek, &storage_bytes)?;
 
         let meta = MlsMetadata {
             conversation_groups: self.conversation_groups.clone(),
             signer_public_key: self.signer.to_public_vec().to_vec(),
         };
-        let meta_path = self.storage_path.with_extension("meta.json");
-        let meta_file = std::fs::File::create(&meta_path)
-            .map_err(|e| format!("Failed to create MLS meta file: {}", e))?;
-        serde_json::to_writer(meta_file, &meta)
-            .map_err(|e| format!("Failed to write MLS metadata: {}", e))?;
+        let meta_bytes = Zeroizing::new(
+            serde_json::to_vec(&meta)
+                .map_err(|e| format!("Failed to serialize MLS metadata: {}", e))?,
+        );
+        let meta_path = meta_path_for(&self.storage_path);
+        write_encrypted(&meta_path, &self.dek, &meta_bytes)?;
 
         Ok(())
     }
@@ -68,6 +76,97 @@ impl Default for MlsState {
 }
 
 const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
+
+// ============================================
+// ON-DISK ENCRYPTION HELPERS
+// ============================================
+
+fn meta_path_for(state_path: &Path) -> PathBuf {
+    state_path.with_extension("meta.json")
+}
+
+/// Serialize a MemoryStorage instance into the same JSON+base64 layout
+/// produced by `MemoryStorage::save_to_file`, but into an in-memory buffer.
+/// Required so we can hand the plaintext to AEAD without ever touching disk.
+fn serialize_storage(
+    storage: &openmls_memory_storage::MemoryStorage,
+) -> Result<Vec<u8>, String> {
+    use base64::Engine;
+    #[derive(Serialize)]
+    struct SerializableKeyStore {
+        values: HashMap<String, String>,
+    }
+    let values = storage
+        .values
+        .read()
+        .map_err(|e| format!("MLS storage read lock poisoned: {}", e))?;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let mut ser = SerializableKeyStore {
+        values: HashMap::with_capacity(values.len()),
+    };
+    for (k, v) in values.iter() {
+        ser.values.insert(engine.encode(k), engine.encode(v));
+    }
+    serde_json::to_vec(&ser).map_err(|e| format!("Failed to serialize MLS storage: {}", e))
+}
+
+fn deserialize_storage_into(
+    bytes: &[u8],
+    storage: &openmls_memory_storage::MemoryStorage,
+) -> Result<(), String> {
+    use base64::Engine;
+    #[derive(Deserialize)]
+    struct SerializableKeyStore {
+        values: HashMap<String, String>,
+    }
+    let ser: SerializableKeyStore = serde_json::from_slice(bytes)
+        .map_err(|e| format!("Failed to parse MLS storage: {}", e))?;
+    let engine = base64::engine::general_purpose::STANDARD;
+    let mut values = storage
+        .values
+        .write()
+        .map_err(|e| format!("MLS storage write lock poisoned: {}", e))?;
+    for (k, v) in ser.values {
+        let key = engine
+            .decode(&k)
+            .map_err(|e| format!("Failed to decode MLS storage key: {}", e))?;
+        let val = engine
+            .decode(&v)
+            .map_err(|e| format!("Failed to decode MLS storage value: {}", e))?;
+        values.insert(key, val);
+    }
+    Ok(())
+}
+
+fn write_encrypted(path: &Path, dek: &[u8; 32], plaintext: &[u8]) -> Result<(), String> {
+    let encrypted = sync::encrypt_with_dek(dek, plaintext)?;
+    let mut buf = Vec::with_capacity(MLS_FILE_MAGIC.len() + encrypted.len());
+    buf.extend_from_slice(MLS_FILE_MAGIC);
+    buf.extend_from_slice(&encrypted);
+
+    let tmp_path = path.with_extension("tmp");
+    {
+        use std::io::Write;
+        let mut file = std::fs::File::create(&tmp_path)
+            .map_err(|e| format!("Failed to create temp file: {}", e))?;
+        file.write_all(&buf)
+            .map_err(|e| format!("Failed to write temp file: {}", e))?;
+        file.sync_all()
+            .map_err(|e| format!("Failed to fsync temp file: {}", e))?;
+    }
+    std::fs::rename(&tmp_path, path)
+        .map_err(|e| format!("Failed to rename temp file: {}", e))?;
+    Ok(())
+}
+
+fn read_encrypted(path: &Path, dek: &[u8; 32]) -> Result<Zeroizing<Vec<u8>>, String> {
+    let raw = std::fs::read(path).map_err(|e| format!("Failed to read MLS file: {}", e))?;
+    if raw.len() < MLS_FILE_MAGIC.len() || &raw[..MLS_FILE_MAGIC.len()] != MLS_FILE_MAGIC {
+        return Err("LEGACY_PLAINTEXT".to_string());
+    }
+    let plaintext = sync::decrypt_with_dek(dek, &raw[MLS_FILE_MAGIC.len()..])?;
+    Ok(Zeroizing::new(plaintext))
+}
 
 // ============================================
 // SERVER RESPONSE TYPES
@@ -119,6 +218,7 @@ pub async fn mls_init(
     app_handle: tauri::AppHandle,
     mls_state: State<'_, MlsState>,
     session_store: State<'_, SessionStore>,
+    local_db: State<'_, LocalDb>,
 ) -> Result<bool, String> {
     let user_id = {
         let store = session_store.session.lock_or_err()?;
@@ -128,6 +228,10 @@ pub async fn mls_init(
         }
     };
 
+    // MLS state must be encrypted with the DEK, so the vault must be unlocked
+    // before init runs. Mirrors the gating used by sync.rs / local_db.rs.
+    let dek = sync::get_dek(&local_db)?;
+
     let app_data_dir = app_handle.path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {:?}", e))?;
@@ -135,39 +239,57 @@ pub async fn mls_init(
         .map_err(|e| format!("Failed to create app data dir: {:?}", e))?;
 
     let storage_path = app_data_dir.join(format!("mls_{}.json", user_id));
-
-    // Load storage from file if it exists, then build provider
-    let mut storage = openmls_memory_storage::MemoryStorage::default();
-    if storage_path.exists() {
-        if let Ok(file) = std::fs::File::open(&storage_path) {
-            let _ = storage.load_from_file(&file);
-        }
-    }
+    let meta_path = meta_path_for(&storage_path);
 
     let provider = OpenMlsRustCrypto::default();
-    // Copy loaded state into the provider's storage
+    let mut needs_migration_save = false;
+
+    // Load storage state into the provider
     if storage_path.exists() {
-        let loaded_values = storage
-            .values
-            .read()
-            .map_err(|e| format!("MLS storage read lock poisoned: {}", e))?;
-        let mut provider_values = provider
-            .storage()
-            .values
-            .write()
-            .map_err(|e| format!("MLS provider write lock poisoned: {}", e))?;
-        for (k, v) in loaded_values.iter() {
-            provider_values.insert(k.clone(), v.clone());
+        match read_encrypted(&storage_path, &dek) {
+            Ok(plaintext) => {
+                deserialize_storage_into(&plaintext, provider.storage())?;
+            }
+            Err(e) if e == "LEGACY_PLAINTEXT" => {
+                // One-time migration: read legacy plaintext, load into provider,
+                // re-encrypt below via save_state().
+                let mut tmp = openmls_memory_storage::MemoryStorage::default();
+                if let Ok(file) = std::fs::File::open(&storage_path) {
+                    tmp.load_from_file(&file)
+                        .map_err(|e| format!("Failed to load legacy MLS state: {}", e))?;
+                }
+                let loaded = tmp
+                    .values
+                    .read()
+                    .map_err(|e| format!("MLS storage read lock poisoned: {}", e))?;
+                let mut provider_values = provider
+                    .storage()
+                    .values
+                    .write()
+                    .map_err(|e| format!("MLS provider write lock poisoned: {}", e))?;
+                for (k, v) in loaded.iter() {
+                    provider_values.insert(k.clone(), v.clone());
+                }
+                needs_migration_save = true;
+            }
+            Err(e) => return Err(e),
         }
     }
 
     // Load metadata (conversation mappings + signer public key)
-    let meta_path = storage_path.with_extension("meta.json");
     let metadata: MlsMetadata = if meta_path.exists() {
-        std::fs::File::open(&meta_path)
-            .ok()
-            .and_then(|f| serde_json::from_reader(f).ok())
-            .unwrap_or_default()
+        match read_encrypted(&meta_path, &dek) {
+            Ok(plaintext) => serde_json::from_slice(&plaintext)
+                .map_err(|e| format!("Failed to parse MLS metadata: {}", e))?,
+            Err(e) if e == "LEGACY_PLAINTEXT" => {
+                needs_migration_save = true;
+                std::fs::File::open(&meta_path)
+                    .ok()
+                    .and_then(|f| serde_json::from_reader(f).ok())
+                    .unwrap_or_default()
+            }
+            Err(e) => return Err(e),
+        }
     } else {
         MlsMetadata::default()
     };
@@ -214,6 +336,8 @@ pub async fn mls_init(
         }
     }
 
+    let mut dek_copy = [0u8; 32];
+    dek_copy.copy_from_slice(&*dek);
     let inner = MlsInner {
         provider,
         credential_with_key,
@@ -221,7 +345,12 @@ pub async fn mls_init(
         groups,
         conversation_groups: metadata.conversation_groups,
         storage_path,
+        dek: Zeroizing::new(dek_copy),
     };
+
+    if needs_migration_save {
+        inner.save_state()?;
+    }
 
     let mut state = mls_state.inner.lock_or_err()?;
     *state = Some(inner);
@@ -681,4 +810,3 @@ pub fn process_welcome(
 
     Ok(())
 }
-
