@@ -126,7 +126,7 @@ pub async fn start_entra_auth() -> Result<Json<StartResponse>, AppError> {
     let authorize_url = format!(
         "https://{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&scope=openid+email+profile&identity_provider={}&prompt=select_account",
         config.cognito_domain,
-        config.cognito_client_id,
+        config.entra_client_id,
         urlencoding::encode(&config.entra_redirect_uri),
         state_id,
         config.entra_provider_name,
@@ -270,10 +270,12 @@ async fn exchange_code_for_tokens(code: &str) -> Result<CognitoTokenResponse, Ap
     let config = get_config();
     let token_url = format!("https://{}/oauth2/token", config.cognito_domain);
 
-    // Cognito expects HTTP Basic auth: base64(client_id:client_secret)
+    // Cognito expects HTTP Basic auth: base64(client_id:client_secret).
+    // Uses the Entra-specific App Client credentials (separate from the
+    // Cognito-native and Google OAuth flows).
     let credentials = base64::engine::general_purpose::STANDARD.encode(format!(
         "{}:{}",
-        config.cognito_client_id, config.cognito_client_secret
+        config.entra_client_id, config.entra_client_secret
     ));
 
     let client = reqwest::Client::new();
