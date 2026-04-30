@@ -64,6 +64,7 @@ pub fn run() {
             auth::confirm_sign_up,
             auth::get_websocket_url,
             auth::sign_in_with_google,
+            auth::sign_in_with_entra,
             // Friends
             friends::get_friends,
             friends::get_incoming_friend_requests,

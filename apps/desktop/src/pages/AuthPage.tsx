@@ -23,6 +23,17 @@ function GoogleGlyph() {
   )
 }
 
+function MicrosoftGlyph() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden>
+      <rect x="2" y="2" width="9" height="9" fill="#F25022" />
+      <rect x="13" y="2" width="9" height="9" fill="#7FBA00" />
+      <rect x="2" y="13" width="9" height="9" fill="#00A4EF" />
+      <rect x="13" y="13" width="9" height="9" fill="#FFB900" />
+    </svg>
+  )
+}
+
 function fieldInputClasses(invalid = false) {
   return cn(
     'h-10 w-full rounded-md border bg-surface px-3 text-[13.5px] text-fg placeholder:text-fg-dim transition-colors',
@@ -190,6 +201,23 @@ export default function AuthPage() {
         window.location.href = '/'
       } else {
         setError(result.error || 'Google sign-in failed')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const signInWithEntra = async () => {
+    setLoading(true)
+    resetErrors()
+    try {
+      const result = await invoke<AuthResult>('sign_in_with_entra')
+      if (result.success) {
+        window.location.href = '/'
+      } else {
+        setError(result.error || 'Microsoft sign-in failed')
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
@@ -379,6 +407,20 @@ export default function AuthPage() {
             >
               <GoogleGlyph />
               Continue with Google
+            </button>
+
+            <button
+              type="button"
+              onClick={signInWithEntra}
+              disabled={loading}
+              className={cn(
+                'mt-2 flex h-10 w-full items-center justify-center gap-2 rounded-md border border-border bg-surface text-[13.5px] font-medium text-fg transition-colors',
+                'hover:bg-surface-2 disabled:cursor-not-allowed disabled:opacity-60',
+                'focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-soft)]',
+              )}
+            >
+              <MicrosoftGlyph />
+              Continue with Microsoft
             </button>
           </>
         )}

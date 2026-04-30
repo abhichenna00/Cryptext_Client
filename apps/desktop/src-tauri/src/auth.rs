@@ -463,16 +463,16 @@ pub fn get_websocket_url() -> Result<String, String> {
     crate::config::websocket_url()
 }
 
-/// Response from POST /auth/google/start
+/// Response from POST /auth/{provider}/start
 #[derive(Deserialize)]
-struct GoogleStartResponse {
+struct OAuthStartResponse {
     authorize_url: String,
     state: String,
 }
 
-/// Response from GET /auth/google/status
+/// Response from GET /auth/{provider}/status
 #[derive(Deserialize)]
-struct GoogleStatusResponse {
+struct OAuthStatusResponse {
     status: String,
     id_token: Option<String>,
     access_token: Option<String>,
@@ -480,24 +480,25 @@ struct GoogleStatusResponse {
     error: Option<String>,
 }
 
-/// Sign in with Google via the Axum server's OAuth flow
-#[command]
-pub async fn sign_in_with_google(
+/// Shared OAuth flow: start → open browser → poll status → populate session.
+/// Both Google and Entra delegate here; only the path strings and the user-
+/// facing provider label differ.
+async fn oauth_sign_in(
     app_handle: tauri::AppHandle,
     session_store: State<'_, SessionStore>,
+    start_path: &str,
+    status_path: &str,
+    provider_label: &str,
 ) -> Result<AuthResult, String> {
-    // 1. Call the server to start the OAuth flow
-    let start: GoogleStartResponse =
-        http_client::post_no_auth("/auth/google/start", &serde_json::json!({})).await?;
+    let start: OAuthStartResponse =
+        http_client::post_no_auth(start_path, &serde_json::json!({})).await?;
 
-    // 2. Open the authorize URL in the default browser
     app_handle
         .opener()
         .open_url(&start.authorize_url, None::<&str>)
         .map_err(|e| format!("Failed to open browser: {}", e))?;
 
-    // 3. Poll for completion
-    let poll_url = format!("/auth/google/status?state={}", start.state);
+    let poll_url = format!("{}?state={}", status_path, start.state);
     let mut attempts = 0;
     let max_attempts = 150; // 5 minutes at 2 second intervals
 
@@ -508,13 +509,13 @@ pub async fn sign_in_with_google(
         if attempts > max_attempts {
             return Ok(AuthResult {
                 success: false,
-                error: Some("Google sign-in timed out. Please try again.".to_string()),
+                error: Some(format!("{} sign-in timed out. Please try again.", provider_label)),
                 user_id: None,
                 needs_confirmation: false,
             });
         }
 
-        let status: GoogleStatusResponse = match http_client::get_no_auth(&poll_url).await {
+        let status: OAuthStatusResponse = match http_client::get_no_auth(&poll_url).await {
             Ok(s) => s,
             Err(_) => continue, // Network blip, keep polling
         };
@@ -556,7 +557,9 @@ pub async fn sign_in_with_google(
             "failed" => {
                 return Ok(AuthResult {
                     success: false,
-                    error: status.error.or(Some("Google sign-in failed".to_string())),
+                    error: status
+                        .error
+                        .or(Some(format!("{} sign-in failed", provider_label))),
                     user_id: None,
                     needs_confirmation: false,
                 });
@@ -564,6 +567,40 @@ pub async fn sign_in_with_google(
             _ => continue,
         }
     }
+}
+
+/// Sign in with Google via the Axum server's OAuth flow
+#[command]
+pub async fn sign_in_with_google(
+    app_handle: tauri::AppHandle,
+    session_store: State<'_, SessionStore>,
+) -> Result<AuthResult, String> {
+    oauth_sign_in(
+        app_handle,
+        session_store,
+        "/auth/google/start",
+        "/auth/google/status",
+        "Google",
+    )
+    .await
+}
+
+/// Sign in with Microsoft Entra via the Axum server's OAuth flow.
+/// Cognito federates to Entra based on the `identity_provider` query param
+/// the server adds to the authorize URL.
+#[command]
+pub async fn sign_in_with_entra(
+    app_handle: tauri::AppHandle,
+    session_store: State<'_, SessionStore>,
+) -> Result<AuthResult, String> {
+    oauth_sign_in(
+        app_handle,
+        session_store,
+        "/auth/entra/start",
+        "/auth/entra/status",
+        "Microsoft",
+    )
+    .await
 }
 
 /// Decode just the claims from a JWT id_token (no signature verification needed here

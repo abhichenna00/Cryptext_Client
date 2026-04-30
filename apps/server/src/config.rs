@@ -17,6 +17,13 @@ pub struct AppConfig {
     pub cognito_client_secret: String,
     pub cognito_domain: String,
     pub google_redirect_uri: String,
+    pub entra_redirect_uri: String,
+    /// Name of the Cognito User Pool identity provider for Entra. Must match
+    /// exactly what's configured on the Cognito app client — Cognito's Hosted
+    /// UI rejects unknown values with an opaque 400. Defaulted to "Entra" when
+    /// omitted from the secret payload.
+    #[serde(default = "default_entra_provider_name")]
+    pub entra_provider_name: String,
 
     // These are not in Secrets Manager but read from environment
     #[serde(skip)]
@@ -27,6 +34,10 @@ pub struct AppConfig {
     pub port: u16,
     #[serde(skip)]
     pub secret_name: String,
+}
+
+fn default_entra_provider_name() -> String {
+    "Entra".to_string()
 }
 
 /// Load config once at startup — panics if secrets cannot be fetched
