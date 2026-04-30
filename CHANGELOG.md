@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.6] - 2026-04-30
 
 ### Added
 - Microsoft Entra (Azure AD) sign-in option on the auth page
@@ -14,8 +14,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Google and Entra OAuth flows share one client-side helper for the browser-open and status-poll cycle
 
 ### Security
+- MLS state and metadata files at rest are now encrypted with the per-user DEK, matching the messages DB and session blob; existing plaintext files are migrated automatically on next launch
 - OAuth callback transitions are now guarded so a stale `?error=` callback cannot overwrite an already-completed sign-in
 - OAuth callback now surfaces IdP-side failures (`?error=`, `?error_description=`) instead of treating them as missing-state errors
+
+## [0.3.5] - 2026-04-27
+
+### Added
+- Icon-rail left sidebar replaces the old labelled sidebar, with theme toggle and profile card launcher
+- `useTheme` hook drives dark/light mode from system preference with a manual override
+- IBM Plex Sans / Mono / Serif type system via `@fontsource` packages
+- `useAutoDownloadMedia` hook pre-fetches and decrypts inline media on chat open; video thumbnails generated client-side
+
+### Changed
+- Signup folded into the auth page — standalone `SignupPage` removed
+- Home, DM, and auth pages rebuilt around shadcn `Avatar`, `Badge`, and `Tabs` primitives plus a new `StatusPill`
+- Sidebar conversation preview now reads the decrypted last message from the local SQLCipher DB; previously showed the server's `[encrypted]` placeholder
+
+### Fixed
+- Image and video rendering was broken end-to-end — cache-path extension inference corrected, auto-download wired to DM and group chat pages, CSP relaxed enough for inline blob URLs
+- Per-IP rate limits were inverted — `tower_governor`'s `per_millisecond` sets replenishment period, not rate, so the three configs (global, auth, message) are now recalibrated
+
+### Security
+- Stop logging HTTP response bodies and serde error details to stderr in release builds
+- Set HSTS, CSP, X-Frame-Options, X-Content-Type-Options nosniff, and Referrer-Policy response headers on the server
+- Add upper length bounds and whitespace checks on signup inputs (email up to 254 chars, password 8–128, full-name up to 64)
+- Validate `store_welcome` recipient_id is a UUID before INSERT
+
+## [0.3.4] - 2026-04-17
+
+### Fixed
+- Decrypted MLS payloads now classified as media or plaintext based on content, fixing media messages rendering as junk text
+
+### Changed
+- Dropped dormant PIN and multi-method vault scaffolding that was never wired up
+
+## [0.3.3] - 2026-04-17
+
+### Added
+- Group chat support end-to-end — server routes, MLS groups with N members, group creation dialog, dedicated `GroupMessagePage`
+- Encrypted state sync to server — vault, MLS state, and local DB blobs upload/download for device recovery
+- Password-derived DEK vault — vault unlocks via the account password instead of a separate PIN
+- OS keyring-backed session persistence so the DEK unlocks silently on app launch
+
+### Changed
+- Session storage split — OS keyring holds the DEK, disk holds the refresh token
+
+### Security
+- Clear DEK from memory on session lock and validate identity on unlock
+- Tauri CSP tightened to reject external script/style loads
+- CORS restricted to explicit Tauri app origins
+- JWKS cache now Redis-backed with a 24-hour TTL (replaces in-memory cache that expired on restart)
+- Google OAuth error logs no longer include raw Cognito error bodies
+- Google OAuth polling excluded from the tight auth rate limit (the 2s-poll consent flow was tripping the limiter)
 
 ## [0.3.2] - 2026-04-14
 
