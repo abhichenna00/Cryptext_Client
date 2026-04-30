@@ -58,7 +58,7 @@ struct CognitoTokenResponse {
 // ── Redis helpers ──
 
 fn oauth_key(state_id: &str) -> String {
-    format!("oauth:google:{}", state_id)
+    format!("oauth:entra:{}", state_id)
 }
 
 async fn set_auth_status(state_id: &str, status: &AuthStatus) -> Result<(), AppError> {
@@ -115,23 +115,24 @@ async fn delete_auth_status(state_id: &str) -> Result<(), AppError> {
 
 // ── Route handlers ──
 
-/// POST /auth/google/start
+/// POST /auth/entra/start
 /// Called by the Tauri client. Generates a state ID and returns the Cognito authorize URL.
-pub async fn start_google_auth() -> Result<Json<StartResponse>, AppError> {
+pub async fn start_entra_auth() -> Result<Json<StartResponse>, AppError> {
     let config = get_config();
     let state_id = Uuid::new_v4().to_string();
 
     set_auth_status(&state_id, &AuthStatus::Pending).await?;
 
     let authorize_url = format!(
-        "https://{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&scope=openid+email+profile&identity_provider=Google&prompt=select_account",
+        "https://{}/oauth2/authorize?response_type=code&client_id={}&redirect_uri={}&state={}&scope=openid+email+profile&identity_provider={}&prompt=select_account",
         config.cognito_domain,
         config.cognito_client_id,
-        urlencoding::encode(&config.google_redirect_uri),
-        state_id
+        urlencoding::encode(&config.entra_redirect_uri),
+        state_id,
+        config.entra_provider_name,
     );
 
-    tracing::debug!("Google OAuth started with state: {}", state_id);
+    tracing::debug!("Entra OAuth started with state: {}", state_id);
 
     Ok(Json(StartResponse {
         authorize_url,
@@ -139,9 +140,9 @@ pub async fn start_google_auth() -> Result<Json<StartResponse>, AppError> {
     }))
 }
 
-/// GET /auth/google/callback?code=xxx&state=xxx
-/// Cognito redirects here after the user signs in with Google.
-pub async fn google_callback(
+/// GET /auth/entra/callback?code=xxx&state=xxx
+/// Cognito redirects here after the user signs in via Entra.
+pub async fn entra_callback(
     Query(params): Query<CallbackParams>,
 ) -> Html<String> {
     // Cognito surfaces IdP failures (consent denial, MFA cancel, IdP misconfig)
@@ -151,12 +152,12 @@ pub async fn google_callback(
             .error_description
             .clone()
             .unwrap_or_else(|| err.clone());
-        tracing::warn!("Google OAuth callback error: {} ({})", err, reason);
+        tracing::warn!("Entra OAuth callback error: {} ({})", err, reason);
 
         let _ = update_auth_status_xx(
             &params.state,
             &AuthStatus::Failed {
-                error: format!("Google sign-in failed: {}", reason),
+                error: format!("Microsoft sign-in failed: {}", reason),
             },
         )
         .await;
@@ -186,7 +187,7 @@ pub async fn google_callback(
             let _ = update_auth_status_xx(
                 &params.state,
                 &AuthStatus::Failed {
-                    error: "Google sign-in failed: missing authorization code.".to_string(),
+                    error: "Microsoft sign-in failed: missing authorization code.".to_string(),
                 },
             )
             .await;
@@ -215,12 +216,12 @@ pub async fn google_callback(
             )
         }
         Err(e) => {
-            tracing::error!("Google OAuth token exchange failed: {}", e);
+            tracing::error!("Entra OAuth token exchange failed: {}", e);
 
             let _ = update_auth_status_xx(
                 &params.state,
                 &AuthStatus::Failed {
-                    error: "Google sign-in failed. Please try again.".to_string(),
+                    error: "Microsoft sign-in failed. Please try again.".to_string(),
                 },
             )
             .await;
@@ -240,9 +241,9 @@ fn failure_page() -> Html<String> {
     )
 }
 
-/// GET /auth/google/status?state=xxx
+/// GET /auth/entra/status?state=xxx
 /// The Tauri client polls this to check if the OAuth flow completed.
-pub async fn google_auth_status(
+pub async fn entra_auth_status(
     Query(params): Query<StatusParams>,
 ) -> Result<Json<AuthStatus>, AppError> {
     match get_auth_status(&params.state).await? {
@@ -283,7 +284,7 @@ async fn exchange_code_for_tokens(code: &str) -> Result<CognitoTokenResponse, Ap
         .form(&[
             ("grant_type", "authorization_code"),
             ("code", code),
-            ("redirect_uri", &config.google_redirect_uri),
+            ("redirect_uri", &config.entra_redirect_uri),
         ])
         .send()
         .await

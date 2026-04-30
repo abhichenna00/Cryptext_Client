@@ -5,6 +5,7 @@ pub mod media;
 pub mod mls;
 pub mod profile;
 pub mod google_oauth;
+pub mod entra_oauth;
 pub mod sync;
 
 use axum::{
@@ -58,17 +59,20 @@ pub fn build_router() -> Router {
         .route("/auth/confirm", post(cognito::confirm_sign_up))
         .route("/auth/refresh", post(cognito::refresh_token))
         .route("/auth/google/start", post(google_oauth::start_google_auth))
+        .route("/auth/entra/start", post(entra_oauth::start_entra_auth))
         .layer(GovernorLayer {
             config: Arc::new(auth_rate_limit),
         });
 
-    // Google OAuth polling + callback — only the global rate limit applies.
-    // The client polls /auth/google/status every 2s for up to 5min during
-    // the browser consent flow; the callback is hit once by Google's
+    // OAuth polling + callback — only the global rate limit applies.
+    // The client polls /auth/{provider}/status every 2s for up to 5min during
+    // the browser consent flow; the callback is hit once by the IdP's
     // redirect in the user's browser. Neither is brute-forceable.
     let oauth_flow_routes = Router::new()
         .route("/auth/google/callback", get(google_oauth::google_callback))
-        .route("/auth/google/status", get(google_oauth::google_auth_status));
+        .route("/auth/google/status", get(google_oauth::google_auth_status))
+        .route("/auth/entra/callback", get(entra_oauth::entra_callback))
+        .route("/auth/entra/status", get(entra_oauth::entra_auth_status));
 
     Router::new()
         // Health
