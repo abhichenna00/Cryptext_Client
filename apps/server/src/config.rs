@@ -18,6 +18,11 @@ pub struct AppConfig {
     pub cognito_domain: String,
     pub google_redirect_uri: String,
     pub entra_redirect_uri: String,
+    /// Cognito User Pool App Client ID dedicated to the Entra OAuth flow.
+    /// Separate from `cognito_client_id` because the Entra flow is configured
+    /// as its own App Client on the same user pool.
+    pub entra_client_id: String,
+    pub entra_client_secret: String,
     /// Name of the Cognito User Pool identity provider for Entra. Must match
     /// exactly what's configured on the Cognito app client — Cognito's Hosted
     /// UI rejects unknown values with an opaque 400. Defaulted to "Entra" when
