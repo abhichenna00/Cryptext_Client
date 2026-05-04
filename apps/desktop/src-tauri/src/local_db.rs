@@ -161,12 +161,19 @@ fn compute_vault_status(
     match vault::read_vault_version(app_data, user_id)? {
         VaultVersion::V1 => Ok(VaultStatus::V1Locked),
         VaultVersion::V2 => {
-            let dek_present = local_db.dek.lock_or_err()?.is_some();
-            if dek_present {
-                Ok(VaultStatus::V2Unlocked)
-            } else {
-                Ok(VaultStatus::V2Locked)
+            // V2Unlocked requires both an in-memory DEK *and* a fingerprint
+            // match against the on-disk vault. A mismatch means the mounted
+            // DEK doesn't belong to this vault — report V2Locked so the
+            // unlock path runs and surfaces a loud failure to the user
+            // instead of letting downstream code silently operate on the
+            // wrong DB.
+            let dek_guard = local_db.dek.lock_or_err()?;
+            if let Some(dek) = dek_guard.as_ref() {
+                if vault::verify_v2_fingerprint(app_data, user_id, dek).is_ok() {
+                    return Ok(VaultStatus::V2Unlocked);
+                }
             }
+            Ok(VaultStatus::V2Locked)
         }
     }
 }
@@ -259,8 +266,9 @@ pub fn setup_vault(
 
 /// Mount an existing v2 vault using the DEK already stored in the OS
 /// keyring. Returns Err if there is no v2 vault on disk, the keyring entry
-/// is missing, or the stored user_id doesn't match — the frontend should
-/// route to the login screen on any of those.
+/// is missing or the stored user_id doesn't match, or the keyring DEK's
+/// fingerprint doesn't match the on-disk vault — the frontend should route
+/// to the login screen on any of those.
 #[command]
 pub fn unlock_vault(
     app: AppHandle,
@@ -281,6 +289,7 @@ pub fn unlock_vault(
 
     let dek = session::load_dek_for_user(&user_id)?
         .ok_or_else(|| "Keyring entry missing — cannot unlock v2 vault".to_string())?;
+    vault::verify_v2_fingerprint(&app_data, &user_id, &dek)?;
     mount_dek_inner(&app_data, &local_db, &user_id, dek)
 }
 
@@ -316,14 +325,16 @@ pub fn migrate_vault_from_password(
     }
 
     let dek = vault::open_v1_vault_with_password(&app_data, &user_id, &password)?;
-    vault::rewrite_as_v2(&app_data, &user_id)?;
+    vault::rewrite_as_v2(&app_data, &user_id, &dek)?;
+    vault::verify_v2_fingerprint(&app_data, &user_id, &dek)?;
     mount_dek_inner(&app_data, &local_db, &user_id, dek)
 }
 
-/// Wipe local vault and message DB for the "Discard local history" migration
-/// path, then create a fresh v2 vault. Server-side ciphertext remains but is
-/// unreadable without the original DEK — that's expected and called out in
-/// the migration UI.
+/// Wipe local message DB and MLS state, then write a fresh v2 vault. Used
+/// by the "Discard local history" migration choice. The fresh vault is
+/// written first via the atomic helper; only if that succeeds do we delete
+/// the old DB / MLS state. A write failure aborts cleanly with the user's
+/// previous state intact.
 #[command]
 pub fn discard_and_reset_vault(
     app: AppHandle,
@@ -334,6 +345,7 @@ pub fn discard_and_reset_vault(
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+    std::fs::create_dir_all(&app_data).map_err(|e| format!("Failed to create dir: {}", e))?;
 
     // Drop in-memory state first so we don't leave a stale connection pointing
     // at a file we're about to delete.
@@ -344,17 +356,21 @@ pub fn discard_and_reset_vault(
         *dek_guard = None;
     }
 
-    vault::delete_vault(&app_data, &user_id)?;
+    // Atomically replace the existing vault with a fresh v2 keyed to a new
+    // random DEK. write_v2_file does temp+rename, so the user's old vault
+    // file remains intact if this fails (disk full, permissions, etc.) and
+    // they can retry.
+    let dek = vault::create_vault_v2(&app_data, &user_id)?;
+
+    // Vault is now in place — safe to drop the old SQLCipher DB and MLS
+    // state. Their keys derived from the discarded DEK so they would no
+    // longer decrypt anyway.
     let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db", user_id)));
     let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-wal", user_id)));
     let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-shm", user_id)));
-    // Drop any cached MLS state too — its keys derive from the discarded DEK
-    // and would no longer decrypt.
     let _ = std::fs::remove_file(app_data.join(format!("mls_{}.json", user_id)));
     let _ = std::fs::remove_file(app_data.join(format!("mls_{}.meta.json", user_id)));
 
-    std::fs::create_dir_all(&app_data).map_err(|e| format!("Failed to create dir: {}", e))?;
-    let dek = vault::create_vault_v2(&app_data, &user_id)?;
     mount_dek_inner(&app_data, &local_db, &user_id, dek)
 }
 

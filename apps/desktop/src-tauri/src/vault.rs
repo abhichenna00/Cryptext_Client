@@ -4,8 +4,11 @@
 //
 // v2 (current): the DEK is a random 256-bit key generated on first setup and
 // stored in the OS keyring (see session.rs). The on-disk `.vault` file holds
-// only a version marker — the file by itself is not sufficient to unlock
-// anything; possession of the keyring entry is required.
+// a version marker plus a 16-byte SHA-256 fingerprint of the DEK. The
+// fingerprint is not a secret — it can't be inverted to recover the DEK —
+// but it lets unlock paths reject a keyring DEK that doesn't match this
+// vault (e.g. if `messages_<user_id>.db` was deleted out from under us and
+// SQLCipher would otherwise silently create a fresh empty DB).
 //
 // v1 (legacy, read-only): the DEK was wrapped by an Argon2id KEK derived from
 // the user's login password. Existing v1 vaults can still be unwrapped for a
@@ -22,6 +25,7 @@ use aes_gcm::{
 use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -32,6 +36,7 @@ const ARGON2_M_COST: u32 = 65536; // 64 MiB
 const ARGON2_T_COST: u32 = 3;
 const ARGON2_P_COST: u32 = 4;
 const DEK_LEN: usize = 32;
+const FP_LEN: usize = 16;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VaultVersion {
@@ -65,6 +70,14 @@ struct V1LegacyVaultFile {
 #[derive(Serialize, Deserialize)]
 struct V2VaultFile {
     version: u32,
+    dek_fp: String,
+}
+
+fn fingerprint_dek(dek: &[u8; 32]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(dek);
+    let digest = hasher.finalize();
+    hex::encode(&digest[..FP_LEN])
 }
 
 fn derive_kek(secret: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
@@ -129,14 +142,23 @@ fn read_v1_file(path: &Path) -> Result<V1VaultFile, String> {
     Ok(V1VaultFile { methods })
 }
 
+fn read_v2_file(path: &Path) -> Result<V2VaultFile, String> {
+    let data = std::fs::read(path).map_err(|e| format!("Failed to read vault file: {}", e))?;
+    serde_json::from_slice::<V2VaultFile>(&data)
+        .map_err(|e| format!("Failed to parse v2 vault file: {}", e))
+}
+
 // Atomic write: stage to a sibling .tmp file, fsync, then rename over the
 // target. On Windows std::fs::rename uses MoveFileExW with REPLACE_EXISTING,
 // so the rename itself is atomic on the same volume. This guards the
 // migration path: a crash mid-rewrite leaves either the original v1 file
 // intact or the fully-written v2 file in place — never a truncated file
 // that parses as neither.
-fn write_v2_file(path: &Path) -> Result<(), String> {
-    let file = V2VaultFile { version: 2 };
+fn write_v2_file(path: &Path, dek: &[u8; 32]) -> Result<(), String> {
+    let file = V2VaultFile {
+        version: 2,
+        dek_fp: fingerprint_dek(dek),
+    };
     let bytes = serde_json::to_vec(&file).map_err(|e| format!("Failed to serialize vault: {}", e))?;
 
     let tmp_path = path.with_extension("vault.tmp");
@@ -186,9 +208,28 @@ pub fn read_vault_version(app_data_dir: &Path, user_id: &str) -> Result<VaultVer
     Ok(VaultVersion::V1)
 }
 
-/// Create a fresh v2 vault: random DEK + on-disk version marker. The DEK is
-/// returned to the caller, which is responsible for stashing it in the
-/// keyring (via session_save) and mounting the encrypted DB.
+/// Verify that the supplied DEK matches the on-disk v2 vault's fingerprint.
+/// Returns Ok(()) on match. Used to defend against the case where the
+/// keyring DEK is valid but the vault file (or DB it points at) belongs to
+/// a different vault — without this check SQLCipher would silently create
+/// an empty DB on a freshly missing `messages_<user_id>.db`.
+pub fn verify_v2_fingerprint(
+    app_data_dir: &Path,
+    user_id: &str,
+    dek: &[u8; 32],
+) -> Result<(), String> {
+    let path = vault_path(app_data_dir, user_id);
+    let v2 = read_v2_file(&path)?;
+    if v2.dek_fp != fingerprint_dek(dek) {
+        return Err("DEK does not match vault fingerprint".to_string());
+    }
+    Ok(())
+}
+
+/// Create a fresh v2 vault: random DEK + on-disk version marker + DEK
+/// fingerprint. The DEK is returned to the caller, which is responsible for
+/// stashing it in the keyring (via session_save) and mounting the encrypted
+/// DB.
 pub fn create_vault_v2(
     app_data_dir: &Path,
     user_id: &str,
@@ -197,16 +238,17 @@ pub fn create_vault_v2(
     rand::thread_rng().fill_bytes(dek.as_mut());
 
     let path = vault_path(app_data_dir, user_id);
-    write_v2_file(&path)?;
+    write_v2_file(&path, &dek)?;
     Ok(dek)
 }
 
-/// Convert a v1 vault to v2 by overwriting its file with the v2 marker. The
-/// already-unwrapped DEK is unchanged so SQLCipher continues to read existing
-/// rows; the caller is responsible for stashing that DEK in the keyring.
-pub fn rewrite_as_v2(app_data_dir: &Path, user_id: &str) -> Result<(), String> {
+/// Convert a v1 vault to v2 by overwriting its file with the v2 marker plus
+/// a fingerprint of the supplied (already-unwrapped) DEK. The DEK is
+/// unchanged so SQLCipher continues to read existing rows; the caller is
+/// responsible for stashing that DEK in the keyring.
+pub fn rewrite_as_v2(app_data_dir: &Path, user_id: &str, dek: &[u8; 32]) -> Result<(), String> {
     let path = vault_path(app_data_dir, user_id);
-    write_v2_file(&path)
+    write_v2_file(&path, dek)
 }
 
 /// Unwrap a v1 vault using the user's login password. Used solely for the
@@ -232,15 +274,4 @@ pub fn open_v1_vault_with_password(
         }
     }
     Err("Invalid credentials".to_string())
-}
-
-/// Delete the on-disk vault file. Used by the "Discard local history"
-/// migration choice before a fresh v2 setup.
-pub fn delete_vault(app_data_dir: &Path, user_id: &str) -> Result<(), String> {
-    let path = vault_path(app_data_dir, user_id);
-    if path.exists() {
-        std::fs::remove_file(&path)
-            .map_err(|e| format!("Failed to delete vault file: {}", e))?;
-    }
-    Ok(())
 }
