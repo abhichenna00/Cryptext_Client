@@ -86,6 +86,7 @@ pub fn run() {
             // Local encrypted message storage
             local_db::has_vault,
             local_db::setup_vault,
+            local_db::setup_vault_keyring,
             local_db::unlock_vault,
             local_db::change_password,
             local_db::is_vault_unlocked,

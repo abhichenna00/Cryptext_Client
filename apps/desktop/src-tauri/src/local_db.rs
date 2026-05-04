@@ -1,5 +1,7 @@
 // src-tauri/src/local_db.rs
 
+use base64::{engine::general_purpose, Engine};
+use rand::{rngs::OsRng, RngCore};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -139,13 +141,17 @@ pub fn has_vault(
     Ok(vault::vault_exists(&app_data, &user_id))
 }
 
-/// First-time setup: create vault with password and open encrypted database.
-#[command]
-pub fn setup_vault(
-    app: AppHandle,
-    local_db: State<'_, LocalDb>,
-    user_id: String,
-    password: String,
+/// Shared first-time vault setup: creates the on-disk vault wrapping the DEK
+/// with the supplied secret, opens (and migrates, if needed) the encrypted
+/// SQLCipher DB, and stashes the DEK + connection in `LocalDb` state. Both
+/// the password-driven and federated-sign-in entry points funnel through
+/// this so the on-disk format stays identical regardless of how the secret
+/// was sourced.
+fn setup_vault_inner(
+    app: &AppHandle,
+    local_db: &State<'_, LocalDb>,
+    user_id: &str,
+    secret: &str,
 ) -> Result<(), String> {
     let app_data = app
         .path()
@@ -153,7 +159,7 @@ pub fn setup_vault(
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
     std::fs::create_dir_all(&app_data).map_err(|e| format!("Failed to create dir: {}", e))?;
 
-    if vault::vault_exists(&app_data, &user_id) {
+    if vault::vault_exists(&app_data, user_id) {
         return Err("Vault already exists for this user".to_string());
     }
 
@@ -166,7 +172,7 @@ pub fn setup_vault(
         let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-shm", user_id)));
     }
 
-    let dek = vault::create_vault(&app_data, &user_id, &password)?;
+    let dek = vault::create_vault(&app_data, user_id, secret)?;
     let conn = open_encrypted_db(&db_path, &dek)?;
     init_schema(&conn)?;
 
@@ -203,6 +209,46 @@ pub fn setup_vault(
     let mut dek_guard = local_db.dek.lock_or_err()?;
     *dek_guard = Some(dek);
     Ok(())
+}
+
+/// First-time setup: create vault with password and open encrypted database.
+#[command]
+pub fn setup_vault(
+    app: AppHandle,
+    local_db: State<'_, LocalDb>,
+    user_id: String,
+    password: String,
+) -> Result<(), String> {
+    setup_vault_inner(&app, &local_db, &user_id, &password)
+}
+
+/// First-time setup for sign-in flows that don't surface a password to the
+/// client (e.g. federated OAuth). Generates 32 bytes of OS-random secret
+/// material and routes it through the same vault creation path as
+/// `setup_vault`. The freshly mounted DEK should immediately be persisted
+/// via `session_save` so subsequent launches resume through the existing
+/// keyring-backed session restore — no further per-user keyring storage is
+/// required here.
+#[command]
+pub fn setup_vault_keyring(
+    app: AppHandle,
+    local_db: State<'_, LocalDb>,
+    user_id: String,
+) -> Result<(), String> {
+    // 32 bytes of CSPRNG output, base64-encoded so it can flow through the
+    // existing &str secret -> Argon2id KDF pipeline unchanged. The encoded
+    // string is used once here to wrap the DEK and is not retained — the
+    // wrapped DEK lives in the .vault file, and the raw DEK is held in
+    // memory + persisted via session_save through the OS keyring.
+    let mut secret_bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut secret_bytes);
+    let secret = general_purpose::STANDARD.encode(secret_bytes);
+    // Best-effort wipe of the local copy after use; the encoded string
+    // is harder to scrub, but the wrapped DEK is what an attacker would
+    // need anyway and that's already at-rest encrypted.
+    let result = setup_vault_inner(&app, &local_db, &user_id, &secret);
+    secret_bytes.fill(0);
+    result
 }
 
 /// Unlock vault with password (used on new device or first login).

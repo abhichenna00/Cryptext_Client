@@ -85,7 +85,18 @@ export default function App() {
                 return
               }
             } else {
-              await invoke('init_local_db', { userId: currentSession.user_id })
+              // No vault for this user yet. The password sign-in path
+              // calls setup_vault directly in AuthPage with the typed
+              // password, so the only way to land here with an active
+              // session is via a federated OAuth flow (which doesn't
+              // surface a password to the client). Set up the vault with
+              // OS-random key material and persist the DEK to the keyring
+              // so subsequent launches resume transparently through
+              // session_restore.
+              await invoke('setup_vault_keyring', { userId: currentSession.user_id })
+              await invoke('session_save').catch((err) =>
+                console.error('session_save after passwordless vault setup failed:', err),
+              )
             }
           } catch (dbErr) {
             console.error('Local DB initialization failed:', dbErr)
