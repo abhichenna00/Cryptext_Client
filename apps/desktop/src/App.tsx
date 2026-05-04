@@ -43,6 +43,7 @@ export default function App() {
   const [hasProfile, setHasProfile] = useState(false)
   const [needsMigration, setNeedsMigration] = useState(false)
   const [mlsWarning, setMlsWarning] = useState<string | null>(null)
+  const [vaultError, setVaultError] = useState<string | null>(null)
 
   useEffect(() => {
     const initialize = async () => {
@@ -106,6 +107,9 @@ export default function App() {
             }
           } catch (dbErr) {
             console.error('Vault initialization failed:', dbErr)
+            setVaultError(
+              'Local storage could not be unlocked on this device. Sign out and sign back in to recover.',
+            )
           }
 
           if (vaultReady) {
@@ -143,6 +147,7 @@ export default function App() {
       setSession(null)
       setHasProfile(false)
       setNeedsMigration(false)
+      setVaultError(null)
       window.location.href = '/'
     } catch (error) {
       console.error('Failed to sign out:', error)
@@ -160,6 +165,17 @@ export default function App() {
   return (
     <Theme appearance={theme}>
       <BrowserRouter>
+        {vaultError && (
+          <div className="flex items-center justify-between bg-[var(--danger)] px-4 py-2 text-[13px] text-white">
+            <span>{vaultError}</span>
+            <button
+              onClick={handleSignOut}
+              className="cursor-pointer border-none bg-transparent text-[13px] font-medium text-white underline"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
         {mlsWarning && (
           <div className="flex items-center justify-between bg-[var(--danger)] px-4 py-2 text-[13px] text-white">
             <span>{mlsWarning}</span>

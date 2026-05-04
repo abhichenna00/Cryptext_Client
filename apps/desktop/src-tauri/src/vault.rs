@@ -23,6 +23,8 @@ use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use zeroize::Zeroizing;
 
@@ -127,10 +129,33 @@ fn read_v1_file(path: &Path) -> Result<V1VaultFile, String> {
     Ok(V1VaultFile { methods })
 }
 
+// Atomic write: stage to a sibling .tmp file, fsync, then rename over the
+// target. On Windows std::fs::rename uses MoveFileExW with REPLACE_EXISTING,
+// so the rename itself is atomic on the same volume. This guards the
+// migration path: a crash mid-rewrite leaves either the original v1 file
+// intact or the fully-written v2 file in place — never a truncated file
+// that parses as neither.
 fn write_v2_file(path: &Path) -> Result<(), String> {
     let file = V2VaultFile { version: 2 };
     let bytes = serde_json::to_vec(&file).map_err(|e| format!("Failed to serialize vault: {}", e))?;
-    std::fs::write(path, bytes).map_err(|e| format!("Failed to write vault file: {}", e))
+
+    let tmp_path = path.with_extension("vault.tmp");
+    {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .map_err(|e| format!("Failed to create temp vault file: {}", e))?;
+        f.write_all(&bytes)
+            .map_err(|e| format!("Failed to write temp vault file: {}", e))?;
+        f.sync_all()
+            .map_err(|e| format!("Failed to fsync temp vault file: {}", e))?;
+    }
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Failed to swap vault file into place: {}", e)
+    })
 }
 
 // ============================================
