@@ -84,12 +84,12 @@ pub fn run() {
             conversations::create_group,
             conversations::get_group_members,
             // Local encrypted message storage
-            local_db::has_vault,
+            local_db::vault_status,
             local_db::setup_vault,
             local_db::unlock_vault,
-            local_db::change_password,
             local_db::is_vault_unlocked,
-            local_db::init_local_db,
+            local_db::migrate_vault_from_password,
+            local_db::discard_and_reset_vault,
             local_db::get_local_messages,
             local_db::store_decrypted_message,
             // MLS (E2E Encryption)

@@ -1,22 +1,25 @@
 // src-tauri/src/vault.rs
 //
-// Multi-method DEK/KEK key management for SQLCipher encryption.
+// DEK lifecycle and on-disk vault metadata.
 //
-// The DEK (Data Encryption Key) encrypts the database and MLS state.
-// Multiple unlock methods can independently wrap the same DEK:
-//   - "password" (primary) — derived from login password via Argon2id. Used for
-//     server-side sync/recovery. Always present.
-//   - "pin" (convenience) — derived from a short numeric PIN. Local-only fast unlock.
-//   - "biometric" (future) — OS-provided biometric key wraps the DEK.
+// v2 (current): the DEK is a random 256-bit key generated on first setup and
+// stored in the OS keyring (see session.rs). The on-disk `.vault` file holds
+// only a version marker — the file by itself is not sufficient to unlock
+// anything; possession of the keyring entry is required.
 //
-// The .vault file stores one entry per method, each with its own salt/nonce/ciphertext.
-// None of these entries are useful without the corresponding secret.
+// v1 (legacy, read-only): the DEK was wrapped by an Argon2id KEK derived from
+// the user's login password. Existing v1 vaults can still be unwrapped for a
+// one-time migration to v2; new v1 vaults are never written.
+//
+// The split exists so vault unlock is decoupled from the user's auth method:
+// a federated (Google / Entra) sign-in has no password and so cannot wrap or
+// unwrap a v1 vault. v2 lets any auth method drive the same unlock path.
 
 use aes_gcm::{
     aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
 };
-use argon2::{Argon2, Algorithm, Version, Params};
+use argon2::{Algorithm, Argon2, Params, Version};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -27,26 +30,39 @@ const ARGON2_M_COST: u32 = 65536; // 64 MiB
 const ARGON2_T_COST: u32 = 3;
 const ARGON2_P_COST: u32 = 4;
 const DEK_LEN: usize = 32;
-const SALT_LEN: usize = 16;
-const NONCE_LEN: usize = 12;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VaultVersion {
+    V1,
+    V2,
+}
 
 #[derive(Serialize, Deserialize, Clone)]
-pub struct WrappedKey {
+struct WrappedKey {
     salt: Vec<u8>,
     nonce: Vec<u8>,
     encrypted_dek: Vec<u8>,
 }
 
+// v1 multi-method file. Method names were "password" / "pin"; both wrapped
+// the same DEK with an Argon2id KEK derived from the corresponding secret.
 #[derive(Serialize, Deserialize)]
-struct VaultFile {
+struct V1VaultFile {
     methods: HashMap<String, WrappedKey>,
 }
 
+// v1 single-method file (predates the methods map). Treated as a "password"
+// entry during migration.
 #[derive(Serialize, Deserialize)]
-struct LegacyVaultFile {
+struct V1LegacyVaultFile {
     salt: Vec<u8>,
     nonce: Vec<u8>,
     encrypted_dek: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct V2VaultFile {
+    version: u32,
 }
 
 fn derive_kek(secret: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
@@ -62,16 +78,11 @@ fn derive_kek(secret: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String>
     Ok(kek)
 }
 
-fn wrap_dek(kek: &[u8; 32], dek: &[u8; 32], nonce_bytes: &[u8; NONCE_LEN]) -> Result<Vec<u8>, String> {
-    let cipher = Aes256Gcm::new_from_slice(kek)
-        .map_err(|e| format!("Failed to create cipher: {}", e))?;
-    let nonce = Nonce::from_slice(nonce_bytes);
-    cipher
-        .encrypt(nonce, dek.as_ref())
-        .map_err(|e| format!("Failed to encrypt DEK: {}", e))
-}
-
-fn unwrap_dek(kek: &[u8; 32], encrypted_dek: &[u8], nonce_bytes: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
+fn unwrap_dek(
+    kek: &[u8; 32],
+    encrypted_dek: &[u8],
+    nonce_bytes: &[u8],
+) -> Result<Zeroizing<[u8; 32]>, String> {
     let cipher = Aes256Gcm::new_from_slice(kek)
         .map_err(|e| format!("Failed to create cipher: {}", e))?;
     let nonce = Nonce::from_slice(nonce_bytes);
@@ -88,64 +99,38 @@ fn unwrap_dek(kek: &[u8; 32], encrypted_dek: &[u8], nonce_bytes: &[u8]) -> Resul
     Ok(dek)
 }
 
-fn create_wrapped_key(secret: &[u8], dek: &[u8; 32]) -> Result<WrappedKey, String> {
-    let mut salt = [0u8; SALT_LEN];
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    let mut rng = rand::thread_rng();
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut nonce_bytes);
-
-    let kek = derive_kek(secret, &salt)?;
-    let encrypted_dek = wrap_dek(&kek, dek, &nonce_bytes)?;
-
-    Ok(WrappedKey {
-        salt: salt.to_vec(),
-        nonce: nonce_bytes.to_vec(),
-        encrypted_dek,
-    })
-}
-
-fn open_with_method(entry: &WrappedKey, secret: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
-    let kek = derive_kek(secret, &entry.salt)?;
+fn open_v1_with_password(entry: &WrappedKey, password: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+    let kek = derive_kek(password.as_bytes(), &entry.salt)?;
     unwrap_dek(&kek, &entry.encrypted_dek, &entry.nonce)
 }
 
-fn read_vault(path: &Path) -> Result<VaultFile, String> {
-    let data = std::fs::read(path)
-        .map_err(|e| format!("Failed to read vault file: {}", e))?;
+fn read_v1_file(path: &Path) -> Result<V1VaultFile, String> {
+    let data = std::fs::read(path).map_err(|e| format!("Failed to read vault file: {}", e))?;
 
-    if let Ok(vault) = serde_json::from_slice::<VaultFile>(&data) {
+    if let Ok(vault) = serde_json::from_slice::<V1VaultFile>(&data) {
         return Ok(vault);
     }
 
-    // Migrate legacy single-method format. The old vault was created with the
-    // login password (passed as "pin"), so the entry belongs under "password".
-    let legacy: LegacyVaultFile = serde_json::from_slice(&data)
+    let legacy: V1LegacyVaultFile = serde_json::from_slice(&data)
         .map_err(|e| format!("Failed to parse vault file: {}", e))?;
 
     let mut methods = HashMap::new();
-    methods.insert("password".to_string(), WrappedKey {
-        salt: legacy.salt,
-        nonce: legacy.nonce,
-        encrypted_dek: legacy.encrypted_dek,
-    });
+    methods.insert(
+        "password".to_string(),
+        WrappedKey {
+            salt: legacy.salt,
+            nonce: legacy.nonce,
+            encrypted_dek: legacy.encrypted_dek,
+        },
+    );
 
-    let vault = VaultFile { methods };
-
-    let file = std::fs::File::create(path)
-        .map_err(|e| format!("Failed to migrate vault file: {}", e))?;
-    serde_json::to_writer(file, &vault)
-        .map_err(|e| format!("Failed to write migrated vault: {}", e))?;
-
-    Ok(vault)
+    Ok(V1VaultFile { methods })
 }
 
-fn write_vault(path: &Path, vault: &VaultFile) -> Result<(), String> {
-    let file = std::fs::File::create(path)
-        .map_err(|e| format!("Failed to create vault file: {}", e))?;
-    serde_json::to_writer(file, vault)
-        .map_err(|e| format!("Failed to write vault file: {}", e))?;
-    Ok(())
+fn write_v2_file(path: &Path) -> Result<(), String> {
+    let file = V2VaultFile { version: 2 };
+    let bytes = serde_json::to_vec(&file).map_err(|e| format!("Failed to serialize vault: {}", e))?;
+    std::fs::write(path, bytes).map_err(|e| format!("Failed to write vault file: {}", e))
 }
 
 // ============================================
@@ -160,63 +145,77 @@ pub fn vault_exists(app_data_dir: &Path, user_id: &str) -> bool {
     vault_path(app_data_dir, user_id).exists()
 }
 
-/// Create a new vault with password as the primary unlock method.
-/// Returns the raw DEK for opening SQLCipher.
-pub fn create_vault(app_data_dir: &Path, user_id: &str, password: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+/// Return the on-disk format version of the user's vault. The caller should
+/// ensure the file exists (via `vault_exists`) before calling.
+pub fn read_vault_version(app_data_dir: &Path, user_id: &str) -> Result<VaultVersion, String> {
+    let path = vault_path(app_data_dir, user_id);
+    let data = std::fs::read(&path).map_err(|e| format!("Failed to read vault file: {}", e))?;
+
+    // v2 files declare `version: 2` explicitly. Anything else (the two v1
+    // shapes, both lacking a `version` field) is treated as v1.
+    if let Ok(v2) = serde_json::from_slice::<V2VaultFile>(&data) {
+        if v2.version == 2 {
+            return Ok(VaultVersion::V2);
+        }
+    }
+    Ok(VaultVersion::V1)
+}
+
+/// Create a fresh v2 vault: random DEK + on-disk version marker. The DEK is
+/// returned to the caller, which is responsible for stashing it in the
+/// keyring (via session_save) and mounting the encrypted DB.
+pub fn create_vault_v2(
+    app_data_dir: &Path,
+    user_id: &str,
+) -> Result<Zeroizing<[u8; 32]>, String> {
     let mut dek = Zeroizing::new([0u8; DEK_LEN]);
     rand::thread_rng().fill_bytes(dek.as_mut());
 
-    let password_entry = create_wrapped_key(password.as_bytes(), &dek)?;
-
-    let mut methods = HashMap::new();
-    methods.insert("password".to_string(), password_entry);
-
-    let vault = VaultFile { methods };
     let path = vault_path(app_data_dir, user_id);
-    write_vault(&path, &vault)?;
-
+    write_v2_file(&path)?;
     Ok(dek)
 }
 
-/// Open vault using the login password.
-pub fn open_vault_with_password(app_data_dir: &Path, user_id: &str, password: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+/// Convert a v1 vault to v2 by overwriting its file with the v2 marker. The
+/// already-unwrapped DEK is unchanged so SQLCipher continues to read existing
+/// rows; the caller is responsible for stashing that DEK in the keyring.
+pub fn rewrite_as_v2(app_data_dir: &Path, user_id: &str) -> Result<(), String> {
     let path = vault_path(app_data_dir, user_id);
-    let vault = read_vault(&path)?;
-
-    let entry = vault.methods.get("password")
-        .ok_or_else(|| "No password unlock method in vault".to_string())?;
-
-    open_with_method(entry, password.as_bytes())
+    write_v2_file(&path)
 }
 
-/// Open vault with any available method. Tries password first, then falls
-/// back to any other registered method. Today that's just the password
-/// entry — this shape is kept so the legacy-migration path from `read_vault`
-/// keeps working when it rewrites older single-method vault files.
-pub fn open_vault(app_data_dir: &Path, user_id: &str, secret: &str) -> Result<Zeroizing<[u8; 32]>, String> {
+/// Unwrap a v1 vault using the user's login password. Used solely for the
+/// one-time migration path; never called for new sign-ins.
+pub fn open_v1_vault_with_password(
+    app_data_dir: &Path,
+    user_id: &str,
+    password: &str,
+) -> Result<Zeroizing<[u8; 32]>, String> {
     let path = vault_path(app_data_dir, user_id);
-    let vault = read_vault(&path)?;
+    let vault = read_v1_file(&path)?;
 
-    for method in &["password", "pin"] {
-        if let Some(entry) = vault.methods.get(*method) {
-            if let Ok(dek) = open_with_method(entry, secret.as_bytes()) {
-                return Ok(dek);
-            }
+    if let Some(entry) = vault.methods.get("password") {
+        if let Ok(dek) = open_v1_with_password(entry, password) {
+            return Ok(dek);
         }
     }
-
+    // Older single-method vaults lived under "pin" but were always created
+    // with the login password as the secret, so try that key too.
+    if let Some(entry) = vault.methods.get("pin") {
+        if let Ok(dek) = open_v1_with_password(entry, password) {
+            return Ok(dek);
+        }
+    }
     Err("Invalid credentials".to_string())
 }
 
-/// Change the password: unwrap DEK with old password, re-wrap with new password.
-pub fn change_password(app_data_dir: &Path, user_id: &str, old_password: &str, new_password: &str) -> Result<(), String> {
-    let dek = open_vault_with_password(app_data_dir, user_id, old_password)?;
-
+/// Delete the on-disk vault file. Used by the "Discard local history"
+/// migration choice before a fresh v2 setup.
+pub fn delete_vault(app_data_dir: &Path, user_id: &str) -> Result<(), String> {
     let path = vault_path(app_data_dir, user_id);
-    let mut vault = read_vault(&path)?;
-
-    let new_entry = create_wrapped_key(new_password.as_bytes(), &dek)?;
-    vault.methods.insert("password".to_string(), new_entry);
-
-    write_vault(&path, &vault)
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Failed to delete vault file: {}", e))?;
+    }
+    Ok(())
 }
