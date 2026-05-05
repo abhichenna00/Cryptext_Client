@@ -15,6 +15,8 @@ interface AuthResult {
   needs_confirmation: boolean
 }
 
+type VaultStatus = 'None' | 'V1Locked' | 'V2Locked' | 'V2Unlocked'
+
 function GoogleGlyph() {
   return (
     <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
@@ -61,26 +63,42 @@ export default function AuthPage() {
     setMode(next)
   }
 
-  const performVaultUnlock = async (userId: string) => {
-    const vaultExists = await invoke<boolean>('has_vault', { userId })
-    if (vaultExists) {
-      await invoke('unlock_vault', { userId, secret: password })
-      return
-    }
-    const syncExists = await invoke<boolean>('sync_check_exists').catch(() => false)
-    if (syncExists) {
-      await invoke('sync_download_vault')
-      await invoke('unlock_vault', { userId, secret: password })
-      invoke('sync_restore_mls_state').catch(console.error)
-      invoke('sync_download_messages_db').catch(console.error)
-    } else {
-      await invoke('setup_vault', { userId, password })
+  // After a password sign-in we have the cleartext password in hand, so we
+  // can transparently migrate a v1 vault inline rather than bouncing the
+  // user through MigrationPage. Federated sign-ins go through App.tsx's
+  // vault_status switch instead.
+  const ensureVaultReadyAfterPassword = async (userId: string) => {
+    const status = await invoke<VaultStatus>('vault_status', { userId })
+    switch (status) {
+      case 'V2Unlocked':
+        return
+      case 'V2Locked':
+        await invoke('unlock_vault', { userId })
+        return
+      case 'V1Locked':
+        await invoke('migrate_vault_from_password', { userId, password })
+        return
+      case 'None': {
+        // Either a brand new account or a fresh device. If we already have a
+        // server-side vault backup, pull it down and migrate from password;
+        // otherwise create a fresh v2 vault.
+        const syncExists = await invoke<boolean>('sync_check_exists').catch(() => false)
+        if (syncExists) {
+          await invoke('sync_download_vault')
+          await invoke('migrate_vault_from_password', { userId, password })
+          invoke('sync_restore_mls_state').catch(console.error)
+          invoke('sync_download_messages_db').catch(console.error)
+        } else {
+          await invoke('setup_vault', { userId })
+        }
+        return
+      }
     }
   }
 
-  const afterSignedIn = async (userId: string) => {
+  const afterPasswordSignedIn = async (userId: string) => {
     try {
-      await performVaultUnlock(userId)
+      await ensureVaultReadyAfterPassword(userId)
     } catch (err) {
       console.error('Vault initialization failed:', err)
       setError(
@@ -116,7 +134,7 @@ export default function AuthPage() {
         setLoading(false)
         return
       }
-      await afterSignedIn(result.user_id)
+      await afterPasswordSignedIn(result.user_id)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
       setLoading(false)
@@ -173,7 +191,7 @@ export default function AuthPage() {
         return
       }
       try {
-        await invoke('setup_vault', { userId: signInResult.user_id, password })
+        await invoke('setup_vault', { userId: signInResult.user_id })
         await invoke('mls_init')
         await invoke('mls_upload_key_packages')
       } catch (err) {
@@ -198,6 +216,8 @@ export default function AuthPage() {
     try {
       const result = await invoke<AuthResult>('sign_in_with_google')
       if (result.success) {
+        // OAuth flows have no password to derive a v1 KEK, so vault setup,
+        // unlock, or migration happens in App.tsx after the redirect lands.
         window.location.href = '/'
       } else {
         setError(result.error || 'Google sign-in failed')
@@ -342,11 +362,6 @@ export default function AuthPage() {
                 placeholder="••••••••••"
                 className={fieldInputClasses()}
               />
-              {isSignup && (
-                <span className="font-mono text-[10.5px] tracking-[0.02em] text-fg-dim">
-                  used to derive your local vault key via Argon2id
-                </span>
-              )}
             </label>
 
             {isSignup && (

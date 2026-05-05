@@ -17,6 +17,7 @@ import ProfilePage from './pages/ProfilePage'
 import FriendsPage from './pages/FriendsPage'
 import DirectMessagePage from './pages/DirectMessagePage'
 import GroupMessagePage from './pages/GroupMessagePage'
+import MigrationPage from './pages/MigrationPage'
 import FriendsView from './components/FriendsView'
 
 // Check if running in Tauri
@@ -28,6 +29,8 @@ interface PublicSessionInfo {
   is_authenticated: boolean
 }
 
+type VaultStatus = 'None' | 'V1Locked' | 'V2Locked' | 'V2Unlocked'
+
 function LegacyChatRedirect() {
   const { friendId } = useParams<{ friendId: string }>()
   return <Navigate to={friendId ? `/home/chat/${friendId}` : '/home'} replace />
@@ -38,7 +41,9 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<PublicSessionInfo | null>(null)
   const [hasProfile, setHasProfile] = useState(false)
+  const [needsMigration, setNeedsMigration] = useState(false)
   const [mlsWarning, setMlsWarning] = useState<string | null>(null)
+  const [vaultError, setVaultError] = useState<string | null>(null)
 
   useEffect(() => {
     const initialize = async () => {
@@ -72,37 +77,55 @@ export default function App() {
           const profile = await invoke('get_profile')
           setHasProfile(profile !== null)
 
+          let vaultReady = false
           try {
-            const vaultExists = await invoke<boolean>('has_vault', { userId: currentSession.user_id })
-            if (vaultExists) {
-              const unlocked = await invoke<boolean>('is_vault_unlocked')
-              if (!unlocked) {
-                // Vault exists but is locked. Force re-login.
-                await invoke('sign_out').catch(() => {})
-                setSession(null)
-                setHasProfile(false)
-                setLoading(false)
-                return
-              }
-            } else {
-              await invoke('init_local_db', { userId: currentSession.user_id })
+            const status = await invoke<VaultStatus>('vault_status', {
+              userId: currentSession.user_id,
+            })
+            switch (status) {
+              case 'V2Unlocked':
+                vaultReady = true
+                break
+              case 'V2Locked':
+                await invoke('unlock_vault', { userId: currentSession.user_id })
+                await invoke('session_save').catch((e) =>
+                  console.error('session_save after unlock failed:', e),
+                )
+                vaultReady = true
+                break
+              case 'None':
+                await invoke('setup_vault', { userId: currentSession.user_id })
+                await invoke('session_save').catch((e) =>
+                  console.error('session_save after setup failed:', e),
+                )
+                invoke('sync_upload_vault').catch(console.error)
+                vaultReady = true
+                break
+              case 'V1Locked':
+                setNeedsMigration(true)
+                break
             }
           } catch (dbErr) {
-            console.error('Local DB initialization failed:', dbErr)
+            console.error('Vault initialization failed:', dbErr)
+            setVaultError(
+              'Local storage could not be unlocked on this device. Sign out and sign back in to recover.',
+            )
           }
 
-          try {
-            const signerRegenerated = await invoke<boolean>('mls_init')
-            if (signerRegenerated) {
-              await invoke('mls_delete_key_packages')
-              await invoke('mls_upload_key_packages')
-            } else {
-              await invoke('mls_check_key_packages')
+          if (vaultReady) {
+            try {
+              const signerRegenerated = await invoke<boolean>('mls_init')
+              if (signerRegenerated) {
+                await invoke('mls_delete_key_packages')
+                await invoke('mls_upload_key_packages')
+              } else {
+                await invoke('mls_check_key_packages')
+              }
+              await invoke('mls_fetch_welcomes')
+            } catch (mlsErr) {
+              console.error('MLS initialization failed:', mlsErr)
+              setMlsWarning('Encryption failed to initialize. Messages may not be delivered securely. Try restarting the app.')
             }
-            await invoke('mls_fetch_welcomes')
-          } catch (mlsErr) {
-            console.error('MLS initialization failed:', mlsErr)
-            setMlsWarning('Encryption failed to initialize. Messages may not be delivered securely. Try restarting the app.')
           }
         }
       } catch (error) {
@@ -123,6 +146,8 @@ export default function App() {
       await invoke('sign_out')
       setSession(null)
       setHasProfile(false)
+      setNeedsMigration(false)
+      setVaultError(null)
       window.location.href = '/'
     } catch (error) {
       console.error('Failed to sign out:', error)
@@ -140,6 +165,17 @@ export default function App() {
   return (
     <Theme appearance={theme}>
       <BrowserRouter>
+        {vaultError && (
+          <div className="flex items-center justify-between bg-[var(--danger)] px-4 py-2 text-[13px] text-white">
+            <span>{vaultError}</span>
+            <button
+              onClick={handleSignOut}
+              className="cursor-pointer border-none bg-transparent text-[13px] font-medium text-white underline"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
         {mlsWarning && (
           <div className="flex items-center justify-between bg-[var(--danger)] px-4 py-2 text-[13px] text-white">
             <span>{mlsWarning}</span>
@@ -155,13 +191,26 @@ export default function App() {
           <Route path="/splash" element={<SplashPage />} />
 
           <Route
+            path="/migrate"
+            element={
+              !session
+                ? <Navigate to="/" replace />
+                : !needsMigration
+                  ? <Navigate to="/" replace />
+                  : <MigrationPage userId={session.user_id} onSignOut={handleSignOut} />
+            }
+          />
+
+          <Route
             path="/"
             element={
               !session
                 ? <AuthPage />
-                : hasProfile
-                  ? <Navigate to="/home" />
-                  : <Navigate to="/profile" />
+                : needsMigration
+                  ? <Navigate to="/migrate" />
+                  : hasProfile
+                    ? <Navigate to="/home" />
+                    : <Navigate to="/profile" />
             }
           />
 
@@ -173,9 +222,11 @@ export default function App() {
             element={
               !session
                 ? <Navigate to="/" />
-                : hasProfile
-                  ? <Navigate to="/home" />
-                  : <ProfilePage />
+                : needsMigration
+                  ? <Navigate to="/migrate" />
+                  : hasProfile
+                    ? <Navigate to="/home" />
+                    : <ProfilePage />
             }
           />
 
@@ -186,9 +237,11 @@ export default function App() {
             element={
               !session
                 ? <Navigate to="/" />
-                : hasProfile
-                  ? <ChatPage />
-                  : <Navigate to="/profile" />
+                : needsMigration
+                  ? <Navigate to="/migrate" />
+                  : hasProfile
+                    ? <ChatPage />
+                    : <Navigate to="/profile" />
             }
           />
 
@@ -197,9 +250,11 @@ export default function App() {
             element={
               !session
                 ? <Navigate to="/" />
-                : hasProfile
-                  ? <HomePage onSignOut={handleSignOut} />
-                  : <Navigate to="/profile" />
+                : needsMigration
+                  ? <Navigate to="/migrate" />
+                  : hasProfile
+                    ? <HomePage onSignOut={handleSignOut} />
+                    : <Navigate to="/profile" />
             }
           >
             <Route index element={<FriendsView />} />
@@ -212,9 +267,11 @@ export default function App() {
             element={
               !session
                 ? <Navigate to="/" />
-                : hasProfile
-                  ? <FriendsPage />
-                  : <Navigate to="/profile" />
+                : needsMigration
+                  ? <Navigate to="/migrate" />
+                  : hasProfile
+                    ? <FriendsPage />
+                    : <Navigate to="/profile" />
             }
           />
 

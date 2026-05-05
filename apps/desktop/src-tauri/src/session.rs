@@ -92,6 +92,31 @@ fn wipe(app_data: &Path) {
     let _ = std::fs::remove_file(session_file(app_data));
 }
 
+/// Read the DEK from the OS keyring for the given user. Returns Ok(None) if
+/// no keyring entry exists or the stored user_id does not match (caller
+/// should treat that as "vault unrecoverable on this device").
+pub(crate) fn load_dek_for_user(user_id: &str) -> Result<Option<Zeroizing<[u8; 32]>>, String> {
+    let json = match entry()?.get_password() {
+        Ok(json) => json,
+        Err(keyring::Error::NoEntry) => return Ok(None),
+        Err(e) => return Err(format!("Keyring read failed: {}", e)),
+    };
+    let payload: KeyringPayload =
+        serde_json::from_str(&json).map_err(|e| format!("Deserialize failed: {}", e))?;
+    if payload.user_id != user_id {
+        return Ok(None);
+    }
+    let dek_bytes = general_purpose::STANDARD
+        .decode(&payload.dek_b64)
+        .map_err(|e| format!("Invalid stored DEK: {}", e))?;
+    if dek_bytes.len() != 32 {
+        return Err("Stored DEK has wrong length".to_string());
+    }
+    let mut dek_array = [0u8; 32];
+    dek_array.copy_from_slice(&dek_bytes);
+    Ok(Some(Zeroizing::new(dek_array)))
+}
+
 /// Save the current session (DEK + refresh token + user identity) to the
 /// OS keyring (small part) and an encrypted file (large refresh token).
 /// Called after successful password sign-in so subsequent launches can

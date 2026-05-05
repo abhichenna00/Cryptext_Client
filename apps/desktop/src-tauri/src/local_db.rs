@@ -7,8 +7,9 @@ use std::sync::Mutex;
 use tauri::{command, AppHandle, Manager, State};
 use zeroize::Zeroizing;
 
+use crate::session;
 use crate::sync_utils::MutexExt;
-use crate::vault;
+use crate::vault::{self, VaultVersion};
 
 pub struct LocalDb {
     pub conn: Mutex<Option<Connection>>,
@@ -49,7 +50,7 @@ fn open_encrypted_db(db_path: &Path, dek: &[u8; 32]) -> Result<Connection, Strin
 
     // Verify the key works by reading a page
     conn.execute_batch("SELECT count(*) FROM sqlite_master;")
-        .map_err(|_| "Invalid PIN — could not unlock database".to_string())?;
+        .map_err(|_| "Could not unlock database — DEK does not match".to_string())?;
 
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
@@ -106,10 +107,7 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
     .map_err(|e| format!("Failed to init schema: {}", e))
 }
 
-/// Mount a recovered DEK into LocalDb: open the encrypted DB, init schema,
-/// stash the connection and DEK in state. Used by session restore when the
-/// DEK comes from the OS keyring instead of password-derived unlock.
-pub(crate) fn mount_dek(
+fn mount_dek_inner(
     app_data: &Path,
     local_db: &State<'_, LocalDb>,
     user_id: &str,
@@ -126,26 +124,84 @@ pub(crate) fn mount_dek(
     Ok(())
 }
 
-/// Check if a vault (encryption PIN) has been set up for this user.
+/// Mount a recovered DEK into LocalDb: open the encrypted DB, init schema,
+/// stash the connection and DEK in state. Used by session restore when the
+/// DEK comes from the OS keyring instead of password-derived unlock.
+pub(crate) fn mount_dek(
+    app_data: &Path,
+    local_db: &State<'_, LocalDb>,
+    user_id: &str,
+    dek: Zeroizing<[u8; 32]>,
+) -> Result<(), String> {
+    mount_dek_inner(app_data, local_db, user_id, dek)
+}
+
+/// Status of the on-disk vault for a given user.
+#[derive(Debug, Serialize, Deserialize, Clone, Copy)]
+#[serde(rename_all = "PascalCase")]
+pub enum VaultStatus {
+    /// No vault file on disk for this user.
+    None,
+    /// Legacy v1 (password-derived) vault — needs migration before unlock.
+    V1Locked,
+    /// v2 vault on disk; DEK is in the OS keyring but not yet mounted.
+    V2Locked,
+    /// v2 vault is mounted and the DEK is in process memory.
+    V2Unlocked,
+}
+
+fn compute_vault_status(
+    app_data: &Path,
+    local_db: &State<'_, LocalDb>,
+    user_id: &str,
+) -> Result<VaultStatus, String> {
+    if !vault::vault_exists(app_data, user_id) {
+        return Ok(VaultStatus::None);
+    }
+    match vault::read_vault_version(app_data, user_id)? {
+        VaultVersion::V1 => Ok(VaultStatus::V1Locked),
+        VaultVersion::V2 => {
+            // V2Unlocked requires both an in-memory DEK *and* a fingerprint
+            // match against the on-disk vault. A mismatch means the mounted
+            // DEK doesn't belong to this vault — report V2Locked so the
+            // unlock path runs and surfaces a loud failure to the user
+            // instead of letting downstream code silently operate on the
+            // wrong DB.
+            let dek_guard = local_db.dek.lock_or_err()?;
+            if let Some(dek) = dek_guard.as_ref() {
+                if vault::verify_v2_fingerprint(app_data, user_id, dek).is_ok() {
+                    return Ok(VaultStatus::V2Unlocked);
+                }
+            }
+            Ok(VaultStatus::V2Locked)
+        }
+    }
+}
+
+/// Inspect the on-disk vault and in-memory state to tell the frontend what
+/// flow to take next (fresh setup, migrate, unlock from keyring, or already
+/// good to go).
 #[command]
-pub fn has_vault(
+pub fn vault_status(
     app: AppHandle,
+    local_db: State<'_, LocalDb>,
     user_id: String,
-) -> Result<bool, String> {
+) -> Result<VaultStatus, String> {
     let app_data = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    Ok(vault::vault_exists(&app_data, &user_id))
+    compute_vault_status(&app_data, &local_db, &user_id)
 }
 
-/// First-time setup: create vault with password and open encrypted database.
+/// Create a fresh v2 vault and mount the encrypted DB. Used on first
+/// sign-up or first sign-in for any auth method (password, Google, Entra)
+/// when no prior vault exists.
 #[command]
 pub fn setup_vault(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
     user_id: String,
-    password: String,
 ) -> Result<(), String> {
     let app_data = app
         .path()
@@ -157,6 +213,9 @@ pub fn setup_vault(
         return Err("Vault already exists for this user".to_string());
     }
 
+    // If a stray unencrypted DB was left behind by a much older build, set it
+    // aside so the new SQLCipher-encrypted DB can take its place. Migrating
+    // those rows is best-effort.
     let db_path = app_data.join(format!("messages_{}.db", user_id));
     let unencrypted_path = app_data.join(format!("messages_{}.db.unencrypted", user_id));
     if db_path.exists() && !unencrypted_path.exists() {
@@ -166,7 +225,7 @@ pub fn setup_vault(
         let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-shm", user_id)));
     }
 
-    let dek = vault::create_vault(&app_data, &user_id, &password)?;
+    let dek = vault::create_vault_v2(&app_data, &user_id)?;
     let conn = open_encrypted_db(&db_path, &dek)?;
     init_schema(&conn)?;
 
@@ -174,14 +233,14 @@ pub fn setup_vault(
         let msgs = {
             let old_conn = Connection::open(&unencrypted_path)
                 .map_err(|e| format!("Failed to open old DB for migration: {}", e))?;
-            let mut stmt = old_conn.prepare(
-                "SELECT id, conversation_id, sender_id, content, timestamp, content_type FROM messages"
-            ).map_err(|e| format!("Failed to query old DB: {}", e))?;
+            let mut stmt = old_conn
+                .prepare(
+                    "SELECT id, conversation_id, sender_id, content, timestamp, content_type FROM messages",
+                )
+                .map_err(|e| format!("Failed to query old DB: {}", e))?;
 
             let results: Vec<LocalMessage> = stmt
-                .query_map([], |row| {
-                    local_message_from_row(row)
-                })
+                .query_map([], |row| local_message_from_row(row))
                 .map_err(|e| format!("Failed to read old messages: {}", e))?
                 .filter_map(|r| r.ok())
                 .collect();
@@ -205,58 +264,79 @@ pub fn setup_vault(
     Ok(())
 }
 
-/// Unlock vault with password (used on new device or first login).
+/// Mount an existing v2 vault using the DEK already stored in the OS
+/// keyring. Returns Err if there is no v2 vault on disk, the keyring entry
+/// is missing or the stored user_id doesn't match, or the keyring DEK's
+/// fingerprint doesn't match the on-disk vault — the frontend should route
+/// to the login screen on any of those.
 #[command]
 pub fn unlock_vault(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
     user_id: String,
-    secret: String,
 ) -> Result<(), String> {
     let app_data = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
-    let dek = vault::open_vault(&app_data, &user_id, &secret)?;
-    let db_path = app_data.join(format!("messages_{}.db", user_id));
-    let conn = open_encrypted_db(&db_path, &dek)?;
-    init_schema(&conn)?;
+    if !vault::vault_exists(&app_data, &user_id) {
+        return Err("No vault on disk for this user".to_string());
+    }
+    if vault::read_vault_version(&app_data, &user_id)? != VaultVersion::V2 {
+        return Err("Vault is not v2 — run migrate_vault_from_password first".to_string());
+    }
 
-    let mut guard = local_db.conn.lock_or_err()?;
-    *guard = Some(conn);
-    let mut dek_guard = local_db.dek.lock_or_err()?;
-    *dek_guard = Some(dek);
-    Ok(())
-}
-
-/// Change the password. Re-wraps DEK with new password-derived KEK.
-#[command]
-pub fn change_password(
-    app: AppHandle,
-    user_id: String,
-    old_password: String,
-    new_password: String,
-) -> Result<(), String> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    vault::change_password(&app_data, &user_id, &old_password, &new_password)
+    let dek = session::load_dek_for_user(&user_id)?
+        .ok_or_else(|| "Keyring entry missing — cannot unlock v2 vault".to_string())?;
+    vault::verify_v2_fingerprint(&app_data, &user_id, &dek)?;
+    mount_dek_inner(&app_data, &local_db, &user_id, dek)
 }
 
 /// Check if the vault is currently unlocked (DEK in session memory).
 #[command]
-pub fn is_vault_unlocked(
-    local_db: State<'_, LocalDb>,
-) -> Result<bool, String> {
+pub fn is_vault_unlocked(local_db: State<'_, LocalDb>) -> Result<bool, String> {
     let guard = local_db.dek.lock_or_err()?;
     Ok(guard.is_some())
 }
 
-/// Legacy init for unencrypted DB — renamed to prepare for migration.
+/// One-time migration of a v1 (password-derived) vault to v2 (keyring-backed).
+/// Unwraps the existing DEK with the user's login password, rewrites the
+/// vault file as v2, and mounts the same DEK into the encrypted DB so message
+/// rows remain readable. The caller must follow up with `session_save` to
+/// stash the DEK in the OS keyring.
 #[command]
-pub fn init_local_db(
+pub fn migrate_vault_from_password(
+    app: AppHandle,
+    local_db: State<'_, LocalDb>,
+    user_id: String,
+    password: String,
+) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
+
+    if !vault::vault_exists(&app_data, &user_id) {
+        return Err("No vault to migrate".to_string());
+    }
+    if vault::read_vault_version(&app_data, &user_id)? != VaultVersion::V1 {
+        return Err("Vault is already v2 — no migration needed".to_string());
+    }
+
+    let dek = vault::open_v1_vault_with_password(&app_data, &user_id, &password)?;
+    vault::rewrite_as_v2(&app_data, &user_id, &dek)?;
+    vault::verify_v2_fingerprint(&app_data, &user_id, &dek)?;
+    mount_dek_inner(&app_data, &local_db, &user_id, dek)
+}
+
+/// Wipe local message DB and MLS state, then write a fresh v2 vault. Used
+/// by the "Discard local history" migration choice. The fresh vault is
+/// written first via the atomic helper; only if that succeeds do we delete
+/// the old DB / MLS state. A write failure aborts cleanly with the user's
+/// previous state intact.
+#[command]
+pub fn discard_and_reset_vault(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
     user_id: String,
@@ -267,27 +347,31 @@ pub fn init_local_db(
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
     std::fs::create_dir_all(&app_data).map_err(|e| format!("Failed to create dir: {}", e))?;
 
-    // If vault exists, user needs to unlock with PIN instead
-    if vault::vault_exists(&app_data, &user_id) {
-        return Err("Vault exists — use unlock_vault with PIN".to_string());
+    // Drop in-memory state first so we don't leave a stale connection pointing
+    // at a file we're about to delete.
+    {
+        let mut conn_guard = local_db.conn.lock_or_err()?;
+        *conn_guard = None;
+        let mut dek_guard = local_db.dek.lock_or_err()?;
+        *dek_guard = None;
     }
 
-    let db_path = app_data.join(format!("messages_{}.db", user_id));
-    let conn =
-        Connection::open(&db_path).map_err(|e| format!("Failed to open database: {}", e))?;
+    // Atomically replace the existing vault with a fresh v2 keyed to a new
+    // random DEK. write_v2_file does temp+rename, so the user's old vault
+    // file remains intact if this fails (disk full, permissions, etc.) and
+    // they can retry.
+    let dek = vault::create_vault_v2(&app_data, &user_id)?;
 
-    conn.execute_batch(
-        "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA busy_timeout=5000;",
-    )
-    .map_err(|e| format!("Failed to set pragmas: {}", e))?;
+    // Vault is now in place — safe to drop the old SQLCipher DB and MLS
+    // state. Their keys derived from the discarded DEK so they would no
+    // longer decrypt anyway.
+    let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db", user_id)));
+    let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-wal", user_id)));
+    let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-shm", user_id)));
+    let _ = std::fs::remove_file(app_data.join(format!("mls_{}.json", user_id)));
+    let _ = std::fs::remove_file(app_data.join(format!("mls_{}.meta.json", user_id)));
 
-    init_schema(&conn)?;
-
-    let mut guard = local_db.conn.lock_or_err()?;
-    *guard = Some(conn);
-    Ok(())
+    mount_dek_inner(&app_data, &local_db, &user_id, dek)
 }
 
 fn insert_message(conn: &rusqlite::Connection, msg: &LocalMessage) -> Result<(), String> {
