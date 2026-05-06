@@ -1,5 +1,6 @@
 // src-tauri/src/lib.rs
 
+mod app_path;
 mod auth;
 mod config;
 mod conversations;
@@ -10,6 +11,7 @@ mod media;
 mod mls;
 mod profile;
 mod session;
+mod session_store;
 mod sync;
 mod sync_utils;
 mod updates;
@@ -88,7 +90,6 @@ pub fn run() {
             local_db::setup_vault,
             local_db::unlock_vault,
             local_db::is_vault_unlocked,
-            local_db::migrate_vault_from_password,
             local_db::discard_and_reset_vault,
             local_db::get_local_messages,
             local_db::store_decrypted_message,

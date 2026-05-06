@@ -15,7 +15,7 @@ interface AuthResult {
   needs_confirmation: boolean
 }
 
-type VaultStatus = 'None' | 'V1Locked' | 'V2Locked' | 'V2Unlocked'
+type VaultStatus = 'None' | 'Locked' | 'Unlocked'
 
 function GoogleGlyph() {
   return (
@@ -63,36 +63,17 @@ export default function AuthPage() {
     setMode(next)
   }
 
-  // After a password sign-in we have the cleartext password in hand, so we
-  // can transparently migrate a v1 vault inline rather than bouncing the
-  // user through MigrationPage. Federated sign-ins go through App.tsx's
-  // vault_status switch instead.
   const ensureVaultReadyAfterPassword = async (userId: string) => {
     const status = await invoke<VaultStatus>('vault_status', { userId })
     switch (status) {
-      case 'V2Unlocked':
+      case 'Unlocked':
         return
-      case 'V2Locked':
+      case 'Locked':
         await invoke('unlock_vault', { userId })
         return
-      case 'V1Locked':
-        await invoke('migrate_vault_from_password', { userId, password })
+      case 'None':
+        await invoke('setup_vault', { userId })
         return
-      case 'None': {
-        // Either a brand new account or a fresh device. If we already have a
-        // server-side vault backup, pull it down and migrate from password;
-        // otherwise create a fresh v2 vault.
-        const syncExists = await invoke<boolean>('sync_check_exists').catch(() => false)
-        if (syncExists) {
-          await invoke('sync_download_vault')
-          await invoke('migrate_vault_from_password', { userId, password })
-          invoke('sync_restore_mls_state').catch(console.error)
-          invoke('sync_download_messages_db').catch(console.error)
-        } else {
-          await invoke('setup_vault', { userId })
-        }
-        return
-      }
     }
   }
 
