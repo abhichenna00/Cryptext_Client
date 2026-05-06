@@ -12,7 +12,15 @@
 //     The refresh token alone can exceed the keyring size cap, so it lives
 //     on disk encrypted. The DEK is still keyring-gated, so the file is
 //     useless to an attacker without keyring access.
+//
+// DEK lifecycle is **device-bound**, not session-bound. Sign-out only
+// deletes the encrypted refresh-token file; the keyring DEK and on-disk
+// vault stay intact so signing back in on the same device restores access
+// to existing message history. Wiping the keyring + vault is reserved for
+// either explicit account removal (`wipe_user`) or genuinely-corrupt local
+// state (DEK length wrong, undecryptable session.enc, DB mount failure).
 
+use crate::app_path::{self, AppPaths};
 use crate::auth::{self, SessionStore};
 use crate::local_db::{self, LocalDb};
 use aes_gcm::{
@@ -23,13 +31,12 @@ use base64::{engine::general_purpose, Engine};
 use keyring::Entry;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
-use tauri::{command, AppHandle, Manager, State};
+use std::path::PathBuf;
+use tauri::{command, AppHandle, State};
 use zeroize::Zeroizing;
 
 const KEYRING_SERVICE: &str = "cryptex.app.com";
 const KEYRING_ACCOUNT: &str = "active_session";
-const SESSION_FILE: &str = "session.enc";
 const NONCE_LEN: usize = 12;
 
 #[derive(Serialize, Deserialize)]
@@ -51,76 +58,271 @@ pub struct PublicStoredSession {
     pub email: String,
 }
 
-fn entry() -> Result<Entry, String> {
-    Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
-        .map_err(|e| format!("Keyring entry creation failed: {}", e))
+/// Outcome of attempting to restore a persisted session at launch.
+pub enum RestoreOutcome {
+    /// Full session restored: DEK mounted, tokens refreshed.
+    Restored,
+    /// No keyring entry on disk (or session.enc missing) — caller should
+    /// route to login. Existing keyring + vault remain available for the
+    /// next sign-in attempt.
+    NotAuthenticated,
 }
 
-fn session_file(app_data: &Path) -> PathBuf {
-    app_data.join(SESSION_FILE)
+pub struct SessionPersistence {
+    app: AppHandle,
+    app_data: PathBuf,
 }
 
-fn encrypt_with_dek(dek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
-    let cipher = Aes256Gcm::new_from_slice(dek)
-        .map_err(|e| format!("Cipher init failed: {}", e))?;
-    let mut nonce_bytes = [0u8; NONCE_LEN];
-    rand::thread_rng().fill_bytes(&mut nonce_bytes);
-    let nonce = Nonce::from_slice(&nonce_bytes);
-    let ciphertext = cipher
-        .encrypt(nonce, plaintext)
-        .map_err(|e| format!("Encrypt failed: {}", e))?;
-    let blob = EncryptedBlob {
-        nonce: nonce_bytes.to_vec(),
-        ciphertext,
-    };
-    serde_json::to_vec(&blob).map_err(|e| format!("Serialize failed: {}", e))
-}
-
-fn decrypt_with_dek(dek: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>, String> {
-    let blob: EncryptedBlob = serde_json::from_slice(encrypted)
-        .map_err(|e| format!("Deserialize failed: {}", e))?;
-    let cipher = Aes256Gcm::new_from_slice(dek)
-        .map_err(|e| format!("Cipher init failed: {}", e))?;
-    let nonce = Nonce::from_slice(&blob.nonce);
-    cipher
-        .decrypt(nonce, blob.ciphertext.as_ref())
-        .map_err(|_| "Refresh token decryption failed".to_string())
-}
-
-fn wipe(app_data: &Path) {
-    let _ = entry().and_then(|e| e.delete_credential().map_err(|err| format!("{}", err)));
-    let _ = std::fs::remove_file(session_file(app_data));
-}
-
-/// Read the DEK from the OS keyring for the given user. Returns Ok(None) if
-/// no keyring entry exists or the stored user_id does not match (caller
-/// should treat that as "vault unrecoverable on this device").
-pub(crate) fn load_dek_for_user(user_id: &str) -> Result<Option<Zeroizing<[u8; 32]>>, String> {
-    let json = match entry()?.get_password() {
-        Ok(json) => json,
-        Err(keyring::Error::NoEntry) => return Ok(None),
-        Err(e) => return Err(format!("Keyring read failed: {}", e)),
-    };
-    let payload: KeyringPayload =
-        serde_json::from_str(&json).map_err(|e| format!("Deserialize failed: {}", e))?;
-    if payload.user_id != user_id {
-        return Ok(None);
+impl SessionPersistence {
+    pub fn new(app: &AppHandle) -> Result<Self, String> {
+        Ok(Self {
+            app: app.clone(),
+            app_data: app_path::app_data_dir(app)?,
+        })
     }
-    let dek_bytes = general_purpose::STANDARD
-        .decode(&payload.dek_b64)
-        .map_err(|e| format!("Invalid stored DEK: {}", e))?;
-    if dek_bytes.len() != 32 {
-        return Err("Stored DEK has wrong length".to_string());
+
+    fn entry() -> Result<Entry, String> {
+        Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+            .map_err(|e| format!("Keyring entry creation failed: {}", e))
     }
-    let mut dek_array = [0u8; 32];
-    dek_array.copy_from_slice(&dek_bytes);
-    Ok(Some(Zeroizing::new(dek_array)))
+
+    fn session_file(&self) -> PathBuf {
+        app_path::session_file(&self.app_data)
+    }
+
+    fn encrypt_with_dek(dek: &[u8; 32], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+        let cipher = Aes256Gcm::new_from_slice(dek)
+            .map_err(|e| format!("Cipher init failed: {}", e))?;
+        let mut nonce_bytes = [0u8; NONCE_LEN];
+        rand::thread_rng().fill_bytes(&mut nonce_bytes);
+        let nonce = Nonce::from_slice(&nonce_bytes);
+        let ciphertext = cipher
+            .encrypt(nonce, plaintext)
+            .map_err(|e| format!("Encrypt failed: {}", e))?;
+        let blob = EncryptedBlob {
+            nonce: nonce_bytes.to_vec(),
+            ciphertext,
+        };
+        serde_json::to_vec(&blob).map_err(|e| format!("Serialize failed: {}", e))
+    }
+
+    fn decrypt_with_dek(dek: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8>, String> {
+        let blob: EncryptedBlob = serde_json::from_slice(encrypted)
+            .map_err(|e| format!("Deserialize failed: {}", e))?;
+        let cipher = Aes256Gcm::new_from_slice(dek)
+            .map_err(|e| format!("Cipher init failed: {}", e))?;
+        let nonce = Nonce::from_slice(&blob.nonce);
+        cipher
+            .decrypt(nonce, blob.ciphertext.as_ref())
+            .map_err(|_| "Refresh token decryption failed".to_string())
+    }
+
+    /// Persist the current session: writes the keyring payload (user, DEK)
+    /// and the DEK-encrypted refresh token to disk.
+    pub fn save_session(
+        &self,
+        dek: &[u8; 32],
+        user_id: &str,
+        email: &str,
+        refresh_token: &str,
+    ) -> Result<(), String> {
+        std::fs::create_dir_all(&self.app_data)
+            .map_err(|e| format!("Failed to create app data dir: {}", e))?;
+
+        let enc_refresh = Self::encrypt_with_dek(dek, refresh_token.as_bytes())?;
+        std::fs::write(self.session_file(), enc_refresh)
+            .map_err(|e| format!("Failed to write session file: {}", e))?;
+
+        let payload = KeyringPayload {
+            user_id: user_id.to_string(),
+            email: email.to_string(),
+            dek_b64: general_purpose::STANDARD.encode(dek),
+        };
+        let json = serde_json::to_string(&payload)
+            .map_err(|e| format!("Serialize failed: {}", e))?;
+
+        Self::entry()?
+            .set_password(&json)
+            .map_err(|e| format!("Keyring write failed: {}", e))
+    }
+
+    /// Read the DEK from the OS keyring for the given user. Returns Ok(None)
+    /// if no keyring entry exists or the stored user_id does not match
+    /// (caller should treat that as "vault unrecoverable on this device").
+    pub(crate) fn load_dek_for_user(
+        &self,
+        user_id: &str,
+    ) -> Result<Option<Zeroizing<[u8; 32]>>, String> {
+        load_dek_for_user_inner(user_id)
+    }
+
+    /// Inspect the keyring without restoring. Returns `Ok(None)` if no entry
+    /// exists; never reveals the DEK or refresh token.
+    pub fn peek_stored_user(&self) -> Result<Option<PublicStoredSession>, String> {
+        match Self::entry()?.get_password() {
+            Ok(json) => {
+                let payload: KeyringPayload = serde_json::from_str(&json)
+                    .map_err(|e| format!("Deserialize failed: {}", e))?;
+                Ok(Some(PublicStoredSession {
+                    user_id: payload.user_id,
+                    email: payload.email,
+                }))
+            }
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(e) => Err(format!("Keyring read failed: {}", e)),
+        }
+    }
+
+    /// Restore the full authenticated session at launch:
+    ///   1. Read keyring → DEK + user identity. Missing entry → NotAuthenticated.
+    ///   2. Read & decrypt session.enc → refresh token. Missing file →
+    ///      NotAuthenticated (user signed out previously).
+    ///   3. Mount DEK, open encrypted DB, populate LocalDb.
+    ///   4. Refresh Cognito tokens, populate SessionStore.
+    ///
+    /// Sign-out is not destructive in this design: only genuinely-corrupt
+    /// local state (wrong DEK length, undecryptable session.enc, DB mount
+    /// failure) wipes the keyring + vault. Transient failures (network,
+    /// missing session.enc, identity mismatch) leave credentials intact so
+    /// the next attempt can recover.
+    pub async fn restore(
+        &self,
+        local_db: &State<'_, LocalDb>,
+        session_store: &State<'_, SessionStore>,
+    ) -> Result<RestoreOutcome, String> {
+        let payload = match Self::entry()?.get_password() {
+            Ok(json) => serde_json::from_str::<KeyringPayload>(&json)
+                .map_err(|e| format!("Deserialize failed: {}", e))?,
+            Err(keyring::Error::NoEntry) => return Ok(RestoreOutcome::NotAuthenticated),
+            Err(e) => return Err(format!("Keyring read failed: {}", e)),
+        };
+
+        let dek_bytes = general_purpose::STANDARD
+            .decode(&payload.dek_b64)
+            .map_err(|e| format!("Invalid stored DEK: {}", e))?;
+        if dek_bytes.len() != 32 {
+            // Corrupt local state — keyring entry is unusable. Wipe so the
+            // next sign-in writes a clean entry.
+            self.wipe_local_artifacts(&payload.user_id);
+            return Err("Stored DEK has wrong length".to_string());
+        }
+        let mut dek_array = [0u8; 32];
+        dek_array.copy_from_slice(&dek_bytes);
+        let dek = Zeroizing::new(dek_array);
+
+        // session.enc missing means the user signed out (or the file was
+        // removed externally). Don't wipe — the keyring DEK + vault file are
+        // still valid; caller falls through to the login screen and a fresh
+        // sign-in will write a new session.enc.
+        let enc_refresh = match std::fs::read(self.session_file()) {
+            Ok(bytes) => bytes,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(RestoreOutcome::NotAuthenticated);
+            }
+            Err(e) => {
+                return Err(format!("Session file unreadable: {}", e));
+            }
+        };
+        let refresh_bytes = match Self::decrypt_with_dek(&dek, &enc_refresh) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                // Undecryptable session.enc means it doesn't match the
+                // keyring DEK — local state is genuinely corrupt.
+                self.wipe_local_artifacts(&payload.user_id);
+                return Err(e);
+            }
+        };
+        let refresh_token = String::from_utf8(refresh_bytes)
+            .map_err(|e| format!("Refresh token not valid UTF-8: {}", e))?;
+
+        let stored_user_id = payload.user_id.clone();
+        if let Err(e) = local_db::mount_dek(&self.app_data, local_db, &stored_user_id, dek) {
+            // DB mount failure with a fingerprint-matching DEK is corrupt
+            // local state — wipe so next launch does fresh setup.
+            self.wipe_local_artifacts(&payload.user_id);
+            return Err(format!("Local DB mount failed: {}", e));
+        }
+
+        if let Err(e) = auth::bootstrap_from_refresh_token(
+            session_store,
+            refresh_token,
+            stored_user_id.clone(),
+        )
+        .await
+        {
+            // Transient: refresh token may be revoked or the network is
+            // down. Don't destroy credentials — clear in-memory vault state
+            // so we don't leave a DEK dangling without a session, and let
+            // the caller route to login.
+            let _ = local_db::clear_vault_state(local_db);
+            return Err(format!("Session refresh failed: {}", e));
+        }
+
+        // Defence in depth: server-side identity must match what we stored.
+        let server_user_id = {
+            let store = session_store
+                .session
+                .lock()
+                .map_err(|_| "Session mutex poisoned".to_string())?;
+            store.as_ref().map(|s| s.user_id.clone())
+        };
+        if server_user_id.as_deref() != Some(stored_user_id.as_str()) {
+            let _ = local_db::clear_vault_state(local_db);
+            let mut store = session_store
+                .session
+                .lock()
+                .map_err(|_| "Session mutex poisoned".to_string())?;
+            *store = None;
+            return Err("Identity mismatch between stored vault and Cognito session".to_string());
+        }
+
+        Ok(RestoreOutcome::Restored)
+    }
+
+    /// Clear authentication state for sign-out: deletes only the encrypted
+    /// refresh-token file. The keyring DEK and on-disk vault stay intact so
+    /// the user can sign back in on the same device and recover their
+    /// existing message history.
+    pub fn clear_auth_state(&self) -> Result<(), String> {
+        match std::fs::remove_file(self.session_file()) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(format!("Failed to remove session file: {}", e)),
+        }
+    }
+
+    /// Destructive removal of the user's local footprint on this device:
+    /// keyring entry, session.enc, vault file, encrypted message DB (and
+    /// SQLite companions), and MLS state. Reserved for explicit account
+    /// removal or genuinely-corrupt local state. **Not** called from
+    /// sign-out.
+    pub fn wipe_user(&self, user_id: &str) -> Result<(), String> {
+        self.wipe_local_artifacts(user_id);
+        Ok(())
+    }
+
+    fn wipe_local_artifacts(&self, user_id: &str) {
+        let _ = Self::entry().and_then(|e| {
+            e.delete_credential().map_err(|err| format!("{}", err))
+        });
+        let _ = std::fs::remove_file(self.session_file());
+
+        if let Ok(paths) = AppPaths::new(&self.app, user_id) {
+            let _ = std::fs::remove_file(paths.vault());
+            let _ = std::fs::remove_file(paths.messages_db());
+            let _ = std::fs::remove_file(paths.messages_db_wal());
+            let _ = std::fs::remove_file(paths.messages_db_shm());
+            let _ = std::fs::remove_file(paths.messages_db_unencrypted());
+            let _ = std::fs::remove_file(paths.mls_state());
+            let _ = std::fs::remove_file(paths.mls_meta());
+        }
+    }
 }
 
-/// Save the current session (DEK + refresh token + user identity) to the
-/// OS keyring (small part) and an encrypted file (large refresh token).
-/// Called after successful password sign-in so subsequent launches can
-/// auto-restore without a login prompt.
+// ---------------------------------------------------------------------------
+// Tauri command wrappers — thin shims so the JS-side IPC contract is unchanged.
+// ---------------------------------------------------------------------------
+
 #[command]
 pub fn session_save(
     app: AppHandle,
@@ -147,153 +349,64 @@ pub fn session_save(
         )
     };
 
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    std::fs::create_dir_all(&app_data)
-        .map_err(|e| format!("Failed to create app data dir: {}", e))?;
-
-    let enc_refresh = encrypt_with_dek(&dek, refresh_token.as_bytes())?;
-    std::fs::write(session_file(&app_data), enc_refresh)
-        .map_err(|e| format!("Failed to write session file: {}", e))?;
-
-    let payload = KeyringPayload {
-        user_id,
-        email,
-        dek_b64: general_purpose::STANDARD.encode(&*dek),
-    };
-    let json = serde_json::to_string(&payload)
-        .map_err(|e| format!("Serialize failed: {}", e))?;
-
-    entry()?
-        .set_password(&json)
-        .map_err(|e| format!("Keyring write failed: {}", e))
+    let persistence = SessionPersistence::new(&app)?;
+    persistence.save_session(&dek, &user_id, &email, &refresh_token)
 }
 
-/// Peek at the stored session without restoring it. Returns the user_id and
-/// email if an entry exists, or None. Does not reveal the DEK or refresh
-/// token to the frontend.
 #[command]
-pub fn session_stored() -> Result<Option<PublicStoredSession>, String> {
-    match entry()?.get_password() {
-        Ok(json) => {
-            let payload: KeyringPayload = serde_json::from_str(&json)
-                .map_err(|e| format!("Deserialize failed: {}", e))?;
-            Ok(Some(PublicStoredSession {
-                user_id: payload.user_id,
-                email: payload.email,
-            }))
-        }
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("Keyring read failed: {}", e)),
-    }
+pub fn session_stored(app: AppHandle) -> Result<Option<PublicStoredSession>, String> {
+    SessionPersistence::new(&app)?.peek_stored_user()
 }
 
-/// Restore the full authenticated session:
-///   1. Read keyring → DEK + user identity.
-///   2. Read & decrypt session.enc → refresh token.
-///   3. Mount DEK, open encrypted DB, populate LocalDb.
-///   4. Refresh Cognito tokens, populate SessionStore.
-///
-/// On any failure the keyring entry and session file are wiped so the next
-/// launch falls back cleanly to the login screen. Returns Ok(true) on
-/// restore, Ok(false) if no entry exists.
 #[command]
 pub async fn session_restore(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
     session_store: State<'_, SessionStore>,
 ) -> Result<bool, String> {
-    let payload = match entry()?.get_password() {
-        Ok(json) => serde_json::from_str::<KeyringPayload>(&json)
-            .map_err(|e| format!("Deserialize failed: {}", e))?,
-        Err(keyring::Error::NoEntry) => return Ok(false),
+    let persistence = SessionPersistence::new(&app)?;
+    match persistence.restore(&local_db, &session_store).await? {
+        RestoreOutcome::Restored => Ok(true),
+        RestoreOutcome::NotAuthenticated => Ok(false),
+    }
+}
+
+#[command]
+pub fn session_clear(app: AppHandle) -> Result<(), String> {
+    SessionPersistence::new(&app)?.clear_auth_state()
+}
+
+/// Module-level helper used by `local_db::unlock_vault` to fetch the keyring
+/// DEK without an `AppHandle`. Equivalent to
+/// `SessionPersistence::load_dek_for_user`.
+pub(crate) fn load_dek_for_user(
+    user_id: &str,
+) -> Result<Option<Zeroizing<[u8; 32]>>, String> {
+    load_dek_for_user_inner(user_id)
+}
+
+fn load_dek_for_user_inner(
+    user_id: &str,
+) -> Result<Option<Zeroizing<[u8; 32]>>, String> {
+    let entry = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+        .map_err(|e| format!("Keyring entry creation failed: {}", e))?;
+    let json = match entry.get_password() {
+        Ok(json) => json,
+        Err(keyring::Error::NoEntry) => return Ok(None),
         Err(e) => return Err(format!("Keyring read failed: {}", e)),
     };
-
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
+    let payload: KeyringPayload =
+        serde_json::from_str(&json).map_err(|e| format!("Deserialize failed: {}", e))?;
+    if payload.user_id != user_id {
+        return Ok(None);
+    }
     let dek_bytes = general_purpose::STANDARD
         .decode(&payload.dek_b64)
         .map_err(|e| format!("Invalid stored DEK: {}", e))?;
     if dek_bytes.len() != 32 {
-        wipe(&app_data);
         return Err("Stored DEK has wrong length".to_string());
     }
     let mut dek_array = [0u8; 32];
     dek_array.copy_from_slice(&dek_bytes);
-    let dek = Zeroizing::new(dek_array);
-
-    let enc_refresh = match std::fs::read(session_file(&app_data)) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            wipe(&app_data);
-            return Err(format!("Session file missing or unreadable: {}", e));
-        }
-    };
-    let refresh_bytes = match decrypt_with_dek(&dek, &enc_refresh) {
-        Ok(bytes) => bytes,
-        Err(e) => {
-            wipe(&app_data);
-            return Err(e);
-        }
-    };
-    let refresh_token = String::from_utf8(refresh_bytes)
-        .map_err(|e| format!("Refresh token not valid UTF-8: {}", e))?;
-
-    let stored_user_id = payload.user_id.clone();
-    if let Err(e) = local_db::mount_dek(&app_data, &local_db, &stored_user_id, dek) {
-        wipe(&app_data);
-        return Err(format!("Local DB mount failed: {}", e));
-    }
-
-    if let Err(e) =
-        auth::bootstrap_from_refresh_token(&session_store, refresh_token, stored_user_id.clone())
-            .await
-    {
-        wipe(&app_data);
-        // Also clear in-memory vault state so we don't leave DEK dangling
-        // with no authenticated session to match.
-        let _ = local_db::clear_vault_state(&local_db);
-        return Err(format!("Session refresh failed: {}", e));
-    }
-
-    // Defence in depth: confirm the server-side identity matches what we
-    // stored locally. A mismatch would mean the refresh token belongs to a
-    // different user than the DEK, which should never happen normally.
-    let server_user_id = {
-        let store = session_store
-            .session
-            .lock()
-            .map_err(|_| "Session mutex poisoned".to_string())?;
-        store.as_ref().map(|s| s.user_id.clone())
-    };
-    if server_user_id.as_deref() != Some(stored_user_id.as_str()) {
-        wipe(&app_data);
-        let _ = local_db::clear_vault_state(&local_db);
-        let mut store = session_store
-            .session
-            .lock()
-            .map_err(|_| "Session mutex poisoned".to_string())?;
-        *store = None;
-        return Err("Identity mismatch between stored vault and Cognito session".to_string());
-    }
-
-    Ok(true)
-}
-
-/// Delete the stored session (keyring entry + encrypted file). Called on
-/// explicit sign-out.
-#[command]
-pub fn session_clear(app: AppHandle) -> Result<(), String> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-    wipe(&app_data);
-    Ok(())
+    Ok(Some(Zeroizing::new(dek_array)))
 }
