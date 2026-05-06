@@ -17,7 +17,6 @@ import ProfilePage from './pages/ProfilePage'
 import FriendsPage from './pages/FriendsPage'
 import DirectMessagePage from './pages/DirectMessagePage'
 import GroupMessagePage from './pages/GroupMessagePage'
-import MigrationPage from './pages/MigrationPage'
 import FriendsView from './components/FriendsView'
 
 // Check if running in Tauri
@@ -29,7 +28,7 @@ interface PublicSessionInfo {
   is_authenticated: boolean
 }
 
-type VaultStatus = 'None' | 'V1Locked' | 'V2Locked' | 'V2Unlocked'
+type VaultStatus = 'None' | 'Locked' | 'Unlocked'
 
 function LegacyChatRedirect() {
   const { friendId } = useParams<{ friendId: string }>()
@@ -41,7 +40,6 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [session, setSession] = useState<PublicSessionInfo | null>(null)
   const [hasProfile, setHasProfile] = useState(false)
-  const [needsMigration, setNeedsMigration] = useState(false)
   const [mlsWarning, setMlsWarning] = useState<string | null>(null)
   const [vaultError, setVaultError] = useState<string | null>(null)
 
@@ -83,32 +81,29 @@ export default function App() {
               userId: currentSession.user_id,
             })
             switch (status) {
-              case 'V2Unlocked':
+              case 'Unlocked':
                 vaultReady = true
                 break
-              case 'V2Locked':
+              case 'Locked':
                 await invoke('unlock_vault', { userId: currentSession.user_id })
-                await invoke('session_save').catch((e) =>
-                  console.error('session_save after unlock failed:', e),
-                )
+                await invoke('session_save')
                 vaultReady = true
                 break
               case 'None':
                 await invoke('setup_vault', { userId: currentSession.user_id })
-                await invoke('session_save').catch((e) =>
-                  console.error('session_save after setup failed:', e),
-                )
+                await invoke('session_save')
                 invoke('sync_upload_vault').catch(console.error)
                 vaultReady = true
-                break
-              case 'V1Locked':
-                setNeedsMigration(true)
                 break
             }
           } catch (dbErr) {
             console.error('Vault initialization failed:', dbErr)
+            const detail =
+              dbErr instanceof Error ? dbErr.message : typeof dbErr === 'string' ? dbErr : ''
             setVaultError(
-              'Local storage could not be unlocked on this device. Sign out and sign back in to recover.',
+              detail
+                ? `Local storage could not be unlocked: ${detail}. Sign out and sign back in to recover.`
+                : 'Local storage could not be unlocked on this device. Sign out and sign back in to recover.',
             )
           }
 
@@ -146,7 +141,6 @@ export default function App() {
       await invoke('sign_out')
       setSession(null)
       setHasProfile(false)
-      setNeedsMigration(false)
       setVaultError(null)
       window.location.href = '/'
     } catch (error) {
@@ -191,26 +185,13 @@ export default function App() {
           <Route path="/splash" element={<SplashPage />} />
 
           <Route
-            path="/migrate"
-            element={
-              !session
-                ? <Navigate to="/" replace />
-                : !needsMigration
-                  ? <Navigate to="/" replace />
-                  : <MigrationPage userId={session.user_id} onSignOut={handleSignOut} />
-            }
-          />
-
-          <Route
             path="/"
             element={
               !session
                 ? <AuthPage />
-                : needsMigration
-                  ? <Navigate to="/migrate" />
-                  : hasProfile
-                    ? <Navigate to="/home" />
-                    : <Navigate to="/profile" />
+                : hasProfile
+                  ? <Navigate to="/home" />
+                  : <Navigate to="/profile" />
             }
           />
 
@@ -222,11 +203,9 @@ export default function App() {
             element={
               !session
                 ? <Navigate to="/" />
-                : needsMigration
-                  ? <Navigate to="/migrate" />
-                  : hasProfile
-                    ? <Navigate to="/home" />
-                    : <ProfilePage />
+                : hasProfile
+                  ? <Navigate to="/home" />
+                  : <ProfilePage />
             }
           />
 
@@ -237,11 +216,9 @@ export default function App() {
             element={
               !session
                 ? <Navigate to="/" />
-                : needsMigration
-                  ? <Navigate to="/migrate" />
-                  : hasProfile
-                    ? <ChatPage />
-                    : <Navigate to="/profile" />
+                : hasProfile
+                  ? <ChatPage />
+                  : <Navigate to="/profile" />
             }
           />
 
@@ -250,11 +227,9 @@ export default function App() {
             element={
               !session
                 ? <Navigate to="/" />
-                : needsMigration
-                  ? <Navigate to="/migrate" />
-                  : hasProfile
-                    ? <HomePage onSignOut={handleSignOut} />
-                    : <Navigate to="/profile" />
+                : hasProfile
+                  ? <HomePage onSignOut={handleSignOut} />
+                  : <Navigate to="/profile" />
             }
           >
             <Route index element={<FriendsView />} />
@@ -267,11 +242,9 @@ export default function App() {
             element={
               !session
                 ? <Navigate to="/" />
-                : needsMigration
-                  ? <Navigate to="/migrate" />
-                  : hasProfile
-                    ? <FriendsPage />
-                    : <Navigate to="/profile" />
+                : hasProfile
+                  ? <FriendsPage />
+                  : <Navigate to="/profile" />
             }
           />
 

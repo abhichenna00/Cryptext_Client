@@ -9,7 +9,7 @@ use zeroize::Zeroizing;
 
 use crate::session;
 use crate::sync_utils::MutexExt;
-use crate::vault::{self, VaultVersion};
+use crate::vault;
 
 pub struct LocalDb {
     pub conn: Mutex<Option<Connection>>,
@@ -142,12 +142,12 @@ pub(crate) fn mount_dek(
 pub enum VaultStatus {
     /// No vault file on disk for this user.
     None,
-    /// Legacy v1 (password-derived) vault — needs migration before unlock.
-    V1Locked,
-    /// v2 vault on disk; DEK is in the OS keyring but not yet mounted.
-    V2Locked,
-    /// v2 vault is mounted and the DEK is in process memory.
-    V2Unlocked,
+    /// Vault file on disk; the DEK is in the OS keyring but not yet mounted
+    /// in process memory (or the keyring entry is missing/wrong, in which
+    /// case the unlock path will surface a loud error).
+    Locked,
+    /// Vault is mounted and the DEK is in process memory.
+    Unlocked,
 }
 
 fn compute_vault_status(
@@ -158,24 +158,18 @@ fn compute_vault_status(
     if !vault::vault_exists(app_data, user_id) {
         return Ok(VaultStatus::None);
     }
-    match vault::read_vault_version(app_data, user_id)? {
-        VaultVersion::V1 => Ok(VaultStatus::V1Locked),
-        VaultVersion::V2 => {
-            // V2Unlocked requires both an in-memory DEK *and* a fingerprint
-            // match against the on-disk vault. A mismatch means the mounted
-            // DEK doesn't belong to this vault — report V2Locked so the
-            // unlock path runs and surfaces a loud failure to the user
-            // instead of letting downstream code silently operate on the
-            // wrong DB.
-            let dek_guard = local_db.dek.lock_or_err()?;
-            if let Some(dek) = dek_guard.as_ref() {
-                if vault::verify_v2_fingerprint(app_data, user_id, dek).is_ok() {
-                    return Ok(VaultStatus::V2Unlocked);
-                }
-            }
-            Ok(VaultStatus::V2Locked)
+    // Unlocked requires both an in-memory DEK *and* a fingerprint match
+    // against the on-disk vault. A mismatch means the mounted DEK doesn't
+    // belong to this vault — report Locked so the unlock path runs and
+    // surfaces a loud failure to the user instead of letting downstream
+    // code silently operate on the wrong DB.
+    let dek_guard = local_db.dek.lock_or_err()?;
+    if let Some(dek) = dek_guard.as_ref() {
+        if vault::verify_fingerprint(app_data, user_id, dek).is_ok() {
+            return Ok(VaultStatus::Unlocked);
         }
     }
+    Ok(VaultStatus::Locked)
 }
 
 /// Inspect the on-disk vault and in-memory state to tell the frontend what
@@ -225,7 +219,7 @@ pub fn setup_vault(
         let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-shm", user_id)));
     }
 
-    let dek = vault::create_vault_v2(&app_data, &user_id)?;
+    let dek = vault::create_vault(&app_data, &user_id)?;
     let conn = open_encrypted_db(&db_path, &dek)?;
     init_schema(&conn)?;
 
@@ -264,11 +258,11 @@ pub fn setup_vault(
     Ok(())
 }
 
-/// Mount an existing v2 vault using the DEK already stored in the OS
-/// keyring. Returns Err if there is no v2 vault on disk, the keyring entry
-/// is missing or the stored user_id doesn't match, or the keyring DEK's
-/// fingerprint doesn't match the on-disk vault — the frontend should route
-/// to the login screen on any of those.
+/// Mount an existing vault using the DEK already stored in the OS keyring.
+/// Returns Err if there is no vault on disk, the keyring entry is missing
+/// or the stored user_id doesn't match, or the keyring DEK's fingerprint
+/// doesn't match the on-disk vault — the frontend should route to the
+/// login screen on any of those.
 #[command]
 pub fn unlock_vault(
     app: AppHandle,
@@ -283,13 +277,10 @@ pub fn unlock_vault(
     if !vault::vault_exists(&app_data, &user_id) {
         return Err("No vault on disk for this user".to_string());
     }
-    if vault::read_vault_version(&app_data, &user_id)? != VaultVersion::V2 {
-        return Err("Vault is not v2 — run migrate_vault_from_password first".to_string());
-    }
 
     let dek = session::load_dek_for_user(&user_id)?
-        .ok_or_else(|| "Keyring entry missing — cannot unlock v2 vault".to_string())?;
-    vault::verify_v2_fingerprint(&app_data, &user_id, &dek)?;
+        .ok_or_else(|| "Keyring entry missing — cannot unlock vault".to_string())?;
+    vault::verify_fingerprint(&app_data, &user_id, &dek)?;
     mount_dek_inner(&app_data, &local_db, &user_id, dek)
 }
 
@@ -300,37 +291,7 @@ pub fn is_vault_unlocked(local_db: State<'_, LocalDb>) -> Result<bool, String> {
     Ok(guard.is_some())
 }
 
-/// One-time migration of a v1 (password-derived) vault to v2 (keyring-backed).
-/// Unwraps the existing DEK with the user's login password, rewrites the
-/// vault file as v2, and mounts the same DEK into the encrypted DB so message
-/// rows remain readable. The caller must follow up with `session_save` to
-/// stash the DEK in the OS keyring.
-#[command]
-pub fn migrate_vault_from_password(
-    app: AppHandle,
-    local_db: State<'_, LocalDb>,
-    user_id: String,
-    password: String,
-) -> Result<(), String> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {}", e))?;
-
-    if !vault::vault_exists(&app_data, &user_id) {
-        return Err("No vault to migrate".to_string());
-    }
-    if vault::read_vault_version(&app_data, &user_id)? != VaultVersion::V1 {
-        return Err("Vault is already v2 — no migration needed".to_string());
-    }
-
-    let dek = vault::open_v1_vault_with_password(&app_data, &user_id, &password)?;
-    vault::rewrite_as_v2(&app_data, &user_id, &dek)?;
-    vault::verify_v2_fingerprint(&app_data, &user_id, &dek)?;
-    mount_dek_inner(&app_data, &local_db, &user_id, dek)
-}
-
-/// Wipe local message DB and MLS state, then write a fresh v2 vault. Used
+/// Wipe local message DB and MLS state, then write a fresh vault. Used
 /// by the "Discard local history" migration choice. The fresh vault is
 /// written first via the atomic helper; only if that succeeds do we delete
 /// the old DB / MLS state. A write failure aborts cleanly with the user's
@@ -360,7 +321,7 @@ pub fn discard_and_reset_vault(
     // random DEK. write_v2_file does temp+rename, so the user's old vault
     // file remains intact if this fails (disk full, permissions, etc.) and
     // they can retry.
-    let dek = vault::create_vault_v2(&app_data, &user_id)?;
+    let dek = vault::create_vault(&app_data, &user_id)?;
 
     // Vault is now in place — safe to drop the old SQLCipher DB and MLS
     // state. Their keys derived from the discarded DEK so they would no
