@@ -1,7 +1,8 @@
 // src-tauri/src/profile.rs
 
-use crate::auth::SessionStore;
+use crate::auth::{AuthProvider, SessionStore};
 use crate::http_client::AuthorizedClient;
+use crate::sync_utils::MutexExt;
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
 
@@ -16,6 +17,12 @@ pub struct ProfileData {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PlaceholderProfile {
+    pub username: String,
+    pub nickname: String,
+}
+
+#[derive(Serialize)]
+pub struct EnterprisePrefill {
     pub username: String,
     pub nickname: String,
 }
@@ -137,4 +144,79 @@ pub async fn generate_placeholder(
 ) -> Result<PlaceholderProfile, String> {
     let client = AuthorizedClient::from_session(&session_store)?;
     client.get("/profile/placeholder").await
+}
+
+/// Compute the new-user form prefill for an Entra-federated session. Username
+/// is locked on the frontend; nickname remains editable.
+#[command]
+pub fn get_enterprise_prefill(
+    session_store: State<'_, SessionStore>,
+) -> Result<EnterprisePrefill, String> {
+    let store = session_store.session.lock_or_err()?;
+    let session = store.as_ref().ok_or("Not authenticated")?;
+    if session.auth_provider != AuthProvider::Entra {
+        return Err("Not an enterprise user".to_string());
+    }
+
+    let given = session.given_name.as_deref();
+    let family = session.family_name.as_deref();
+    let email = session.email.as_str();
+
+    let username = derive_enterprise_username(given, family, email);
+    let nickname = derive_enterprise_nickname(session.name.as_deref(), given, family, email);
+
+    Ok(EnterprisePrefill { username, nickname })
+}
+
+fn derive_enterprise_username(
+    given_name: Option<&str>,
+    family_name: Option<&str>,
+    email: &str,
+) -> String {
+    let local_part = email.split('@').next().unwrap_or("");
+    let domain_first = email
+        .split('@')
+        .nth(1)
+        .and_then(|d| d.split('.').next())
+        .unwrap_or("");
+
+    let prefix = match (given_name, family_name) {
+        (Some(g), Some(f)) if !g.trim().is_empty() && !f.trim().is_empty() => {
+            let initial = g
+                .trim()
+                .chars()
+                .next()
+                .map(|c| c.to_lowercase().to_string())
+                .unwrap_or_default();
+            format!("{}{}", initial, f.trim().to_lowercase())
+        }
+        _ if !local_part.is_empty() => local_part.to_lowercase(),
+        _ => String::new(),
+    };
+
+    if !domain_first.is_empty() {
+        format!("{}.{}", prefix, domain_first.to_lowercase())
+    } else {
+        prefix
+    }
+}
+
+fn derive_enterprise_nickname(
+    name: Option<&str>,
+    given_name: Option<&str>,
+    family_name: Option<&str>,
+    email: &str,
+) -> String {
+    if let Some(n) = name {
+        let trimmed = n.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+    }
+    if let (Some(g), Some(f)) = (given_name, family_name) {
+        if !g.trim().is_empty() && !f.trim().is_empty() {
+            return format!("{} {}", g.trim(), f.trim());
+        }
+    }
+    email.split('@').next().unwrap_or("").to_string()
 }

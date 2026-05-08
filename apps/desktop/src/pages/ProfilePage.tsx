@@ -27,6 +27,18 @@ interface PlaceholderProfile {
   nickname: string
 }
 
+interface EnterprisePrefill {
+  username: string
+  nickname: string
+}
+
+interface PublicSessionInfo {
+  user_id: string
+  email: string
+  is_authenticated: boolean
+  is_enterprise: boolean
+}
+
 interface ProfileResult {
   success: boolean
   error?: string
@@ -55,6 +67,7 @@ export default function ProfilePage() {
   const [uploadingImage, setUploadingImage] = useState(false)
   const [initialLoading, setInitialLoading] = useState(true)
   const [isNewUser, setIsNewUser] = useState(true)
+  const [usernameLocked, setUsernameLocked] = useState(false)
 
   const generatePlaceholder = async () => {
     try {
@@ -69,8 +82,8 @@ export default function ProfilePage() {
   useEffect(() => {
     const loadProfile = async () => {
       try {
-        const id = await invoke<string | null>('get_user_id')
-        if (!id) {
+        const session = await invoke<PublicSessionInfo | null>('get_session')
+        if (!session) {
           navigate('/')
           return
         }
@@ -86,7 +99,19 @@ export default function ProfilePage() {
           setStatus((profile.status as Status) || 'online')
         } else {
           setIsNewUser(true)
-          await generatePlaceholder()
+          if (session.is_enterprise) {
+            try {
+              const prefill = await invoke<EnterprisePrefill>('get_enterprise_prefill')
+              setUsername(prefill.username)
+              setNickname(prefill.nickname)
+              setUsernameLocked(true)
+            } catch (err) {
+              console.error('Failed to load enterprise prefill:', err)
+              await generatePlaceholder()
+            }
+          } else {
+            await generatePlaceholder()
+          }
         }
       } catch (err) {
         console.error('Failed to load profile:', err)
@@ -194,7 +219,15 @@ export default function ProfilePage() {
           avatarUrl: finalAvatarUrl,
         })
         if (!result.success) {
-          setError(result.error || 'Failed to create profile')
+          const errMsg = result.error || 'Failed to create profile'
+          // If the locked-in enterprise handle is already taken, unlock the
+          // field and let the user pick a different one.
+          if (usernameLocked && isHandleConflict(errMsg)) {
+            setUsernameLocked(false)
+            setError('That handle is already taken — please pick another')
+          } else {
+            setError(errMsg)
+          }
           setLoading(false)
           return
         }
@@ -301,7 +334,13 @@ export default function ProfilePage() {
           <div className="profile-fields">
             <div className="field">
               <label htmlFor="username">Username</label>
-              <Input id="username" placeholder="unique_username" value={username} onChange={(e) => setUsername(e.target.value)} />
+              <Input
+                id="username"
+                placeholder="unique_username"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                readOnly={usernameLocked}
+              />
             </div>
             <div className="field">
               <label htmlFor="displayname">Display Name</label>
@@ -322,5 +361,16 @@ export default function ProfilePage() {
         </div>
       </div>
     </div>
+  )
+}
+
+function isHandleConflict(message: string): boolean {
+  const lower = message.toLowerCase()
+  return (
+    lower.includes('409') ||
+    lower.includes('username taken') ||
+    lower.includes('already taken') ||
+    lower.includes('already exists') ||
+    lower.includes('conflict')
   )
 }
