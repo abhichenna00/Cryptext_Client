@@ -1,7 +1,7 @@
 // src-tauri/src/friends.rs
 
-use crate::auth::{self, SessionStore};
-use crate::http_client;
+use crate::auth::SessionStore;
+use crate::http_client::{self, AuthorizedClient};
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
 
@@ -48,24 +48,24 @@ struct SendRequestBody {
 pub async fn get_friends(
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<FriendWithProfile>, String> {
-    let token = auth::get_token(&session_store)?;
-    http_client::get("/friends", &token).await
+    let client = AuthorizedClient::from_session(&session_store)?;
+    client.get("/friends").await
 }
 
 #[command]
 pub async fn get_incoming_friend_requests(
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<FriendRequest>, String> {
-    let token = auth::get_token(&session_store)?;
-    http_client::get("/friends/requests/incoming", &token).await
+    let client = AuthorizedClient::from_session(&session_store)?;
+    client.get("/friends/requests/incoming").await
 }
 
 #[command]
 pub async fn get_outgoing_friend_requests(
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<FriendRequest>, String> {
-    let token = auth::get_token(&session_store)?;
-    http_client::get("/friends/requests/outgoing", &token).await
+    let client = AuthorizedClient::from_session(&session_store)?;
+    client.get("/friends/requests/outgoing").await
 }
 
 #[command]
@@ -73,8 +73,8 @@ pub async fn send_friend_request(
     to_username: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = auth::get_token(&session_store)?;
-    http_client::post("/friends/requests/send", &token, &SendRequestBody { to_username }).await
+    let client = AuthorizedClient::from_session(&session_store)?;
+    client.post("/friends/requests/send", &SendRequestBody { to_username }).await
 }
 
 #[command]
@@ -82,9 +82,9 @@ pub async fn accept_friend_request(
     request_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let path = format!("/friends/requests/{}/accept", request_id);
-    http_client::post(&path, &token, &http_client::EmptyBody {}).await
+    client.post(&path, &http_client::EmptyBody {}).await
 }
 
 #[command]
@@ -92,9 +92,9 @@ pub async fn decline_friend_request(
     request_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let path = format!("/friends/requests/{}/decline", request_id);
-    http_client::post(&path, &token, &http_client::EmptyBody {}).await
+    client.post(&path, &http_client::EmptyBody {}).await
 }
 
 #[command]
@@ -102,9 +102,9 @@ pub async fn cancel_friend_request(
     request_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let path = format!("/friends/requests/{}/cancel", request_id);
-    http_client::delete(&path, &token).await
+    client.delete(&path).await
 }
 
 #[command]
@@ -112,7 +112,7 @@ pub async fn remove_friend(
     friend_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<FriendResult, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let path = format!("/friends/{}", friend_id);
-    http_client::delete(&path, &token).await
+    client.delete(&path).await
 }
