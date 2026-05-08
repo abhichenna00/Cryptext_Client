@@ -4,6 +4,8 @@ use reqwest::{Client, Response};
 use serde::{de::DeserializeOwned, Serialize};
 use std::sync::OnceLock;
 use std::time::Duration;
+use tauri::State;
+use crate::auth::{self, SessionStore};
 use crate::config::server_url;
 
 #[derive(Serialize)]
@@ -215,4 +217,202 @@ pub async fn download_binary(path: &str, token: &str) -> Result<Vec<u8>, String>
         .await
         .map(|b| b.to_vec())
         .map_err(|e| format!("Failed to read response bytes: {}", e))
+}
+
+// ============================================
+// New typed API. Lives alongside the free functions above during the
+// migration; callsites move over one at a time. The legacy free
+// functions stay byte-for-byte unchanged until all callsites have been
+// retired off them.
+// ============================================
+
+// Long-timeout singleton for binary endpoints (vault sync, media). The
+// legacy free functions still build a fresh Client per call; the new
+// AuthorizedClient methods reuse this singleton so they avoid a TLS
+// handshake on every upload/download.
+static BINARY_HTTP_CLIENT: OnceLock<Client> = OnceLock::new();
+
+fn binary_client() -> &'static Client {
+    BINARY_HTTP_CLIENT.get_or_init(|| {
+        Client::builder()
+            .timeout(Duration::from_secs(300))
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .expect("Failed to build binary HTTP client")
+    })
+}
+
+/// Anonymous calls — sign-in, sign-up, OAuth start/poll. No bearer token.
+#[derive(Default)]
+pub(crate) struct HttpClient;
+
+impl HttpClient {
+    pub(crate) fn new() -> Self {
+        Self
+    }
+
+    pub(crate) async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, String> {
+        let url = format!("{}{}", server_url(), path);
+        let response = client()
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {}", e))?;
+        handle_response(response).await
+    }
+
+    pub(crate) async fn post<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, String> {
+        let url = format!("{}{}", server_url(), path);
+        let response = client()
+            .post(&url)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {}", e))?;
+        handle_response(response).await
+    }
+}
+
+/// Bearer-authenticated calls. The token is captured at construction so
+/// it can't be omitted from any subsequent request.
+pub(crate) struct AuthorizedClient {
+    token: String,
+}
+
+impl AuthorizedClient {
+    fn new(token: String) -> Self {
+        Self { token }
+    }
+
+    pub(crate) fn from_session(store: &State<'_, SessionStore>) -> Result<Self, String> {
+        Ok(Self::new(auth::get_token(store)?))
+    }
+
+    pub(crate) async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T, String> {
+        let url = format!("{}{}", server_url(), path);
+        let response = client()
+            .get(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {}", e))?;
+        handle_response(response).await
+    }
+
+    pub(crate) async fn post<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, String> {
+        let url = format!("{}{}", server_url(), path);
+        let response = client()
+            .post(&url)
+            .bearer_auth(&self.token)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {}", e))?;
+        handle_response(response).await
+    }
+
+    pub(crate) async fn put<T: DeserializeOwned, B: Serialize>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T, String> {
+        let url = format!("{}{}", server_url(), path);
+        let response = client()
+            .put(&url)
+            .bearer_auth(&self.token)
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {}", e))?;
+        handle_response(response).await
+    }
+
+    pub(crate) async fn delete<T: DeserializeOwned>(&self, path: &str) -> Result<T, String> {
+        let url = format!("{}{}", server_url(), path);
+        let response = client()
+            .delete(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| format!("Request failed: {}", e))?;
+        handle_response(response).await
+    }
+
+    pub(crate) async fn put_bytes(&self, path: &str, body: Vec<u8>) -> Result<(), String> {
+        let url = format!("{}{}", server_url(), path);
+        let response = binary_client()
+            .put(&url)
+            .bearer_auth(&self.token)
+            .header("content-type", "application/octet-stream")
+            .body(body)
+            .send()
+            .await
+            .map_err(|e| format!("Upload failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let _ = response.text().await;
+            return Err(format!("HTTP {}: Upload failed", status));
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn get_bytes(&self, path: &str) -> Result<Vec<u8>, String> {
+        let url = format!("{}{}", server_url(), path);
+        let response = binary_client()
+            .get(&url)
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| format!("Download failed: {}", e))?;
+
+        if !response.status().is_success() {
+            let status = response.status().as_u16();
+            let _ = response.text().await;
+            return Err(format!("HTTP {}: Download failed", status));
+        }
+
+        response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| format!("Failed to read response bytes: {}", e))
+    }
+
+    pub(crate) async fn upload_multipart(
+        &self,
+        path: &str,
+        conversation_id: &str,
+        file_bytes: Vec<u8>,
+        file_name: &str,
+    ) -> Result<serde_json::Value, String> {
+        let url = format!("{}{}", server_url(), path);
+        let form = reqwest::multipart::Form::new()
+            .text("conversation_id", conversation_id.to_string())
+            .part(
+                "file",
+                reqwest::multipart::Part::bytes(file_bytes)
+                    .file_name(file_name.to_string())
+                    .mime_str("application/octet-stream")
+                    .map_err(|e| format!("Failed to set MIME type: {}", e))?,
+            );
+
+        let response = binary_client()
+            .post(&url)
+            .bearer_auth(&self.token)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| format!("Upload failed: {}", e))?;
+
+        handle_response(response).await
+    }
 }
