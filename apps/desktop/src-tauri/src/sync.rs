@@ -1,5 +1,5 @@
 use crate::auth::{self, SessionStore};
-use crate::http_client;
+use crate::http_client::AuthorizedClient;
 use crate::local_db::LocalDb;
 use crate::mls::MlsState;
 use crate::vault;
@@ -62,7 +62,7 @@ pub async fn sync_upload_vault(
     app: AppHandle,
     session_store: State<'_, SessionStore>,
 ) -> Result<(), String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let user_id = auth::get_user_id_from_session(&session_store)?;
     let app_data = app
         .path()
@@ -73,7 +73,7 @@ pub async fn sync_upload_vault(
     let vault_bytes = std::fs::read(&vault_path)
         .map_err(|e| format!("Failed to read vault file: {}", e))?;
 
-    http_client::put_bytes("/sync/vault", &token, vault_bytes).await
+    client.put_bytes("/sync/vault", vault_bytes).await
 }
 
 #[command]
@@ -83,7 +83,7 @@ pub async fn sync_upload_mls_state(
     local_db: State<'_, LocalDb>,
     _mls_state: State<'_, MlsState>,
 ) -> Result<(), String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let user_id = auth::get_user_id_from_session(&session_store)?;
     let dek = get_dek(&local_db)?;
 
@@ -107,7 +107,7 @@ pub async fn sync_upload_mls_state(
         .map_err(|e| format!("Failed to serialize MLS bundle: {}", e))?;
 
     let encrypted = encrypt_with_dek(&dek, &combined_bytes)?;
-    http_client::put_bytes("/sync/mls-state", &token, encrypted).await
+    client.put_bytes("/sync/mls-state", encrypted).await
 }
 
 #[command]
@@ -115,7 +115,7 @@ pub async fn sync_upload_messages_db(
     app: AppHandle,
     session_store: State<'_, SessionStore>,
 ) -> Result<(), String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let user_id = auth::get_user_id_from_session(&session_store)?;
     let app_data = app
         .path()
@@ -126,7 +126,7 @@ pub async fn sync_upload_messages_db(
     let db_bytes = std::fs::read(&db_path)
         .map_err(|e| format!("Failed to read messages DB: {}", e))?;
 
-    http_client::put_bytes("/sync/messages-db", &token, db_bytes).await
+    client.put_bytes("/sync/messages-db", db_bytes).await
 }
 
 // ============================================
@@ -142,8 +142,8 @@ struct SyncExistsResponse {
 pub async fn sync_check_exists(
     session_store: State<'_, SessionStore>,
 ) -> Result<bool, String> {
-    let token = auth::get_token(&session_store)?;
-    let resp: SyncExistsResponse = http_client::get("/sync/exists", &token).await?;
+    let client = AuthorizedClient::from_session(&session_store)?;
+    let resp: SyncExistsResponse = client.get("/sync/exists").await?;
     Ok(resp.exists)
 }
 
@@ -152,7 +152,7 @@ pub async fn sync_download_vault(
     app: AppHandle,
     session_store: State<'_, SessionStore>,
 ) -> Result<(), String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let user_id = auth::get_user_id_from_session(&session_store)?;
     let app_data = app
         .path()
@@ -162,7 +162,7 @@ pub async fn sync_download_vault(
     std::fs::create_dir_all(&app_data)
         .map_err(|e| format!("Failed to create app data dir: {}", e))?;
 
-    let vault_bytes = http_client::get_bytes("/sync/vault", &token).await?;
+    let vault_bytes = client.get_bytes("/sync/vault").await?;
     let vault_path = vault::vault_path(&app_data, &user_id);
     std::fs::write(&vault_path, vault_bytes)
         .map_err(|e| format!("Failed to write vault file: {}", e))?;
@@ -176,7 +176,7 @@ pub async fn sync_restore_mls_state(
     session_store: State<'_, SessionStore>,
     local_db: State<'_, LocalDb>,
 ) -> Result<(), String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let user_id = auth::get_user_id_from_session(&session_store)?;
     let dek = get_dek(&local_db)?;
 
@@ -185,7 +185,7 @@ pub async fn sync_restore_mls_state(
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
-    let encrypted = http_client::get_bytes("/sync/mls-state", &token).await?;
+    let encrypted = client.get_bytes("/sync/mls-state").await?;
     let decrypted = decrypt_with_dek(&dek, &encrypted)?;
 
     let combined: serde_json::Value = serde_json::from_slice(&decrypted)
@@ -214,7 +214,7 @@ pub async fn sync_download_messages_db(
     app: AppHandle,
     session_store: State<'_, SessionStore>,
 ) -> Result<(), String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let user_id = auth::get_user_id_from_session(&session_store)?;
     let app_data = app
         .path()
@@ -224,7 +224,7 @@ pub async fn sync_download_messages_db(
     std::fs::create_dir_all(&app_data)
         .map_err(|e| format!("Failed to create app data dir: {}", e))?;
 
-    let db_bytes = http_client::get_bytes("/sync/messages-db", &token).await?;
+    let db_bytes = client.get_bytes("/sync/messages-db").await?;
     let db_path = app_data.join(format!("messages_{}.db", user_id));
     std::fs::write(&db_path, db_bytes)
         .map_err(|e| format!("Failed to write messages DB: {}", e))?;

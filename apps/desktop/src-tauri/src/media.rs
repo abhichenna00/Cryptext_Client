@@ -1,7 +1,7 @@
 // src-tauri/src/media.rs
 
 use crate::auth::{self, SessionStore};
-use crate::http_client;
+use crate::http_client::AuthorizedClient;
 use crate::local_db::{self, LocalDb, LocalMessage};
 use crate::mls::MlsState;
 use crate::conversations::{MessageResult, SendMessageBody};
@@ -197,7 +197,7 @@ pub async fn send_media(
     mls_state: State<'_, MlsState>,
     local_db: State<'_, LocalDb>,
 ) -> Result<MessageResult, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
 
     // 1. Validate file type and size
@@ -261,9 +261,8 @@ pub async fn send_media(
         .unwrap_or("file")
         .to_string();
 
-    let upload_result: serde_json::Value = http_client::upload_multipart(
+    let upload_result: serde_json::Value = client.upload_multipart(
         "/media/upload",
-        &token,
         &conversation_id,
         encrypted_file,
         &format!("{}.enc", file_name),
@@ -275,9 +274,8 @@ pub async fn send_media(
         .to_string();
 
     let thumb_s3_key = if let Some(enc_thumb) = encrypted_thumb {
-        let thumb_result: serde_json::Value = http_client::upload_multipart(
+        let thumb_result: serde_json::Value = client.upload_multipart(
             "/media/upload",
-            &token,
             &conversation_id,
             enc_thumb,
             &format!("{}_thumb.enc", file_name),
@@ -339,7 +337,7 @@ pub async fn send_media(
     };
 
     let msg_path = format!("/conversations/{}/messages", conversation_id);
-    let result: MessageResult = http_client::post(&msg_path, &token, &body).await?;
+    let result: MessageResult = client.post(&msg_path, &body).await?;
 
     // 8. Store metadata locally and cache the original file
     if result.success {
@@ -395,9 +393,9 @@ pub async fn download_media(
         }
     }
 
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let download_path = format!("/media/download?key={}", urlencoding::encode(&s3_key));
-    let encrypted_bytes = http_client::download_binary(&download_path, &token).await?;
+    let encrypted_bytes = client.get_bytes(&download_path).await?;
 
     let decrypted = decrypt_bytes(&media_key, &nonce, &encrypted_bytes)?;
 

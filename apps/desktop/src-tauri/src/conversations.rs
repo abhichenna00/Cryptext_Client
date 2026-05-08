@@ -1,7 +1,7 @@
 // src-tauri/src/conversations.rs
 
 use crate::auth::{self, SessionStore};
-use crate::http_client;
+use crate::http_client::{self, AuthorizedClient};
 use crate::local_db::{self, LocalDb, LocalMessage};
 use crate::mls::MlsState;
 use serde::{Deserialize, Serialize};
@@ -96,9 +96,9 @@ pub async fn get_conversations(
     session_store: State<'_, SessionStore>,
     local_db: State<'_, LocalDb>,
 ) -> Result<Vec<ConversationWithDetails>, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let mut conversations: Vec<ConversationWithDetails> =
-        http_client::get("/conversations", &token).await?;
+        client.get("/conversations").await?;
 
     // The server only holds ciphertext, so its `last_message` is a generic
     // `[encrypted]` placeholder. Substitute with the latest decrypted message
@@ -122,10 +122,10 @@ pub async fn get_or_create_dm(
     other_user_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<DmResult, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let body = CreateDmBody { other_user_id };
 
-    match http_client::post::<serde_json::Value, _>("/conversations/dm", &token, &body).await {
+    match client.post::<serde_json::Value, _>("/conversations/dm", &body).await {
         Ok(json) => {
             let conversation_id = json["conversation_id"].as_str().map(|s| s.to_string());
             Ok(DmResult {
@@ -149,7 +149,7 @@ pub async fn get_messages(
     mls_state: State<'_, MlsState>,
     local_db: State<'_, LocalDb>,
 ) -> Result<Vec<Message>, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
 
@@ -158,7 +158,7 @@ pub async fn get_messages(
         local_db::get_existing_message_ids(&local_db, &conversation_id).unwrap_or_default();
 
     // Fetch from server
-    let server_messages: Vec<Message> = http_client::get(&path, &token).await?;
+    let server_messages: Vec<Message> = client.get(&path).await?;
 
     // Process any Welcome data embedded in messages before decrypting
     for msg in &server_messages {
@@ -241,7 +241,7 @@ pub async fn send_message(
     mls_state: State<'_, MlsState>,
     local_db: State<'_, LocalDb>,
 ) -> Result<MessageResult, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
 
@@ -274,7 +274,7 @@ pub async fn send_message(
         welcome_data: welcome_bytes,
     };
 
-    let result: MessageResult = http_client::post(&path, &token, &body).await?;
+    let result: MessageResult = client.post(&path, &body).await?;
 
     // Store plaintext locally with the real server ID
     if result.success {
@@ -303,7 +303,7 @@ pub async fn fetch_new_messages(
     mls_state: State<'_, MlsState>,
     local_db: State<'_, LocalDb>,
 ) -> Result<Vec<Message>, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
 
     let latest_ts = local_db::get_latest_timestamp(&local_db, &conversation_id)?;
@@ -312,7 +312,7 @@ pub async fn fetch_new_messages(
         None => format!("/conversations/{}/messages", conversation_id),
     };
 
-    let server_messages: Vec<Message> = http_client::get(&path, &token).await?;
+    let server_messages: Vec<Message> = client.get(&path).await?;
 
     if server_messages.is_empty() {
         return Ok(Vec::new());
@@ -395,9 +395,9 @@ pub async fn mark_read(
     conversation_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<ReadResult, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let path = format!("/conversations/{}/read", conversation_id);
-    http_client::post(&path, &token, &http_client::EmptyBody {}).await
+    client.post(&path, &http_client::EmptyBody {}).await
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -428,7 +428,7 @@ pub async fn create_group(
     session_store: State<'_, SessionStore>,
     mls_state: State<'_, MlsState>,
 ) -> Result<GroupResult, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
 
     let mut all_members = member_ids;
@@ -441,7 +441,7 @@ pub async fn create_group(
         member_ids: all_members.clone(),
     };
 
-    let json: serde_json::Value = match http_client::post("/conversations/group", &token, &body).await {
+    let json: serde_json::Value = match client.post("/conversations/group", &body).await {
         Ok(j) => j,
         Err(e) => return Ok(GroupResult {
             success: false,
@@ -481,7 +481,7 @@ pub async fn get_group_members(
     conversation_id: String,
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<GroupMember>, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let path = format!("/conversations/{}/members", conversation_id);
-    http_client::get(&path, &token).await
+    client.get(&path).await
 }

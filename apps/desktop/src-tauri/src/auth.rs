@@ -1,6 +1,6 @@
 // src-tauri/src/auth.rs
 
-use crate::http_client;
+use crate::http_client::HttpClient;
 use crate::sync_utils::MutexExt;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -138,7 +138,8 @@ pub async fn sign_in(
     }
 
     let body = SignInBody { email, password };
-    let response: ServerAuthResponse = http_client::post_no_auth("/auth/signin", &body).await?;
+    let client = HttpClient::new();
+    let response: ServerAuthResponse = client.post("/auth/signin", &body).await?;
 
     if response.success {
         // Store the session in Tauri's backend process
@@ -212,7 +213,8 @@ pub async fn sign_up(
     }
 
     let body = SignUpBody { email: email.clone(), password: password.clone(), phone };
-    let response: ServerAuthResponse = http_client::post_no_auth("/auth/signup", &body).await?;
+    let client = HttpClient::new();
+    let response: ServerAuthResponse = client.post("/auth/signup", &body).await?;
 
     if response.success {
         let needs_confirmation = response.needs_confirmation.unwrap_or(false);
@@ -261,7 +263,8 @@ pub async fn confirm_sign_up(
     code: String,
 ) -> Result<AuthResult, String> {
     let body = ConfirmBody { email, code };
-    let response: ServerAuthResponse = http_client::post_no_auth("/auth/confirm", &body).await?;
+    let client = HttpClient::new();
+    let response: ServerAuthResponse = client.post("/auth/confirm", &body).await?;
 
     Ok(AuthResult {
         success: response.success,
@@ -350,7 +353,8 @@ pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<b
         refresh_token,
         username: user_id,
     };
-    let response: ServerAuthResponse = match http_client::post_no_auth("/auth/refresh", &body).await {
+    let client = HttpClient::new();
+    let response: ServerAuthResponse = match client.post("/auth/refresh", &body).await {
         Ok(r) => r,
         Err(e) => {
             // Only clear session on definitive auth failures, not transient errors
@@ -401,7 +405,8 @@ pub(crate) async fn bootstrap_from_refresh_token(
         refresh_token: refresh_token.clone(),
         username: user_id.clone(),
     };
-    let response: ServerAuthResponse = http_client::post_no_auth("/auth/refresh", &body)
+    let client = HttpClient::new();
+    let response: ServerAuthResponse = client.post("/auth/refresh", &body)
         .await
         .map_err(|e| format!("Refresh request failed: {}", e))?;
 
@@ -490,8 +495,9 @@ async fn oauth_sign_in(
     status_path: &str,
     provider_label: &str,
 ) -> Result<AuthResult, String> {
+    let client = HttpClient::new();
     let start: OAuthStartResponse =
-        http_client::post_no_auth(start_path, &serde_json::json!({})).await?;
+        client.post(start_path, &serde_json::json!({})).await?;
 
     app_handle
         .opener()
@@ -515,7 +521,7 @@ async fn oauth_sign_in(
             });
         }
 
-        let status: OAuthStatusResponse = match http_client::get_no_auth(&poll_url).await {
+        let status: OAuthStatusResponse = match client.get(&poll_url).await {
             Ok(s) => s,
             Err(_) => continue, // Network blip, keep polling
         };
