@@ -115,6 +115,7 @@ pub fn run() {
             profile::update_status,
             profile::upload_avatar,
             profile::generate_placeholder,
+            profile::get_enterprise_prefill,
             // Session persistence (OS keyring)
             session::session_save,
             session::session_stored,

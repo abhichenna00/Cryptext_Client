@@ -12,6 +12,17 @@ use base64::Engine;
 /// between the client and server.
 const EXPIRY_BUFFER_SECS: i64 = 60;
 
+/// Identity provider that produced the current session. Drives UX branches
+/// like the enterprise profile prefill — federated sign-ins carry richer
+/// identity claims that the new-user form can pre-fill from.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub enum AuthProvider {
+    #[default]
+    Password,
+    Google,
+    Entra,
+}
+
 /// Represents a user session stored securely in Tauri's backend process
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Session {
@@ -21,6 +32,10 @@ pub struct Session {
     pub user_id: String,
     pub email: String,
     pub expires_at: i64,
+    pub auth_provider: AuthProvider,
+    pub given_name: Option<String>,
+    pub family_name: Option<String>,
+    pub name: Option<String>,
 }
 
 /// Thread-safe session storage (managed by Tauri)
@@ -63,6 +78,7 @@ pub struct PublicSessionInfo {
     pub user_id: String,
     pub email: String,
     pub is_authenticated: bool,
+    pub is_enterprise: bool,
 }
 
 /// Result returned to frontend for auth operations
@@ -158,6 +174,10 @@ pub async fn sign_in(
                 user_id: user_id.clone(),
                 email,
                 expires_at,
+                auth_provider: AuthProvider::Password,
+                given_name: None,
+                family_name: None,
+                name: None,
             };
             let mut store = session_store.session.lock_or_err()?;
             *store = Some(session);
@@ -230,7 +250,18 @@ pub async fn sign_up(
                     response.email,
                     response.expires_at,
                 ) {
-                    let session = Session { access_token, refresh_token, id_token, user_id: user_id.clone(), email, expires_at };
+                    let session = Session {
+                        access_token,
+                        refresh_token,
+                        id_token,
+                        user_id: user_id.clone(),
+                        email,
+                        expires_at,
+                        auth_provider: AuthProvider::Password,
+                        given_name: None,
+                        family_name: None,
+                        name: None,
+                    };
                     let mut store = session_store.session.lock_or_err()?;
                     *store = Some(session);
                     return Ok(AuthResult { success: true, error: None, user_id: Some(user_id), needs_confirmation: false });
@@ -302,6 +333,7 @@ pub async fn get_session(
                 user_id: session.user_id.clone(),
                 email: session.email.clone(),
                 is_authenticated: true,
+                is_enterprise: session.auth_provider == AuthProvider::Entra,
             }))
         }
         _ => Ok(None),
@@ -374,6 +406,9 @@ pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<b
             response.email,
             response.expires_at,
         ) {
+            // Re-decode claims so federated identity fields stay accurate
+            // across token refreshes.
+            let refreshed_claims = decode_id_token_claims(&id_token).ok();
             let mut store = session_store.session.lock_or_err()?;
             if let Some(session) = store.as_mut() {
                 session.access_token = access_token;
@@ -381,6 +416,12 @@ pub async fn refresh_session(session_store: State<'_, SessionStore>) -> Result<b
                 session.user_id = user_id;
                 session.email = email;
                 session.expires_at = expires_at;
+                if let Some(claims) = refreshed_claims {
+                    session.auth_provider = derive_auth_provider(&claims);
+                    session.given_name = claims.given_name;
+                    session.family_name = claims.family_name;
+                    session.name = claims.name;
+                }
             }
             Ok(true)
         } else {
@@ -425,6 +466,17 @@ pub(crate) async fn bootstrap_from_refresh_token(
         _ => return Err("Refresh response missing required fields".to_string()),
     };
 
+    // Re-decode claims so the in-memory Session reflects whatever provider
+    // the refreshed id_token came from. Without this the field would default
+    // to whatever was first stamped at sign-in and could go stale if the
+    // federation provider config changes.
+    let claims = decode_id_token_claims(&id_token).ok();
+    let auth_provider = claims.as_ref().map(derive_auth_provider).unwrap_or_default();
+    let (given_name, family_name, name) = match claims {
+        Some(c) => (c.given_name, c.family_name, c.name),
+        None => (None, None, None),
+    };
+
     let session = Session {
         access_token,
         refresh_token,
@@ -432,6 +484,10 @@ pub(crate) async fn bootstrap_from_refresh_token(
         user_id: resp_user_id,
         email,
         expires_at,
+        auth_provider,
+        given_name,
+        family_name,
+        name,
     };
     let mut store = session_store.session.lock_or_err()?;
     *store = Some(session);
@@ -456,7 +512,18 @@ pub async fn sync_oauth_session(
         return Err("User ID is required".to_string());
     }
 
-    let session = Session { access_token, refresh_token, id_token, user_id, email, expires_at };
+    let session = Session {
+        access_token,
+        refresh_token,
+        id_token,
+        user_id,
+        email,
+        expires_at,
+        auth_provider: AuthProvider::default(),
+        given_name: None,
+        family_name: None,
+        name: None,
+    };
     let mut store = session_store.session.lock_or_err()?;
     *store = Some(session);
     Ok(true)
@@ -536,7 +603,11 @@ async fn oauth_sign_in(
                 // Decode the id_token to extract user_id (sub) and email
                 let claims = decode_id_token_claims(&id_token)?;
                 let user_id = claims.sub.clone();
-                let email = claims.email.unwrap_or_default();
+                let email = claims.email.clone().unwrap_or_default();
+                let auth_provider = derive_auth_provider(&claims);
+                let given_name = claims.given_name.clone();
+                let family_name = claims.family_name.clone();
+                let name = claims.name.clone();
 
                 // Calculate expiry (Cognito access tokens are typically 1 hour)
                 let expires_at = chrono::Utc::now().timestamp() + 3600;
@@ -548,6 +619,10 @@ async fn oauth_sign_in(
                     user_id: user_id.clone(),
                     email,
                     expires_at,
+                    auth_provider,
+                    given_name,
+                    family_name,
+                    name,
                 };
 
                 let mut store = session_store.session.lock_or_err()?;
@@ -624,8 +699,32 @@ fn decode_id_token_claims(token: &str) -> Result<IdTokenClaims, String> {
     serde_json::from_slice(&decoded).map_err(|e| format!("Failed to parse id_token claims: {}", e))
 }
 
+/// Map the `identities` claim on a Cognito id_token to an `AuthProvider`.
+/// Native Cognito (password) users have no `identities`; federated users
+/// have one entry whose `providerType`/`providerName` identifies the source.
+fn derive_auth_provider(claims: &IdTokenClaims) -> AuthProvider {
+    match claims.identities.as_ref().and_then(|v| v.first()) {
+        Some(id) if id.provider_type == "SAML" && id.provider_name == "Alpachi-Entra" => {
+            AuthProvider::Entra
+        }
+        Some(id) if id.provider_type == "Google" => AuthProvider::Google,
+        _ => AuthProvider::Password,
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Identity {
+    provider_name: String,
+    provider_type: String,
+}
+
 #[derive(Deserialize)]
 struct IdTokenClaims {
     sub: String,
     email: Option<String>,
+    name: Option<String>,
+    given_name: Option<String>,
+    family_name: Option<String>,
+    identities: Option<Vec<Identity>>,
 }
