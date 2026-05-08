@@ -1,5 +1,5 @@
 use crate::auth::{self, SessionStore};
-use crate::http_client;
+use crate::http_client::AuthorizedClient;
 use crate::local_db::LocalDb;
 use crate::sync;
 use crate::sync_utils::MutexExt;
@@ -388,9 +388,9 @@ pub async fn mls_upload_key_packages(
         packages
     };
 
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let body = UploadKeyPackagesBody { key_packages: serialized_packages };
-    let _: serde_json::Value = http_client::post("/mls/key-packages", &token, &body).await?;
+    let _: serde_json::Value = client.post("/mls/key-packages", &body).await?;
 
     Ok(count)
 }
@@ -399,8 +399,8 @@ pub async fn mls_upload_key_packages(
 pub async fn mls_delete_key_packages(
     session_store: State<'_, SessionStore>,
 ) -> Result<bool, String> {
-    let token = auth::get_token(&session_store)?;
-    let _: serde_json::Value = http_client::delete("/mls/key-packages", &token).await?;
+    let client = AuthorizedClient::from_session(&session_store)?;
+    let _: serde_json::Value = client.delete("/mls/key-packages").await?;
     Ok(true)
 }
 
@@ -409,9 +409,9 @@ pub async fn mls_check_key_packages(
     mls_state: State<'_, MlsState>,
     session_store: State<'_, SessionStore>,
 ) -> Result<i64, String> {
-    let token = auth::get_token(&session_store)?;
+    let client = AuthorizedClient::from_session(&session_store)?;
     let resp: KeyPackageCountResponse =
-        http_client::get("/mls/key-packages/count", &token).await?;
+        client.get("/mls/key-packages/count").await?;
 
     if resp.count < 10 {
         mls_upload_key_packages(mls_state, session_store).await?;
@@ -475,11 +475,11 @@ pub async fn create_group_inner(
     mls_state: &State<'_, MlsState>,
     session_store: &State<'_, SessionStore>,
 ) -> Result<Vec<u8>, String> {
-    let token = auth::get_token(session_store)?;
+    let client = AuthorizedClient::from_session(session_store)?;
     let my_user_id = auth::get_user_id_from_session(session_store)?;
 
-    let claimed: ClaimedKeyPackage = http_client::get(
-        &format!("/mls/key-packages/{}", other_user_id), &token,
+    let claimed: ClaimedKeyPackage = client.get(
+        &format!("/mls/key-packages/{}", other_user_id),
     ).await?;
 
     let (group_id_bytes, welcome_bytes, commit_bytes) = {
@@ -532,14 +532,14 @@ pub async fn create_group_inner(
         member_ids: vec![my_user_id, other_user_id.to_string()],
     };
     let _: serde_json::Value =
-        http_client::post("/mls/groups", &token, &register_body).await?;
+        client.post("/mls/groups", &register_body).await?;
 
     let commit_body = FanOutCommitBody {
         group_id: group_id_bytes,
         commit_data: commit_bytes,
     };
     let _: serde_json::Value =
-        http_client::post("/mls/commit", &token, &commit_body).await?;
+        client.post("/mls/commit", &commit_body).await?;
 
     // Return the Welcome bytes to be embedded in the first message
     Ok(welcome_bytes)
@@ -553,7 +553,7 @@ pub async fn create_group_multi_inner(
     mls_state: &State<'_, MlsState>,
     session_store: &State<'_, SessionStore>,
 ) -> Result<(), String> {
-    let token = auth::get_token(session_store)?;
+    let client = AuthorizedClient::from_session(session_store)?;
     let my_user_id = auth::get_user_id_from_session(session_store)?;
 
     let other_ids: Vec<&String> = member_ids.iter()
@@ -566,8 +566,8 @@ pub async fn create_group_multi_inner(
 
     let mut claimed_kps = Vec::new();
     for other_id in &other_ids {
-        let claimed: ClaimedKeyPackage = http_client::get(
-            &format!("/mls/key-packages/{}", other_id), &token,
+        let claimed: ClaimedKeyPackage = client.get(
+            &format!("/mls/key-packages/{}", other_id),
         ).await.map_err(|e| format!("Failed to claim key package for {}: {}", other_id, e))?;
         claimed_kps.push(claimed.key_package_data);
     }
@@ -624,7 +624,7 @@ pub async fn create_group_multi_inner(
         member_ids: member_ids.to_vec(),
     };
     let _: serde_json::Value =
-        http_client::post("/mls/groups", &token, &register_body).await?;
+        client.post("/mls/groups", &register_body).await?;
 
     for other_id in &other_ids {
         let welcome_body = serde_json::json!({
@@ -633,7 +633,7 @@ pub async fn create_group_multi_inner(
             "welcome_data": welcome_bytes,
         });
         let _: serde_json::Value =
-            http_client::post("/mls/welcome", &token, &welcome_body).await?;
+            client.post("/mls/welcome", &welcome_body).await?;
     }
 
     let commit_body = FanOutCommitBody {
@@ -641,7 +641,7 @@ pub async fn create_group_multi_inner(
         commit_data: commit_bytes,
     };
     let _: serde_json::Value =
-        http_client::post("/mls/commit", &token, &commit_body).await?;
+        client.post("/mls/commit", &commit_body).await?;
 
     Ok(())
 }
@@ -735,10 +735,10 @@ pub async fn fetch_welcomes_inner(
     mls_state: &State<'_, MlsState>,
     session_store: &State<'_, SessionStore>,
 ) -> Result<u32, String> {
-    let token = auth::get_token(session_store)?;
+    let client = AuthorizedClient::from_session(session_store)?;
 
     let welcomes: Vec<WelcomeMessageResponse> =
-        http_client::get("/mls/welcome", &token).await?;
+        client.get("/mls/welcome").await?;
 
     if welcomes.is_empty() {
         return Ok(0);
@@ -750,8 +750,8 @@ pub async fn fetch_welcomes_inner(
             Ok(_) => {
                 // Send ACK to server so queued messages can be released
                 let ack_body = serde_json::json!({ "group_id": welcome_msg.group_id });
-                let _ = http_client::post::<serde_json::Value, _>(
-                    "/mls/welcome-ack", &token, &ack_body,
+                let _ = client.post::<serde_json::Value, _>(
+                    "/mls/welcome-ack", &ack_body,
                 ).await;
                 count += 1;
             }
