@@ -126,12 +126,16 @@ impl SessionPersistence {
         email: &str,
         refresh_token: &str,
     ) -> Result<(), String> {
+        log::info!("save_session: starting for user_id={}", user_id);
+
         std::fs::create_dir_all(&self.app_data)
             .map_err(|e| format!("Failed to create app data dir: {}", e))?;
 
         let enc_refresh = Self::encrypt_with_dek(dek, refresh_token.as_bytes())?;
-        std::fs::write(self.session_file(), enc_refresh)
+        let session_path = self.session_file();
+        std::fs::write(&session_path, enc_refresh)
             .map_err(|e| format!("Failed to write session file: {}", e))?;
+        log::info!("save_session: wrote session.enc at {:?}", session_path);
 
         let payload = KeyringPayload {
             user_id: user_id.to_string(),
@@ -141,9 +145,21 @@ impl SessionPersistence {
         let json = serde_json::to_string(&payload)
             .map_err(|e| format!("Serialize failed: {}", e))?;
 
-        Self::entry()?
-            .set_password(&json)
-            .map_err(|e| format!("Keyring write failed: {}", e))
+        log::info!(
+            "save_session: writing keyring entry service={} account={}",
+            KEYRING_SERVICE,
+            KEYRING_ACCOUNT
+        );
+        match Self::entry()?.set_password(&json) {
+            Ok(()) => {
+                log::info!("save_session: keyring write SUCCESS for user_id={}", user_id);
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("save_session: keyring write FAILED for user_id={}: {}", user_id, e);
+                Err(format!("Keyring write failed: {}", e))
+            }
+        }
     }
 
     /// Read the DEK from the OS keyring for the given user. Returns Ok(None)
@@ -329,12 +345,16 @@ pub fn session_save(
     local_db: State<'_, LocalDb>,
     session_store: State<'_, SessionStore>,
 ) -> Result<(), String> {
+    log::info!("session_save: command invoked");
     let dek: Zeroizing<[u8; 32]> = {
         let guard = local_db
             .dek
             .lock()
             .map_err(|_| "DEK mutex poisoned".to_string())?;
-        guard.as_ref().cloned().ok_or("Vault not unlocked")?
+        guard.as_ref().cloned().ok_or_else(|| {
+            log::error!("session_save: aborting — Vault not unlocked (no DEK in LocalDb)");
+            "Vault not unlocked".to_string()
+        })?
     };
     let (user_id, email, refresh_token) = {
         let store = session_store
@@ -388,16 +408,36 @@ pub(crate) fn load_dek_for_user(
 fn load_dek_for_user_inner(
     user_id: &str,
 ) -> Result<Option<Zeroizing<[u8; 32]>>, String> {
+    log::info!(
+        "load_dek_for_user: requesting DEK for user_id={} service={} account={}",
+        user_id,
+        KEYRING_SERVICE,
+        KEYRING_ACCOUNT
+    );
     let entry = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
         .map_err(|e| format!("Keyring entry creation failed: {}", e))?;
     let json = match entry.get_password() {
         Ok(json) => json,
-        Err(keyring::Error::NoEntry) => return Ok(None),
-        Err(e) => return Err(format!("Keyring read failed: {}", e)),
+        Err(keyring::Error::NoEntry) => {
+            log::warn!(
+                "load_dek_for_user: NoEntry — keyring has no entry for user_id={}",
+                user_id
+            );
+            return Ok(None);
+        }
+        Err(e) => {
+            log::error!("load_dek_for_user: keyring read FAILED: {}", e);
+            return Err(format!("Keyring read failed: {}", e));
+        }
     };
     let payload: KeyringPayload =
         serde_json::from_str(&json).map_err(|e| format!("Deserialize failed: {}", e))?;
     if payload.user_id != user_id {
+        log::warn!(
+            "load_dek_for_user: user_id MISMATCH — keyring has {} but caller asked for {}",
+            payload.user_id,
+            user_id
+        );
         return Ok(None);
     }
     let dek_bytes = general_purpose::STANDARD
@@ -408,5 +448,6 @@ fn load_dek_for_user_inner(
     }
     let mut dek_array = [0u8; 32];
     dek_array.copy_from_slice(&dek_bytes);
+    log::info!("load_dek_for_user: keyring read SUCCESS for user_id={}", user_id);
     Ok(Some(Zeroizing::new(dek_array)))
 }

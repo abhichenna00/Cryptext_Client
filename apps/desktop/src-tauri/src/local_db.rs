@@ -197,6 +197,7 @@ pub fn setup_vault(
     local_db: State<'_, LocalDb>,
     user_id: String,
 ) -> Result<(), String> {
+    log::info!("setup_vault: invoked for user_id={}", user_id);
     let app_data = app
         .path()
         .app_data_dir()
@@ -204,6 +205,7 @@ pub fn setup_vault(
     std::fs::create_dir_all(&app_data).map_err(|e| format!("Failed to create dir: {}", e))?;
 
     if vault::vault_exists(&app_data, &user_id) {
+        log::warn!("setup_vault: vault file already exists for user_id={}", user_id);
         return Err("Vault already exists for this user".to_string());
     }
 
@@ -269,18 +271,26 @@ pub fn unlock_vault(
     local_db: State<'_, LocalDb>,
     user_id: String,
 ) -> Result<(), String> {
+    log::info!("unlock_vault: invoked for user_id={}", user_id);
     let app_data = app
         .path()
         .app_data_dir()
         .map_err(|e| format!("Failed to get app data dir: {}", e))?;
 
     if !vault::vault_exists(&app_data, &user_id) {
+        log::warn!("unlock_vault: no vault file on disk for user_id={}", user_id);
         return Err("No vault on disk for this user".to_string());
     }
 
-    let dek = session::load_dek_for_user(&user_id)?
-        .ok_or_else(|| "Keyring entry missing — cannot unlock vault".to_string())?;
+    let dek = session::load_dek_for_user(&user_id)?.ok_or_else(|| {
+        log::error!(
+            "unlock_vault: keyring entry missing for user_id={} — vault file exists but no DEK",
+            user_id
+        );
+        "Keyring entry missing — cannot unlock vault".to_string()
+    })?;
     vault::verify_fingerprint(&app_data, &user_id, &dek)?;
+    log::info!("unlock_vault: SUCCESS for user_id={}", user_id);
     mount_dek_inner(&app_data, &local_db, &user_id, dek)
 }
 
