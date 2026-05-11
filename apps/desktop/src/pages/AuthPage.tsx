@@ -15,6 +15,23 @@ interface AuthResult {
   needs_confirmation: boolean
 }
 
+interface PublicSessionInfo {
+  user_id: string
+  email: string
+  is_authenticated: boolean
+  is_enterprise: boolean
+}
+
+interface EnterprisePrefill {
+  username: string
+  nickname: string
+}
+
+interface ProfileResult {
+  success: boolean
+  error?: string
+}
+
 type VaultStatus = 'None' | 'Locked' | 'Unlocked'
 
 function GoogleGlyph() {
@@ -210,13 +227,41 @@ export default function AuthPage() {
     }
   }
 
+  // Auto-create the profile from the IdP-provided prefill so enterprise users
+  // never see the ProfilePage interstitial. On any failure we fall back to
+  // /profile so the user can resolve manually (e.g. a 409 handle collision).
+  const tryEnterpriseAutoOnboard = async (): Promise<string> => {
+    try {
+      const session = await invoke<PublicSessionInfo | null>('get_session')
+      if (!session?.is_enterprise) return '/'
+      const profile = await invoke('get_profile')
+      if (profile !== null) return '/'
+
+      const prefill = await invoke<EnterprisePrefill>('get_enterprise_prefill')
+      const result = await invoke<ProfileResult>('create_profile', {
+        username: prefill.username,
+        nickname: prefill.nickname,
+        avatarUrl: null,
+      })
+      if (!result.success) {
+        console.error('Enterprise auto-onboard create_profile failed:', result.error)
+        return '/profile'
+      }
+      return '/home'
+    } catch (err) {
+      console.error('Enterprise auto-onboard failed:', err)
+      return '/profile'
+    }
+  }
+
   const signInWithEntra = async () => {
     setLoading(true)
     resetErrors()
     try {
       const result = await invoke<AuthResult>('sign_in_with_entra')
       if (result.success) {
-        window.location.href = '/'
+        const dest = await tryEnterpriseAutoOnboard()
+        window.location.href = dest
       } else {
         setError(result.error || 'Microsoft sign-in failed')
       }
