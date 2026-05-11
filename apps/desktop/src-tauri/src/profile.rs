@@ -162,60 +162,79 @@ pub fn get_enterprise_prefill(
     let family = session.family_name.as_deref();
     let email = session.email.as_str();
 
-    let username = derive_enterprise_username(given, family, email);
+    let username = derive_enterprise_username(email, given, family);
     let nickname = derive_enterprise_nickname(session.name.as_deref(), given, family, email);
 
     Ok(EnterprisePrefill { username, nickname })
 }
 
+// Prefer structured given/family name from the Cognito user attributes — they
+// are what an IT admin sees in the portal and produce a deterministic,
+// human-readable handle. Email-local-part is a fallback for the rare case
+// where the IdP omits the name claims.
 fn derive_enterprise_username(
+    email: &str,
     given_name: Option<&str>,
     family_name: Option<&str>,
-    email: &str,
 ) -> String {
-    let local_part = email.split('@').next().unwrap_or("");
     let domain_first = email
         .split('@')
         .nth(1)
         .and_then(|d| d.split('.').next())
-        .unwrap_or("");
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
 
-    let prefix = match (given_name, family_name) {
-        (Some(g), Some(f)) if !g.trim().is_empty() && !f.trim().is_empty() => {
-            let initial = g
-                .trim()
-                .chars()
-                .next()
-                .map(|c| c.to_lowercase().to_string())
-                .unwrap_or_default();
-            format!("{}{}", initial, f.trim().to_lowercase())
+    if let (Some(g), Some(f)) = (given_name, family_name) {
+        let g = g.trim();
+        let f = f.trim();
+        if !g.is_empty() && !f.is_empty() {
+            let prefix = format!("{}.{}", g.to_lowercase(), f.to_lowercase());
+            return if domain_first.is_empty() {
+                prefix
+            } else {
+                format!("{}.{}", prefix, domain_first)
+            };
         }
-        _ if !local_part.is_empty() => local_part.to_lowercase(),
-        _ => String::new(),
-    };
-
-    if !domain_first.is_empty() {
-        format!("{}.{}", prefix, domain_first.to_lowercase())
-    } else {
-        prefix
     }
+
+    let local_part = email
+        .split('@')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_lowercase();
+    if !local_part.is_empty() {
+        return if domain_first.is_empty() {
+            local_part
+        } else {
+            format!("{}.{}", local_part, domain_first)
+        };
+    }
+
+    "user".to_string()
 }
 
+// Prefer structured given/family. The `name` claim is unreliable on some IdPs
+// (e.g., this user's Entra config sends the email address as `name`), so reject
+// it when it looks like an email.
 fn derive_enterprise_nickname(
     name: Option<&str>,
     given_name: Option<&str>,
     family_name: Option<&str>,
     email: &str,
 ) -> String {
-    if let Some(n) = name {
-        let trimmed = n.trim();
-        if !trimmed.is_empty() {
-            return trimmed.to_string();
+    if let (Some(g), Some(f)) = (given_name, family_name) {
+        let g = g.trim();
+        let f = f.trim();
+        if !g.is_empty() && !f.is_empty() {
+            return format!("{} {}", g, f);
         }
     }
-    if let (Some(g), Some(f)) = (given_name, family_name) {
-        if !g.trim().is_empty() && !f.trim().is_empty() {
-            return format!("{} {}", g.trim(), f.trim());
+    if let Some(n) = name {
+        let trimmed = n.trim();
+        if !trimmed.is_empty() && !trimmed.contains('@') {
+            return trimmed.to_string();
         }
     }
     email.split('@').next().unwrap_or("").to_string()

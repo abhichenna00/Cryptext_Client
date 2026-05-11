@@ -26,6 +26,7 @@ interface PublicSessionInfo {
   user_id: string
   email: string
   is_authenticated: boolean
+  is_enterprise: boolean
 }
 
 type VaultStatus = 'None' | 'Locked' | 'Unlocked'
