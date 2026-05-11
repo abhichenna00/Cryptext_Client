@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-05-11
+
+### Added
+- Microsoft Entra users get a fully silent onboarding — username and display name are auto-prefilled from the Cognito identity attributes and the profile is created in the background, so new enterprise users land directly on the home screen instead of going through the profile-setup page
+- Username for Entra-federated profiles is locked and visually marked "Set by your organization" in both the create flow and the settings panel; nickname remains editable
+
+### Changed
+- Session persistence rebuilt into a single `SessionPersistence` struct; all session lifecycle (save / restore / clear / wipe) flows through one type instead of free functions
+- HTTP layer rebuilt around typed `HttpClient` (anonymous) and `AuthorizedClient` (bearer-authed) wrappers; the legacy free-function API is removed and every call site (auth, conversations, friends, profile, media, sync, MLS) now goes through the typed wrappers
+- Filesystem path helpers consolidated into a single `AppPaths` struct keyed by user_id
+
+### Fixed
+- Sign-out no longer destroys the local message vault — signing back in on the same device restores access to existing message history. The previous behavior wiped the device's encryption key on every sign-out, leaving the encrypted local DB permanently unrecoverable
+- Transient session-restore failures (network blips, missing session file, identity mismatch on refresh) no longer wipe credentials — the user is routed back to the login screen and can retry without losing local state
+- Sign-out button icon corrected — was using a shield (which read as "security"); now uses the standard log-out glyph
+
 ## [0.3.6] - 2026-04-30
 
 ### Added
