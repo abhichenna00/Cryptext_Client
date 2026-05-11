@@ -43,6 +43,13 @@ interface AvatarResult {
   error?: string
 }
 
+interface PublicSessionInfo {
+  user_id: string
+  email: string
+  is_authenticated: boolean
+  is_enterprise: boolean
+}
+
 interface EditProfileDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -96,11 +103,15 @@ export default function EditProfileDialog({ open, onOpenChange, onSaved }: EditP
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [uploadingImage, setUploadingImage] = useState(false)
+  const [usernameLocked, setUsernameLocked] = useState(false)
 
   useEffect(() => {
     if (!open) return
     ;(async () => {
       try {
+        const session = await invoke<PublicSessionInfo | null>('get_session')
+        if (session?.is_enterprise) setUsernameLocked(true)
+
         const profile = await invoke<ProfileData | null>('get_profile')
         if (profile) {
           setUsername(profile.username || '')
@@ -333,13 +344,17 @@ export default function EditProfileDialog({ open, onOpenChange, onSaved }: EditP
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
                     placeholder="unique_username"
+                    readOnly={usernameLocked}
                     className={cn(
                       'h-9 w-full rounded-md border border-border bg-surface px-3 text-[13px] text-fg placeholder:text-fg-dim',
                       'focus:outline-none focus-visible:border-[var(--brand)] focus-visible:ring-2 focus-visible:ring-[var(--brand-soft)]',
+                      usernameLocked && 'bg-surface-2 cursor-not-allowed text-fg-muted',
                     )}
                   />
                   <span className="font-mono text-[10.5px] tracking-[0.02em] text-fg-dim">
-                    @{username || 'handle'} · unique across Cryptext
+                    {usernameLocked
+                      ? 'Set by your organization'
+                      : `@${username || 'handle'} · unique across Cryptext`}
                   </span>
                 </label>
 

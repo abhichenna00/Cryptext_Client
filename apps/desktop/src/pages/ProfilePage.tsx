@@ -97,6 +97,9 @@ export default function ProfilePage() {
           setAvatarUrl(profile.avatar_url)
           setAvatarPreview(profile.avatar_url)
           setStatus((profile.status as Status) || 'online')
+          if (session.is_enterprise) {
+            setUsernameLocked(true)
+          }
         } else {
           setIsNewUser(true)
           if (session.is_enterprise) {
@@ -340,7 +343,11 @@ export default function ProfilePage() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 readOnly={usernameLocked}
+                className={usernameLocked ? 'bg-muted cursor-not-allowed text-fg-muted' : undefined}
               />
+              {usernameLocked && (
+                <p className="text-[12px] text-fg-muted mt-1">Set by your organization</p>
+              )}
             </div>
             <div className="field">
               <label htmlFor="displayname">Display Name</label>
