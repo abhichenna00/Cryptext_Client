@@ -1,4 +1,4 @@
-import { MessageSquare, Users, Sun, Moon, Settings, Shield } from 'lucide-react'
+import { MessageSquare, Users, Sun, Moon, Settings, LogOut } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export type IconRailView = 'dm' | 'friends'
@@ -81,7 +81,7 @@ export default function IconRail({
           <Settings size={18} strokeWidth={1.75} />
         </RailButton>
         <RailButton title="Sign out" onClick={onSignOut}>
-          <Shield size={18} strokeWidth={1.75} />
+          <LogOut size={18} strokeWidth={1.75} />
         </RailButton>
       </div>
     </aside>
