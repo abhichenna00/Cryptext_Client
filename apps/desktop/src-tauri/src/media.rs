@@ -315,13 +315,24 @@ pub async fn send_media(
     let mut welcome_bytes: Option<Vec<u8>> = None;
     if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
         if let Some(ref other_id) = other_user_id {
-            let wb = crate::mls::create_group_inner(
+            match crate::mls::create_group_inner(
                 &conversation_id,
                 other_id,
                 &mls_state,
                 &session_store,
-            ).await?;
-            welcome_bytes = Some(wb);
+            ).await? {
+                crate::mls::CreateGroupOutcome::NewGroup(wb) => {
+                    welcome_bytes = Some(wb);
+                }
+                crate::mls::CreateGroupOutcome::AlreadyExists => {
+                    // Group already registered server-side. Caller (the
+                    // frontend media flow) should refresh the conversation
+                    // before retrying so the existing welcome gets processed.
+                    return Err(
+                        "Encryption needs to sync for this conversation. Please open the chat and try sending again.".to_string(),
+                    );
+                }
+            }
         } else {
             return Err("Encryption not initialized for this conversation. For group chats, try restarting the app to re-process pending welcomes.".to_string());
         }
