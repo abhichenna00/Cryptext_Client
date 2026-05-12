@@ -30,6 +30,20 @@ pub struct RegisterGroupRequest {
     pub member_ids: Vec<String>,
 }
 
+#[derive(Serialize)]
+pub struct RegisterGroupResponse {
+    pub success: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Populated when `success == false` because a group already exists for
+    /// this conversation. The client should discard the local group it built
+    /// and recover by fetching the original creator's welcome.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub existing_group_id: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub creator_id: Option<String>,
+}
+
 #[derive(Deserialize)]
 pub struct StoreWelcomeRequest {
     pub recipient_id: String,
@@ -265,7 +279,39 @@ pub async fn register_group(
         }
     }
 
-    // Insert the group mapping
+    // Prevent duplicate groups for the same conversation. If another client
+    // (or the same client racing against fetch_new_messages) already
+    // registered a group for this conversation, we must NOT register a
+    // second one — duplicate MLS groups produce permanent decryption
+    // failures between participants. Return the existing group's identity
+    // so the caller can recover by joining it instead.
+    let existing: Option<(Vec<u8>, String)> = sqlx::query_as(
+        "SELECT mg.group_id, mgm.user_id
+         FROM mls_groups mg
+         JOIN mls_group_members mgm
+           ON mgm.group_id = mg.group_id AND mgm.confirmed_epoch >= 1
+         WHERE mg.conversation_id = $1::uuid
+         LIMIT 1"
+    )
+    .bind(&req.conversation_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    if let Some((existing_gid, creator_id)) = existing {
+        tracing::warn!(
+            "register_group: conflict for conversation_id={} — existing group already registered, returning recovery hint to caller",
+            req.conversation_id
+        );
+        // Don't commit anything — let the transaction roll back.
+        return Ok(Json(RegisterGroupResponse {
+            success: false,
+            error: Some("Group already exists for this conversation".to_string()),
+            existing_group_id: Some(existing_gid),
+            creator_id: Some(creator_id),
+        }));
+    }
+
+    // No existing group — proceed with the registration.
     sqlx::query(
         "INSERT INTO mls_groups (group_id, conversation_id) VALUES ($1, $2::uuid)
          ON CONFLICT (group_id) DO NOTHING"
@@ -291,7 +337,12 @@ pub async fn register_group(
 
     tx.commit().await?;
 
-    Ok(Json(serde_json::json!({ "success": true })))
+    Ok(Json(RegisterGroupResponse {
+        success: true,
+        error: None,
+        existing_group_id: None,
+        creator_id: None,
+    }))
 }
 
 /// Store a Welcome message for a recipient

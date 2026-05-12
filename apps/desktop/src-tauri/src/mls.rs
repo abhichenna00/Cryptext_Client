@@ -195,6 +195,27 @@ struct RegisterGroupBody {
 }
 
 #[derive(Deserialize)]
+struct RegisterGroupResponse {
+    success: bool,
+    #[allow(dead_code)]
+    error: Option<String>,
+    existing_group_id: Option<Vec<u8>>,
+    #[allow(dead_code)]
+    creator_id: Option<String>,
+}
+
+/// Outcome of attempting to register a new MLS group server-side. Either the
+/// server accepted the new group, or another participant won the race and the
+/// caller needs to recover by joining the existing group.
+pub enum CreateGroupOutcome {
+    /// New group registered. Embed `welcome_bytes` in the first message.
+    NewGroup(Vec<u8>),
+    /// Group already existed server-side. Caller should fetch messages /
+    /// welcomes for this conversation to join the existing group, then resend.
+    AlreadyExists,
+}
+
+#[derive(Deserialize)]
 struct WelcomeMessageResponse {
     #[allow(dead_code)]
     id: String,
@@ -427,7 +448,14 @@ pub async fn mls_create_group(
     mls_state: State<'_, MlsState>,
     session_store: State<'_, SessionStore>,
 ) -> Result<Vec<u8>, String> {
-    create_group_inner(&conversation_id, &other_user_id, &mls_state, &session_store).await
+    // The frontend `mls_create_group` callers expect the welcome bytes for
+    // embedding in the first message. If the server reports the group
+    // already exists, we return an empty Vec — the caller should not embed
+    // a welcome and should resync via fetch_new_messages.
+    match create_group_inner(&conversation_id, &other_user_id, &mls_state, &session_store).await? {
+        CreateGroupOutcome::NewGroup(wb) => Ok(wb),
+        CreateGroupOutcome::AlreadyExists => Ok(Vec::new()),
+    }
 }
 
 #[command]
@@ -474,7 +502,8 @@ pub async fn create_group_inner(
     other_user_id: &str,
     mls_state: &State<'_, MlsState>,
     session_store: &State<'_, SessionStore>,
-) -> Result<Vec<u8>, String> {
+) -> Result<CreateGroupOutcome, String> {
+    log::info!("create_group_inner: starting for conv={} other={}", conversation_id, other_user_id);
     let client = AuthorizedClient::from_session(session_store)?;
     let my_user_id = auth::get_user_id_from_session(session_store)?;
 
@@ -531,8 +560,33 @@ pub async fn create_group_inner(
         conversation_id: conversation_id.to_string(),
         member_ids: vec![my_user_id, other_user_id.to_string()],
     };
-    let _: serde_json::Value =
+    let response: RegisterGroupResponse =
         client.post("/mls/groups", &register_body).await?;
+
+    if !response.success {
+        // Server rejected our group registration because another group
+        // already exists for this conversation. Discard the local group we
+        // just built — keeping it would orphan the ratchet state and produce
+        // permanent decrypt failures against the canonical group.
+        log::warn!(
+            "create_group_inner: server reports existing group for conv={} — discarding our local group and signalling AlreadyExists",
+            conversation_id
+        );
+        {
+            let mut state = mls_state.inner.lock_or_err()?;
+            let inner = state.as_mut().ok_or("MLS not initialized")?;
+            inner.conversation_groups.remove(conversation_id);
+            inner.groups.remove(&group_id_bytes);
+            inner.save_state()?;
+        }
+        if response.existing_group_id.is_none() {
+            // success=false but no existing_group_id is unexpected — propagate as error
+            return Err(response
+                .error
+                .unwrap_or_else(|| "register_group failed without details".to_string()));
+        }
+        return Ok(CreateGroupOutcome::AlreadyExists);
+    }
 
     let commit_body = FanOutCommitBody {
         group_id: group_id_bytes,
@@ -541,8 +595,8 @@ pub async fn create_group_inner(
     let _: serde_json::Value =
         client.post("/mls/commit", &commit_body).await?;
 
-    // Return the Welcome bytes to be embedded in the first message
-    Ok(welcome_bytes)
+    log::info!("create_group_inner: SUCCESS for conv={}", conversation_id);
+    Ok(CreateGroupOutcome::NewGroup(welcome_bytes))
 }
 
 /// Creates an MLS group with N members. Welcomes are sent to each other member
@@ -623,8 +677,30 @@ pub async fn create_group_multi_inner(
         conversation_id: conversation_id.to_string(),
         member_ids: member_ids.to_vec(),
     };
-    let _: serde_json::Value =
+    let response: RegisterGroupResponse =
         client.post("/mls/groups", &register_body).await?;
+
+    if !response.success {
+        // Group already exists for this conversation. For group chats this
+        // is genuinely unexpected (the conversation row should not have a
+        // prior group). Roll back the local state and surface a clear error.
+        log::warn!(
+            "create_group_multi_inner: server rejected new group registration for conv={} (existing group=hex:{:?})",
+            conversation_id,
+            response.existing_group_id.as_ref().map(hex::encode),
+        );
+        {
+            let mut state = mls_state.inner.lock_or_err()?;
+            let inner = state.as_mut().ok_or("MLS not initialized")?;
+            inner.conversation_groups.remove(conversation_id);
+            inner.groups.remove(&group_id_bytes);
+            inner.save_state()?;
+        }
+        return Err(format!(
+            "Group already exists for this conversation. Please refresh and try again. {}",
+            response.error.unwrap_or_default()
+        ));
+    }
 
     for other_id in &other_ids {
         let welcome_body = serde_json::json!({

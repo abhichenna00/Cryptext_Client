@@ -7,6 +7,53 @@ use crate::mls::MlsState;
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
 
+/// Pull the full message history for a conversation and process any
+/// embedded Welcome data so the local MLS state catches up. Used when
+/// `send_message` discovers that the server already has an MLS group for
+/// this conversation and the local client missed the original Welcome.
+async fn fetch_and_process_pending_welcomes(
+    conversation_id: &str,
+    session_store: &State<'_, SessionStore>,
+    mls_state: &State<'_, MlsState>,
+) -> Result<(), String> {
+    let client = AuthorizedClient::from_session(session_store)?;
+    let current_user_id = auth::get_user_id_from_session(session_store)?;
+
+    let path = format!("/conversations/{}/messages", conversation_id);
+    let server_messages: Vec<Message> = client.get(&path).await?;
+
+    for msg in &server_messages {
+        if let Some(ref welcome_data) = msg.welcome_data {
+            if msg.sender_id != current_user_id {
+                match crate::mls::process_welcome(
+                    mls_state,
+                    welcome_data,
+                    Some(conversation_id),
+                ) {
+                    Ok(_) => {
+                        log::info!(
+                            "fetch_and_process_pending_welcomes: joined existing group for conv={} via welcome from sender={}",
+                            conversation_id, msg.sender_id
+                        );
+                        return Ok(());
+                    }
+                    Err(e) => {
+                        log::warn!(
+                            "fetch_and_process_pending_welcomes: process_welcome failed for conv={} sender={}: {}",
+                            conversation_id, msg.sender_id, e
+                        );
+                    }
+                }
+            }
+        }
+    }
+    log::warn!(
+        "fetch_and_process_pending_welcomes: no usable welcome found in message history for conv={}",
+        conversation_id
+    );
+    Ok(())
+}
+
 /// Classify MLS-decrypted plaintext so it renders through the right UI
 /// component. The server only knows the transport content_type ("mls")
 /// but the payload itself is either a media metadata JSON blob (sent by
@@ -189,9 +236,19 @@ pub async fn get_messages(
                         let ct = classify_decrypted(&plaintext);
                         (plaintext, ct)
                     }
-                    Err(_) => ("[encrypted message]".to_string(), "plaintext".to_string()),
+                    Err(e) => {
+                        log::error!(
+                            "decrypt FAILED for msg_id={} conv={} sender={}: {}",
+                            msg.id, conversation_id, msg.sender_id, e
+                        );
+                        ("[encrypted message]".to_string(), "plaintext".to_string())
+                    }
                 }
             } else {
+                log::warn!(
+                    "MLS message msg_id={} conv={} has no content_bytes",
+                    msg.id, conversation_id
+                );
                 ("[encrypted message]".to_string(), "plaintext".to_string())
             }
         } else {
@@ -253,13 +310,37 @@ pub async fn send_message(
     let mut welcome_bytes: Option<Vec<u8>> = None;
     if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
         if let Some(ref other_id) = other_user_id {
-            let wb = crate::mls::create_group_inner(
+            match crate::mls::create_group_inner(
                 &conversation_id,
                 other_id,
                 &mls_state,
                 &session_store,
-            ).await?;
-            welcome_bytes = Some(wb);
+            ).await? {
+                crate::mls::CreateGroupOutcome::NewGroup(wb) => {
+                    welcome_bytes = Some(wb);
+                }
+                crate::mls::CreateGroupOutcome::AlreadyExists => {
+                    // Race: another participant registered the canonical MLS
+                    // group while we were building ours. Fetch the existing
+                    // welcome from the server and join that group instead.
+                    log::info!(
+                        "send_message: registration race lost for conv={} — fetching existing welcome",
+                        conversation_id
+                    );
+                    fetch_and_process_pending_welcomes(
+                        &conversation_id,
+                        &session_store,
+                        &mls_state,
+                    ).await?;
+                    if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
+                        return Err(
+                            "Could not join the existing conversation group. Try sending again in a moment.".to_string(),
+                        );
+                    }
+                    // welcome_bytes stays None — we joined the canonical group,
+                    // there's no fresh welcome to embed in this message.
+                }
+            }
         } else {
             return Err("Encryption not initialized for this conversation. For group chats, try restarting the app to re-process pending welcomes.".to_string());
         }
@@ -321,13 +402,28 @@ pub async fn fetch_new_messages(
     let existing_ids =
         local_db::get_existing_message_ids(&local_db, &conversation_id).unwrap_or_default();
 
-    // Process Welcome data
+    // Process Welcome data. Log failures explicitly — a swallowed welcome
+    // here is one of the ways a recipient ends up with no MLS group, which
+    // then causes the duplicate-group desync if they later try to send.
     for msg in &server_messages {
         if let Some(ref welcome_data) = msg.welcome_data {
             if msg.sender_id != current_user_id {
-                let _ = crate::mls::process_welcome(
+                match crate::mls::process_welcome(
                     &mls_state, welcome_data, Some(&conversation_id),
-                );
+                ) {
+                    Ok(_) => {
+                        log::info!(
+                            "fetch_new_messages: processed welcome for conv={} from sender={}",
+                            conversation_id, msg.sender_id
+                        );
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "fetch_new_messages: process_welcome FAILED for conv={} sender={}: {}",
+                            conversation_id, msg.sender_id, e
+                        );
+                    }
+                }
             }
         }
     }
@@ -351,9 +447,19 @@ pub async fn fetch_new_messages(
                         let ct = classify_decrypted(&plaintext);
                         (plaintext, ct)
                     }
-                    Err(_) => ("[encrypted message]".to_string(), "plaintext".to_string()),
+                    Err(e) => {
+                        log::error!(
+                            "decrypt FAILED for msg_id={} conv={} sender={}: {}",
+                            msg.id, conversation_id, msg.sender_id, e
+                        );
+                        ("[encrypted message]".to_string(), "plaintext".to_string())
+                    }
                 }
             } else {
+                log::warn!(
+                    "MLS message msg_id={} conv={} has no content_bytes",
+                    msg.id, conversation_id
+                );
                 ("[encrypted message]".to_string(), "plaintext".to_string())
             }
         } else {
