@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] - 2026-05-15
+
+### Changed
+- MLS layer refactored into `MlsState` struct methods — internal restructure with no behavior, wire-format, or on-disk format changes. Sets up follow-up work on persistence atomicity and welcome-acknowledgment handling.
+- Residual "Cryptext" branding cleaned up in the release workflow (Windows installer publisher field, release notes, code-signing artifacts) and project documentation (README, LICENSE) to complete the 0.5.0 rebrand.
+
 ## [0.5.0] - 2026-05-15
 
 ### Changed
