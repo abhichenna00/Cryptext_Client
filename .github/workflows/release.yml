@@ -160,7 +160,7 @@ jobs:
           path: bundle/nsis
 
       - name: Decode certificate
-        run: echo "${{ secrets.WINDOWS_CERTIFICATE }}" | base64 -d > /tmp/CryptextDevelopmentCert.pfx
+        run: echo "${{ secrets.WINDOWS_CERTIFICATE }}" | base64 -d > /tmp/NShroudDevelopmentCert.pfx
 
       - name: Code sign installer with osslsigncode
         run: |
@@ -174,9 +174,9 @@ jobs:
 
           echo "Code signing: $SETUP_EXE"
           osslsigncode sign \
-            -pkcs12 /tmp/CryptextDevelopmentCert.pfx \
+            -pkcs12 /tmp/NShroudDevelopmentCert.pfx \
             -pass "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" \
-            -n "Cryptext" \
+            -n "NShroud" \
             -i "https://nshroud.com" \
             -t "http://timestamp.digicert.com" \
             -in "$SETUP_EXE" \
@@ -187,7 +187,7 @@ jobs:
 
       - name: Clean up certificate
         if: always()
-        run: rm -f /tmp/CryptextDevelopmentCert.pfx
+        run: rm -f /tmp/NShroudDevelopmentCert.pfx
 
       - name: Sign the installer
         env:
@@ -225,7 +225,7 @@ jobs:
           cat > latest.json << EOF
           {
             "version": "${VERSION}",
-            "notes": "Cryptext v${VERSION}",
+            "notes": "NShroud v${VERSION}",
             "pub_date": "${PUB_DATE}",
             "platforms": {
               "windows-x86_64": {
@@ -240,7 +240,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ needs.build.outputs.version }}
-          name: Cryptext v${{ needs.build.outputs.version }}
+          name: NShroud v${{ needs.build.outputs.version }}
           draft: false
           prerelease: ${{ github.event.inputs.prerelease }}
           files: |
@@ -248,7 +248,7 @@ jobs:
             bundle/nsis/*.sig
             latest.json
           body: |
-            ## Cryptext v${{ needs.build.outputs.version }}
+            ## NShroud v${{ needs.build.outputs.version }}
 
             ${{ needs.build.outputs.changelog }}
 
