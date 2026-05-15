@@ -1,10 +1,10 @@
-# Cryptext
+# NShroud
 
 A secure, self-hostable desktop messenger. End-to-end encrypted with [MLS (RFC 9420)](https://datatracker.ietf.org/doc/rfc9420/), built on [Tauri v2](https://tauri.app/) for the client and [Axum](https://github.com/tokio-rs/axum) for the server. The server stores and relays ciphertext only — decryption happens on user devices.
 
 **Status:** pre-1.0, actively developed. Desktop client (Windows/macOS/Linux) ships via signed installers and auto-updates. Native Android is the next planned platform.
 
-## How Cryptext keeps your messages private
+## How NShroud keeps your messages private
 
 Every message you send is locked on your device *before* it leaves your computer. The server that delivers the message to your friend never holds the key and cannot read what you wrote — only you and the person you're talking to can:
 
@@ -12,7 +12,7 @@ Every message you send is locked on your device *before* it leaves your computer
 sequenceDiagram
     autonumber
     participant You as 📱 Your device
-    participant Server as ☁️ Cryptext server
+    participant Server as ☁️ NShroud server
     participant Friend as 📱 Friend's device
 
     Note over You: You type "Hello!"
@@ -209,9 +209,9 @@ Server deploys automatically on push to `main` touching `apps/server/**` via `de
 ## Roadmap
 
 - **Group chats** — schema and MLS plumbing already support N-member groups; UI and group-creation endpoint pending.
-- **Native Android client** — Kotlin + Jetpack Compose UI, Rust crypto core extracted to `crates/cryptext-core/` and compiled for Android via `cargo-ndk` + `uniffi` bindings. See the platform notes vault (`Development Progress/Additional Platform Development.md`) for the detailed plan.
+- **Native Android client** — Kotlin + Jetpack Compose UI, Rust crypto core extracted to `crates/nshroud-core/` and compiled for Android via `cargo-ndk` + `uniffi` bindings. See the platform notes vault (`Development Progress/Additional Platform Development.md`) for the detailed plan.
 - **Multi-device support** — each device as its own MLS leaf with server-mediated encrypted state sync. Designed, not yet implemented.
-- **iOS client** — reuses the same `cryptext-core` crate via `uniffi`'s Swift bindings. Post-Android.
+- **iOS client** — reuses the same `nshroud-core` crate via `uniffi`'s Swift bindings. Post-Android.
 
 ## License
 
