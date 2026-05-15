@@ -2,7 +2,7 @@ use std::env;
 
 // Axum server base URL
 pub fn server_url() -> String {
-    env::var("SERVER_URL").unwrap_or_else(|_| "https://cryptext.duckdns.org".to_string())
+    env::var("SERVER_URL").unwrap_or_else(|_| "https://api.nshroud.com".to_string())
 }
 
 // WebSocket URL — derived from server URL (connects to Axum /ws endpoint)

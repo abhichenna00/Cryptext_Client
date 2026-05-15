@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 
 type Theme = 'light' | 'dark'
-const STORAGE_KEY = 'cryptext-theme'
+const STORAGE_KEY = 'nshroud-theme'
 
 function getStoredTheme(): Theme | null {
   if (typeof window === 'undefined') return null

@@ -177,7 +177,7 @@ jobs:
             -pkcs12 /tmp/CryptextDevelopmentCert.pfx \
             -pass "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" \
             -n "Cryptext" \
-            -i "https://cryptext.duckdns.org" \
+            -i "https://nshroud.com" \
             -t "http://timestamp.digicert.com" \
             -in "$SETUP_EXE" \
             -out "${SETUP_EXE%.exe}-signed.exe"

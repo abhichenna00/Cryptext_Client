@@ -121,7 +121,7 @@ flowchart TB
   - `local_db.rs` — SQLCipher-encrypted SQLite for decrypted message plaintext per user.
   - `vault.rs` — DEK/KEK hierarchy, Argon2id PIN derivation, `.vault` file management.
   - `http_client.rs` — shared reqwest client (30s request / 10s connect timeouts, bearer token).
-  - `config.rs` — server URL config; defaults to `https://cryptext.duckdns.org`, override with `SERVER_URL` env var.
+  - `config.rs` — server URL config; defaults to `https://api.nshroud.com`, override with `SERVER_URL` env var.
   - `updates.rs` — auto-update via `tauri-plugin-updater`.
 
 ### Server (`apps/server/`)
@@ -196,8 +196,8 @@ cargo check                 # type-check without building
 
 ### Environment
 Desktop client loads `.env` from the project root via `dotenvy`:
-- `SERVER_URL` — override default `https://cryptext.duckdns.org`.
-- `WEBSOCKET_URL` — override; otherwise fetched from the server at runtime.
+- `SERVER_URL` — override default `https://api.nshroud.com`.
+- `WEBSOCKET_URL` — override; otherwise derived from `SERVER_URL` (`https→wss`, `/ws` appended).
 
 Server expects `cryptext/server-config` in AWS Secrets Manager or equivalent environment variables (`DATABASE_URL`, `REDIS_URL`, `S3_BUCKET`, `COGNITO_*`, `CLOUDFRONT_URL`, `WEBSOCKET_URL`).
 
