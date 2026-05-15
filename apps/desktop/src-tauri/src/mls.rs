@@ -231,8 +231,632 @@ struct FanOutCommitBody {
 }
 
 // ============================================
-// COMMANDS
+// MLSSTATE — OPERATIONS
 // ============================================
+
+impl MlsState {
+    /// Initialise the in-memory MLS provider from disk. Loads the encrypted
+    /// keystore + metadata, reconstructs the signer, and rehydrates known
+    /// groups. Returns true if a fresh signer was generated (caller should
+    /// upload new key packages).
+    pub async fn init(
+        &self,
+        app_handle: &tauri::AppHandle,
+        session_store: &State<'_, SessionStore>,
+        local_db: &State<'_, LocalDb>,
+    ) -> Result<bool, String> {
+        let user_id = {
+            let store = session_store.session.lock_or_err()?;
+            match &*store {
+                Some(session) => session.user_id.clone(),
+                None => return Err("Not authenticated".to_string()),
+            }
+        };
+
+        // MLS state must be encrypted with the DEK, so the vault must be unlocked
+        // before init runs. Mirrors the gating used by sync.rs / local_db.rs.
+        let dek = sync::get_dek(local_db)?;
+
+        let app_data_dir = app_handle.path()
+            .app_data_dir()
+            .map_err(|e| format!("Failed to get app data dir: {:?}", e))?;
+        std::fs::create_dir_all(&app_data_dir)
+            .map_err(|e| format!("Failed to create app data dir: {:?}", e))?;
+
+        let storage_path = app_data_dir.join(format!("mls_{}.json", user_id));
+        let meta_path = meta_path_for(&storage_path);
+
+        let provider = OpenMlsRustCrypto::default();
+        let mut needs_migration_save = false;
+
+        // Load storage state into the provider
+        if storage_path.exists() {
+            match read_encrypted(&storage_path, &dek) {
+                Ok(plaintext) => {
+                    deserialize_storage_into(&plaintext, provider.storage())?;
+                }
+                Err(e) if e == "LEGACY_PLAINTEXT" => {
+                    // One-time migration: read legacy plaintext, load into provider,
+                    // re-encrypt below via save_state().
+                    let mut tmp = openmls_memory_storage::MemoryStorage::default();
+                    if let Ok(file) = std::fs::File::open(&storage_path) {
+                        tmp.load_from_file(&file)
+                            .map_err(|e| format!("Failed to load legacy MLS state: {}", e))?;
+                    }
+                    let loaded = tmp
+                        .values
+                        .read()
+                        .map_err(|e| format!("MLS storage read lock poisoned: {}", e))?;
+                    let mut provider_values = provider
+                        .storage()
+                        .values
+                        .write()
+                        .map_err(|e| format!("MLS provider write lock poisoned: {}", e))?;
+                    for (k, v) in loaded.iter() {
+                        provider_values.insert(k.clone(), v.clone());
+                    }
+                    needs_migration_save = true;
+                }
+                Err(e) => return Err(e),
+            }
+        }
+
+        // Load metadata (conversation mappings + signer public key)
+        let metadata: MlsMetadata = if meta_path.exists() {
+            match read_encrypted(&meta_path, &dek) {
+                Ok(plaintext) => serde_json::from_slice(&plaintext)
+                    .map_err(|e| format!("Failed to parse MLS metadata: {}", e))?,
+                Err(e) if e == "LEGACY_PLAINTEXT" => {
+                    needs_migration_save = true;
+                    std::fs::File::open(&meta_path)
+                        .ok()
+                        .and_then(|f| serde_json::from_reader(f).ok())
+                        .unwrap_or_default()
+                }
+                Err(e) => return Err(e),
+            }
+        } else {
+            MlsMetadata::default()
+        };
+
+        let credential = BasicCredential::new(user_id.as_bytes().to_vec());
+
+        // Try to reload existing signer, or generate a new one
+        let mut signer_regenerated = false;
+        let signer = if !metadata.signer_public_key.is_empty() {
+            match SignatureKeyPair::read(
+                provider.storage(),
+                &metadata.signer_public_key,
+                CIPHERSUITE.signature_algorithm(),
+            ) {
+                Some(s) => s,
+                None => {
+                    eprintln!("[MLS] Signer reload failed, generating new signer");
+                    signer_regenerated = true;
+                    let s = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).unwrap();
+                    s.store(provider.storage()).unwrap();
+                    s
+                }
+            }
+        } else {
+            signer_regenerated = true;
+            let s = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
+                .map_err(|e| format!("Failed to generate signing key: {:?}", e))?;
+            s.store(provider.storage())
+                .map_err(|e| format!("Failed to store signing key: {:?}", e))?;
+            s
+        };
+
+        let credential_with_key = CredentialWithKey {
+            credential: credential.into(),
+            signature_key: signer.to_public_vec().into(),
+        };
+
+        // Reload groups from storage
+        let mut groups = HashMap::new();
+        for group_id_bytes in metadata.conversation_groups.values() {
+            let group_id = GroupId::from_slice(group_id_bytes);
+            if let Ok(Some(group)) = MlsGroup::load(provider.storage(), &group_id) {
+                groups.insert(group_id_bytes.to_vec(), group);
+            }
+        }
+
+        let mut dek_copy = [0u8; 32];
+        dek_copy.copy_from_slice(&*dek);
+        let inner = MlsInner {
+            provider,
+            credential_with_key,
+            signer,
+            groups,
+            conversation_groups: metadata.conversation_groups,
+            storage_path,
+            dek: Zeroizing::new(dek_copy),
+        };
+
+        if needs_migration_save {
+            inner.save_state()?;
+        }
+
+        let mut state = self.inner.lock_or_err()?;
+        *state = Some(inner);
+
+        Ok(signer_regenerated)
+    }
+
+    /// Build 50 fresh key packages, persist locally, and upload to the server
+    /// so other users can claim them when starting a new conversation.
+    pub async fn upload_key_packages(
+        &self,
+        session_store: &State<'_, SessionStore>,
+    ) -> Result<u32, String> {
+        let count = 50u32;
+
+        let serialized_packages = {
+            let mut state = self.inner.lock_or_err()?;
+            let inner = state.as_mut().ok_or("MLS not initialized")?;
+
+            let mut packages = Vec::with_capacity(count as usize);
+            for _ in 0..count {
+                let kp_bundle = KeyPackage::builder()
+                    .build(
+                        CIPHERSUITE, &inner.provider, &inner.signer,
+                        inner.credential_with_key.clone(),
+                    )
+                    .map_err(|e| format!("Failed to create key package: {:?}", e))?;
+
+                let serialized = kp_bundle.key_package()
+                    .tls_serialize_detached()
+                    .map_err(|e| format!("Failed to serialize key package: {:?}", e))?;
+                packages.push(serialized);
+            }
+
+            inner.save_state()?;
+            packages
+        };
+
+        let client = AuthorizedClient::from_session(session_store)?;
+        let body = UploadKeyPackagesBody { key_packages: serialized_packages };
+        let _: serde_json::Value = client.post("/mls/key-packages", &body).await?;
+
+        Ok(count)
+    }
+
+    /// Tell the server to clear out our stored key packages. Used when a fresh
+    /// signer has been generated and the old packages are no longer usable.
+    pub async fn delete_key_packages(
+        &self,
+        session_store: &State<'_, SessionStore>,
+    ) -> Result<bool, String> {
+        let client = AuthorizedClient::from_session(session_store)?;
+        let _: serde_json::Value = client.delete("/mls/key-packages").await?;
+        Ok(true)
+    }
+
+    /// Check the server's count of our key packages. If it's below the
+    /// replenish threshold, automatically top up.
+    pub async fn check_key_packages(
+        &self,
+        session_store: &State<'_, SessionStore>,
+    ) -> Result<i64, String> {
+        let client = AuthorizedClient::from_session(session_store)?;
+        let resp: KeyPackageCountResponse =
+            client.get("/mls/key-packages/count").await?;
+
+        if resp.count < 10 {
+            self.upload_key_packages(session_store).await?;
+        }
+
+        Ok(resp.count)
+    }
+
+    /// Create a new MLS group for a DM and register it with the server.
+    /// Returns the welcome bytes to embed in the first message, or signals
+    /// AlreadyExists if another participant won the registration race.
+    pub async fn create_group(
+        &self,
+        conversation_id: &str,
+        other_user_id: &str,
+        session_store: &State<'_, SessionStore>,
+    ) -> Result<CreateGroupOutcome, String> {
+        log::info!("create_group: starting for conv={} other={}", conversation_id, other_user_id);
+        let client = AuthorizedClient::from_session(session_store)?;
+        let my_user_id = auth::get_user_id_from_session(session_store)?;
+
+        let claimed: ClaimedKeyPackage = client.get(
+            &format!("/mls/key-packages/{}", other_user_id),
+        ).await?;
+
+        let (group_id_bytes, welcome_bytes, commit_bytes) = {
+            let mut state = self.inner.lock_or_err()?;
+            let inner = state.as_mut().ok_or("MLS not initialized")?;
+
+            let key_package_in = KeyPackageIn::tls_deserialize(
+                &mut claimed.key_package_data.as_slice(),
+            ).map_err(|e| format!("Failed to deserialize key package: {:?}", e))?;
+
+            let validated_kp = key_package_in
+                .validate(inner.provider.crypto(), ProtocolVersion::Mls10)
+                .map_err(|e| format!("Failed to validate key package: {:?}", e))?;
+
+            let group_config = MlsGroupCreateConfig::builder()
+                .ciphersuite(CIPHERSUITE)
+                .use_ratchet_tree_extension(true)
+                .build();
+
+            let group_id = GroupId::from_slice(&uuid::Uuid::new_v4().as_bytes()[..]);
+
+            let mut group = MlsGroup::new_with_group_id(
+                &inner.provider, &inner.signer, &group_config,
+                group_id, inner.credential_with_key.clone(),
+            ).map_err(|e| format!("Failed to create MLS group: {:?}", e))?;
+
+            let (commit, welcome, _) = group
+                .add_members(&inner.provider, &inner.signer, &[validated_kp])
+                .map_err(|e| format!("Failed to add member: {:?}", e))?;
+
+            group.merge_pending_commit(&inner.provider)
+                .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
+
+            let gid = group.group_id().as_slice().to_vec();
+            let wb = welcome.tls_serialize_detached()
+                .map_err(|e| format!("Failed to serialize welcome: {:?}", e))?;
+            let cb = commit.tls_serialize_detached()
+                .map_err(|e| format!("Failed to serialize commit: {:?}", e))?;
+
+            inner.conversation_groups.insert(conversation_id.to_string(), gid.clone());
+            inner.groups.insert(gid.clone(), group);
+            inner.save_state()?;
+
+            (gid, wb, cb)
+        };
+
+        let register_body = RegisterGroupBody {
+            group_id: group_id_bytes.clone(),
+            conversation_id: conversation_id.to_string(),
+            member_ids: vec![my_user_id, other_user_id.to_string()],
+        };
+        let response: RegisterGroupResponse =
+            client.post("/mls/groups", &register_body).await?;
+
+        if !response.success {
+            // Server rejected our group registration because another group
+            // already exists for this conversation. Discard the local group we
+            // just built — keeping it would orphan the ratchet state and produce
+            // permanent decrypt failures against the canonical group.
+            log::warn!(
+                "create_group: server reports existing group for conv={} — discarding our local group and signalling AlreadyExists",
+                conversation_id
+            );
+            {
+                let mut state = self.inner.lock_or_err()?;
+                let inner = state.as_mut().ok_or("MLS not initialized")?;
+                inner.conversation_groups.remove(conversation_id);
+                inner.groups.remove(&group_id_bytes);
+                inner.save_state()?;
+            }
+            if response.existing_group_id.is_none() {
+                // success=false but no existing_group_id is unexpected — propagate as error
+                return Err(response
+                    .error
+                    .unwrap_or_else(|| "register_group failed without details".to_string()));
+            }
+            return Ok(CreateGroupOutcome::AlreadyExists);
+        }
+
+        let commit_body = FanOutCommitBody {
+            group_id: group_id_bytes,
+            commit_data: commit_bytes,
+        };
+        let _: serde_json::Value =
+            client.post("/mls/commit", &commit_body).await?;
+
+        log::info!("create_group: SUCCESS for conv={}", conversation_id);
+        Ok(CreateGroupOutcome::NewGroup(welcome_bytes))
+    }
+
+    /// Create a multi-member MLS group. Welcomes are sent to each other member
+    /// via the /mls/welcome endpoint (not embedded in a message like DMs).
+    pub async fn create_group_multi(
+        &self,
+        conversation_id: &str,
+        member_ids: &[String],
+        session_store: &State<'_, SessionStore>,
+    ) -> Result<(), String> {
+        let client = AuthorizedClient::from_session(session_store)?;
+        let my_user_id = auth::get_user_id_from_session(session_store)?;
+
+        let other_ids: Vec<&String> = member_ids.iter()
+            .filter(|id| id.as_str() != my_user_id)
+            .collect();
+
+        if other_ids.is_empty() {
+            return Err("No other members to add".to_string());
+        }
+
+        let mut claimed_kps = Vec::new();
+        for other_id in &other_ids {
+            let claimed: ClaimedKeyPackage = client.get(
+                &format!("/mls/key-packages/{}", other_id),
+            ).await.map_err(|e| format!("Failed to claim key package for {}: {}", other_id, e))?;
+            claimed_kps.push(claimed.key_package_data);
+        }
+
+        let (group_id_bytes, welcome_bytes, commit_bytes) = {
+            let mut state = self.inner.lock_or_err()?;
+            let inner = state.as_mut().ok_or("MLS not initialized")?;
+
+            let mut validated_kps = Vec::new();
+            for kp_data in &claimed_kps {
+                let kp_in = KeyPackageIn::tls_deserialize(&mut kp_data.as_slice())
+                    .map_err(|e| format!("Failed to deserialize key package: {:?}", e))?;
+                let validated = kp_in
+                    .validate(inner.provider.crypto(), ProtocolVersion::Mls10)
+                    .map_err(|e| format!("Failed to validate key package: {:?}", e))?;
+                validated_kps.push(validated);
+            }
+
+            let group_config = MlsGroupCreateConfig::builder()
+                .ciphersuite(CIPHERSUITE)
+                .use_ratchet_tree_extension(true)
+                .build();
+
+            let group_id = GroupId::from_slice(&uuid::Uuid::new_v4().as_bytes()[..]);
+
+            let mut group = MlsGroup::new_with_group_id(
+                &inner.provider, &inner.signer, &group_config,
+                group_id, inner.credential_with_key.clone(),
+            ).map_err(|e| format!("Failed to create MLS group: {:?}", e))?;
+
+            let (commit, welcome, _) = group
+                .add_members(&inner.provider, &inner.signer, &validated_kps)
+                .map_err(|e| format!("Failed to add members: {:?}", e))?;
+
+            group.merge_pending_commit(&inner.provider)
+                .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
+
+            let gid = group.group_id().as_slice().to_vec();
+            let wb = welcome.tls_serialize_detached()
+                .map_err(|e| format!("Failed to serialize welcome: {:?}", e))?;
+            let cb = commit.tls_serialize_detached()
+                .map_err(|e| format!("Failed to serialize commit: {:?}", e))?;
+
+            inner.conversation_groups.insert(conversation_id.to_string(), gid.clone());
+            inner.groups.insert(gid.clone(), group);
+            inner.save_state()?;
+
+            (gid, wb, cb)
+        };
+
+        let register_body = RegisterGroupBody {
+            group_id: group_id_bytes.clone(),
+            conversation_id: conversation_id.to_string(),
+            member_ids: member_ids.to_vec(),
+        };
+        let response: RegisterGroupResponse =
+            client.post("/mls/groups", &register_body).await?;
+
+        if !response.success {
+            // Group already exists for this conversation. For group chats this
+            // is genuinely unexpected (the conversation row should not have a
+            // prior group). Roll back the local state and surface a clear error.
+            log::warn!(
+                "create_group_multi: server rejected new group registration for conv={} (existing group=hex:{:?})",
+                conversation_id,
+                response.existing_group_id.as_ref().map(hex::encode),
+            );
+            {
+                let mut state = self.inner.lock_or_err()?;
+                let inner = state.as_mut().ok_or("MLS not initialized")?;
+                inner.conversation_groups.remove(conversation_id);
+                inner.groups.remove(&group_id_bytes);
+                inner.save_state()?;
+            }
+            return Err(format!(
+                "Group already exists for this conversation. Please refresh and try again. {}",
+                response.error.unwrap_or_default()
+            ));
+        }
+
+        for other_id in &other_ids {
+            let welcome_body = serde_json::json!({
+                "recipient_id": other_id,
+                "group_id": group_id_bytes,
+                "welcome_data": welcome_bytes,
+            });
+            let _: serde_json::Value =
+                client.post("/mls/welcome", &welcome_body).await?;
+        }
+
+        let commit_body = FanOutCommitBody {
+            group_id: group_id_bytes,
+            commit_data: commit_bytes,
+        };
+        let _: serde_json::Value =
+            client.post("/mls/commit", &commit_body).await?;
+
+        Ok(())
+    }
+
+    /// Whether we have an MLS group for the given conversation locally.
+    pub fn has_group(&self, conversation_id: &str) -> bool {
+        let state = match self.inner.lock() {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        match state.as_ref() {
+            Some(inner) => inner.conversation_groups.contains_key(conversation_id),
+            None => false,
+        }
+    }
+
+    /// Encrypt an application message into the group's current epoch.
+    /// Advances the sender's ratchet and persists state.
+    pub fn encrypt_message(
+        &self,
+        conversation_id: &str,
+        plaintext: &str,
+    ) -> Result<Vec<u8>, String> {
+        let mut state = self.inner.lock_or_err()?;
+        let inner = state.as_mut().ok_or("MLS not initialized")?;
+
+        let group_id = inner.conversation_groups.get(conversation_id)
+            .ok_or("No MLS group for this conversation")?.clone();
+
+        let group = inner.groups.get_mut(&group_id)
+            .ok_or("MLS group not found in local state")?;
+
+        let ciphertext = group
+            .create_message(&inner.provider, &inner.signer, plaintext.as_bytes())
+            .map_err(|e| format!("Failed to encrypt message: {:?}", e))?;
+
+        inner.save_state()?;
+
+        ciphertext.tls_serialize_detached()
+            .map_err(|e| format!("Failed to serialize ciphertext: {:?}", e))
+    }
+
+    /// Decrypt an incoming application/commit/proposal message. Consumes the
+    /// sender's ratchet generation for application messages, merges staged
+    /// commits, and persists state.
+    pub fn decrypt_message(
+        &self,
+        conversation_id: &str,
+        ciphertext: &[u8],
+    ) -> Result<String, String> {
+        let mut state = self.inner.lock_or_err()?;
+        let inner = state.as_mut().ok_or("MLS not initialized")?;
+
+        let group_id = inner.conversation_groups.get(conversation_id)
+            .ok_or("No MLS group for this conversation")?.clone();
+
+        let group = inner.groups.get_mut(&group_id)
+            .ok_or("MLS group not found in local state")?;
+
+        let mls_message = MlsMessageIn::tls_deserialize(&mut &ciphertext[..])
+            .map_err(|e| format!("Failed to deserialize MLS message: {:?}", e))?;
+
+        let protocol_message: ProtocolMessage = mls_message
+            .try_into_protocol_message()
+            .map_err(|e| format!("Not a protocol message: {:?}", e))?;
+
+        let processed = group
+            .process_message(&inner.provider, protocol_message)
+            .map_err(|e| format!("Failed to process message: {:?}", e))?;
+
+        let result = match processed.into_content() {
+            ProcessedMessageContent::ApplicationMessage(app_msg) => {
+                inner.save_state()?;
+                String::from_utf8(app_msg.into_bytes())
+                    .map_err(|e| format!("Invalid UTF-8 in decrypted message: {}", e))
+            }
+            ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
+                group.merge_staged_commit(&inner.provider, *staged_commit)
+                    .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
+                inner.save_state()?;
+                Err("Commit processed".to_string())
+            }
+            ProcessedMessageContent::ProposalMessage(_) => {
+                inner.save_state()?;
+                Err("Proposal processed".to_string())
+            }
+            _ => {
+                inner.save_state()?;
+                Err("Unknown message type".to_string())
+            }
+        };
+
+        result
+    }
+
+    /// Pull queued Welcome messages from the server, join the groups locally,
+    /// and ACK each successful join so the server can release queued messages.
+    pub async fn fetch_welcomes(
+        &self,
+        session_store: &State<'_, SessionStore>,
+    ) -> Result<u32, String> {
+        let client = AuthorizedClient::from_session(session_store)?;
+
+        let welcomes: Vec<WelcomeMessageResponse> =
+            client.get("/mls/welcome").await?;
+
+        if welcomes.is_empty() {
+            return Ok(0);
+        }
+
+        let mut count = 0u32;
+        for welcome_msg in &welcomes {
+            match self.process_welcome(&welcome_msg.welcome_data, welcome_msg.conversation_id.as_deref()) {
+                Ok(_) => {
+                    // Send ACK to server so queued messages can be released
+                    let ack_body = serde_json::json!({ "group_id": welcome_msg.group_id });
+                    let _ = client.post::<serde_json::Value, _>(
+                        "/mls/welcome-ack", &ack_body,
+                    ).await;
+                    count += 1;
+                }
+                Err(e) => eprintln!("Failed to process welcome: {}", e),
+            }
+        }
+
+        Ok(count)
+    }
+
+    /// Process a Welcome message and join the corresponding group. Idempotent
+    /// when `conversation_id` is provided — if a group already exists locally
+    /// for the conversation, the welcome is dropped silently.
+    pub fn process_welcome(
+        &self,
+        welcome_data: &[u8],
+        conversation_id: Option<&str>,
+    ) -> Result<(), String> {
+        let mut state = self.inner.lock_or_err()?;
+        let inner = state.as_mut().ok_or("MLS not initialized")?;
+
+        // Skip if we already have a group for this conversation (duplicate welcome)
+        if let Some(conv_id) = conversation_id {
+            if inner.conversation_groups.contains_key(conv_id) {
+                return Ok(());
+            }
+        }
+
+        let mls_msg_in = MlsMessageIn::tls_deserialize(&mut &welcome_data[..])
+            .map_err(|e| format!("Failed to deserialize welcome: {:?}", e))?;
+
+        let welcome = match mls_msg_in.extract() {
+            openmls::framing::MlsMessageBodyIn::Welcome(w) => w,
+            _ => return Err("Message is not a Welcome".to_string()),
+        };
+
+        let group_config = MlsGroupJoinConfig::builder().build();
+
+        let group = StagedWelcome::new_from_welcome(
+            &inner.provider, &group_config, welcome, None,
+        )
+        .map_err(|e| format!("Failed to stage welcome: {:?}", e))?
+        .into_group(&inner.provider)
+        .map_err(|e| format!("Failed to join group from welcome: {:?}", e))?;
+
+        let group_id = group.group_id().as_slice().to_vec();
+
+        // Map conversation_id to this group so we can decrypt messages
+        if let Some(conv_id) = conversation_id {
+            inner.conversation_groups.insert(conv_id.to_string(), group_id.clone());
+        }
+
+        inner.groups.insert(group_id, group);
+        inner.save_state()?;
+
+        Ok(())
+    }
+}
+
+// ============================================
+// TAURI COMMAND SHIMS
+// ============================================
+//
+// Each command is a thin wrapper that delegates to the corresponding method
+// on MlsState. Keeps the JS-facing command names and signatures stable while
+// the implementation lives on the struct.
 
 #[command]
 pub async fn mls_init(
@@ -241,142 +865,7 @@ pub async fn mls_init(
     session_store: State<'_, SessionStore>,
     local_db: State<'_, LocalDb>,
 ) -> Result<bool, String> {
-    let user_id = {
-        let store = session_store.session.lock_or_err()?;
-        match &*store {
-            Some(session) => session.user_id.clone(),
-            None => return Err("Not authenticated".to_string()),
-        }
-    };
-
-    // MLS state must be encrypted with the DEK, so the vault must be unlocked
-    // before init runs. Mirrors the gating used by sync.rs / local_db.rs.
-    let dek = sync::get_dek(&local_db)?;
-
-    let app_data_dir = app_handle.path()
-        .app_data_dir()
-        .map_err(|e| format!("Failed to get app data dir: {:?}", e))?;
-    std::fs::create_dir_all(&app_data_dir)
-        .map_err(|e| format!("Failed to create app data dir: {:?}", e))?;
-
-    let storage_path = app_data_dir.join(format!("mls_{}.json", user_id));
-    let meta_path = meta_path_for(&storage_path);
-
-    let provider = OpenMlsRustCrypto::default();
-    let mut needs_migration_save = false;
-
-    // Load storage state into the provider
-    if storage_path.exists() {
-        match read_encrypted(&storage_path, &dek) {
-            Ok(plaintext) => {
-                deserialize_storage_into(&plaintext, provider.storage())?;
-            }
-            Err(e) if e == "LEGACY_PLAINTEXT" => {
-                // One-time migration: read legacy plaintext, load into provider,
-                // re-encrypt below via save_state().
-                let mut tmp = openmls_memory_storage::MemoryStorage::default();
-                if let Ok(file) = std::fs::File::open(&storage_path) {
-                    tmp.load_from_file(&file)
-                        .map_err(|e| format!("Failed to load legacy MLS state: {}", e))?;
-                }
-                let loaded = tmp
-                    .values
-                    .read()
-                    .map_err(|e| format!("MLS storage read lock poisoned: {}", e))?;
-                let mut provider_values = provider
-                    .storage()
-                    .values
-                    .write()
-                    .map_err(|e| format!("MLS provider write lock poisoned: {}", e))?;
-                for (k, v) in loaded.iter() {
-                    provider_values.insert(k.clone(), v.clone());
-                }
-                needs_migration_save = true;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-
-    // Load metadata (conversation mappings + signer public key)
-    let metadata: MlsMetadata = if meta_path.exists() {
-        match read_encrypted(&meta_path, &dek) {
-            Ok(plaintext) => serde_json::from_slice(&plaintext)
-                .map_err(|e| format!("Failed to parse MLS metadata: {}", e))?,
-            Err(e) if e == "LEGACY_PLAINTEXT" => {
-                needs_migration_save = true;
-                std::fs::File::open(&meta_path)
-                    .ok()
-                    .and_then(|f| serde_json::from_reader(f).ok())
-                    .unwrap_or_default()
-            }
-            Err(e) => return Err(e),
-        }
-    } else {
-        MlsMetadata::default()
-    };
-
-    let credential = BasicCredential::new(user_id.as_bytes().to_vec());
-
-    // Try to reload existing signer, or generate a new one
-    let mut signer_regenerated = false;
-    let signer = if !metadata.signer_public_key.is_empty() {
-        match SignatureKeyPair::read(
-            provider.storage(),
-            &metadata.signer_public_key,
-            CIPHERSUITE.signature_algorithm(),
-        ) {
-            Some(s) => s,
-            None => {
-                eprintln!("[MLS] Signer reload failed, generating new signer");
-                signer_regenerated = true;
-                let s = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).unwrap();
-                s.store(provider.storage()).unwrap();
-                s
-            }
-        }
-    } else {
-        signer_regenerated = true;
-        let s = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
-            .map_err(|e| format!("Failed to generate signing key: {:?}", e))?;
-        s.store(provider.storage())
-            .map_err(|e| format!("Failed to store signing key: {:?}", e))?;
-        s
-    };
-
-    let credential_with_key = CredentialWithKey {
-        credential: credential.into(),
-        signature_key: signer.to_public_vec().into(),
-    };
-
-    // Reload groups from storage
-    let mut groups = HashMap::new();
-    for group_id_bytes in metadata.conversation_groups.values() {
-        let group_id = GroupId::from_slice(group_id_bytes);
-        if let Ok(Some(group)) = MlsGroup::load(provider.storage(), &group_id) {
-            groups.insert(group_id_bytes.to_vec(), group);
-        }
-    }
-
-    let mut dek_copy = [0u8; 32];
-    dek_copy.copy_from_slice(&*dek);
-    let inner = MlsInner {
-        provider,
-        credential_with_key,
-        signer,
-        groups,
-        conversation_groups: metadata.conversation_groups,
-        storage_path,
-        dek: Zeroizing::new(dek_copy),
-    };
-
-    if needs_migration_save {
-        inner.save_state()?;
-    }
-
-    let mut state = mls_state.inner.lock_or_err()?;
-    *state = Some(inner);
-
-    Ok(signer_regenerated)
+    mls_state.init(&app_handle, &session_store, &local_db).await
 }
 
 #[command]
@@ -384,45 +873,15 @@ pub async fn mls_upload_key_packages(
     mls_state: State<'_, MlsState>,
     session_store: State<'_, SessionStore>,
 ) -> Result<u32, String> {
-    let count = 50u32;
-
-    let serialized_packages = {
-        let mut state = mls_state.inner.lock_or_err()?;
-        let inner = state.as_mut().ok_or("MLS not initialized")?;
-
-        let mut packages = Vec::with_capacity(count as usize);
-        for _ in 0..count {
-            let kp_bundle = KeyPackage::builder()
-                .build(
-                    CIPHERSUITE, &inner.provider, &inner.signer,
-                    inner.credential_with_key.clone(),
-                )
-                .map_err(|e| format!("Failed to create key package: {:?}", e))?;
-
-            let serialized = kp_bundle.key_package()
-                .tls_serialize_detached()
-                .map_err(|e| format!("Failed to serialize key package: {:?}", e))?;
-            packages.push(serialized);
-        }
-
-        inner.save_state()?;
-        packages
-    };
-
-    let client = AuthorizedClient::from_session(&session_store)?;
-    let body = UploadKeyPackagesBody { key_packages: serialized_packages };
-    let _: serde_json::Value = client.post("/mls/key-packages", &body).await?;
-
-    Ok(count)
+    mls_state.upload_key_packages(&session_store).await
 }
 
 #[command]
 pub async fn mls_delete_key_packages(
+    mls_state: State<'_, MlsState>,
     session_store: State<'_, SessionStore>,
 ) -> Result<bool, String> {
-    let client = AuthorizedClient::from_session(&session_store)?;
-    let _: serde_json::Value = client.delete("/mls/key-packages").await?;
-    Ok(true)
+    mls_state.delete_key_packages(&session_store).await
 }
 
 #[command]
@@ -430,15 +889,7 @@ pub async fn mls_check_key_packages(
     mls_state: State<'_, MlsState>,
     session_store: State<'_, SessionStore>,
 ) -> Result<i64, String> {
-    let client = AuthorizedClient::from_session(&session_store)?;
-    let resp: KeyPackageCountResponse =
-        client.get("/mls/key-packages/count").await?;
-
-    if resp.count < 10 {
-        mls_upload_key_packages(mls_state, session_store).await?;
-    }
-
-    Ok(resp.count)
+    mls_state.check_key_packages(&session_store).await
 }
 
 #[command]
@@ -452,7 +903,7 @@ pub async fn mls_create_group(
     // embedding in the first message. If the server reports the group
     // already exists, we return an empty Vec — the caller should not embed
     // a welcome and should resync via fetch_new_messages.
-    match create_group_inner(&conversation_id, &other_user_id, &mls_state, &session_store).await? {
+    match mls_state.create_group(&conversation_id, &other_user_id, &session_store).await? {
         CreateGroupOutcome::NewGroup(wb) => Ok(wb),
         CreateGroupOutcome::AlreadyExists => Ok(Vec::new()),
     }
@@ -464,7 +915,7 @@ pub async fn mls_encrypt_message(
     plaintext: String,
     mls_state: State<'_, MlsState>,
 ) -> Result<Vec<u8>, String> {
-    encrypt_message_inner(&mls_state, &conversation_id, &plaintext)
+    mls_state.encrypt_message(&conversation_id, &plaintext)
 }
 
 #[command]
@@ -473,7 +924,7 @@ pub async fn mls_decrypt_message(
     ciphertext: Vec<u8>,
     mls_state: State<'_, MlsState>,
 ) -> Result<String, String> {
-    decrypt_message_inner(&mls_state, &conversation_id, &ciphertext)
+    mls_state.decrypt_message(&conversation_id, &ciphertext)
 }
 
 #[command]
@@ -481,7 +932,7 @@ pub async fn mls_fetch_welcomes(
     mls_state: State<'_, MlsState>,
     session_store: State<'_, SessionStore>,
 ) -> Result<u32, String> {
-    fetch_welcomes_inner(&mls_state, &session_store).await
+    mls_state.fetch_welcomes(&session_store).await
 }
 
 #[command]
@@ -489,400 +940,5 @@ pub async fn mls_has_group(
     conversation_id: String,
     mls_state: State<'_, MlsState>,
 ) -> Result<bool, String> {
-    Ok(has_group_inner(&mls_state, &conversation_id))
-}
-
-// ============================================
-// PUBLIC HELPERS (called from conversations.rs)
-// ============================================
-
-/// Creates an MLS group and returns the Welcome bytes for embedding in the first message.
-pub async fn create_group_inner(
-    conversation_id: &str,
-    other_user_id: &str,
-    mls_state: &State<'_, MlsState>,
-    session_store: &State<'_, SessionStore>,
-) -> Result<CreateGroupOutcome, String> {
-    log::info!("create_group_inner: starting for conv={} other={}", conversation_id, other_user_id);
-    let client = AuthorizedClient::from_session(session_store)?;
-    let my_user_id = auth::get_user_id_from_session(session_store)?;
-
-    let claimed: ClaimedKeyPackage = client.get(
-        &format!("/mls/key-packages/{}", other_user_id),
-    ).await?;
-
-    let (group_id_bytes, welcome_bytes, commit_bytes) = {
-        let mut state = mls_state.inner.lock_or_err()?;
-        let inner = state.as_mut().ok_or("MLS not initialized")?;
-
-        let key_package_in = KeyPackageIn::tls_deserialize(
-            &mut claimed.key_package_data.as_slice(),
-        ).map_err(|e| format!("Failed to deserialize key package: {:?}", e))?;
-
-        let validated_kp = key_package_in
-            .validate(inner.provider.crypto(), ProtocolVersion::Mls10)
-            .map_err(|e| format!("Failed to validate key package: {:?}", e))?;
-
-        let group_config = MlsGroupCreateConfig::builder()
-            .ciphersuite(CIPHERSUITE)
-            .use_ratchet_tree_extension(true)
-            .build();
-
-        let group_id = GroupId::from_slice(&uuid::Uuid::new_v4().as_bytes()[..]);
-
-        let mut group = MlsGroup::new_with_group_id(
-            &inner.provider, &inner.signer, &group_config,
-            group_id, inner.credential_with_key.clone(),
-        ).map_err(|e| format!("Failed to create MLS group: {:?}", e))?;
-
-        let (commit, welcome, _) = group
-            .add_members(&inner.provider, &inner.signer, &[validated_kp])
-            .map_err(|e| format!("Failed to add member: {:?}", e))?;
-
-        group.merge_pending_commit(&inner.provider)
-            .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
-
-        let gid = group.group_id().as_slice().to_vec();
-        let wb = welcome.tls_serialize_detached()
-            .map_err(|e| format!("Failed to serialize welcome: {:?}", e))?;
-        let cb = commit.tls_serialize_detached()
-            .map_err(|e| format!("Failed to serialize commit: {:?}", e))?;
-
-        inner.conversation_groups.insert(conversation_id.to_string(), gid.clone());
-        inner.groups.insert(gid.clone(), group);
-        inner.save_state()?;
-
-        (gid, wb, cb)
-    };
-
-    let register_body = RegisterGroupBody {
-        group_id: group_id_bytes.clone(),
-        conversation_id: conversation_id.to_string(),
-        member_ids: vec![my_user_id, other_user_id.to_string()],
-    };
-    let response: RegisterGroupResponse =
-        client.post("/mls/groups", &register_body).await?;
-
-    if !response.success {
-        // Server rejected our group registration because another group
-        // already exists for this conversation. Discard the local group we
-        // just built — keeping it would orphan the ratchet state and produce
-        // permanent decrypt failures against the canonical group.
-        log::warn!(
-            "create_group_inner: server reports existing group for conv={} — discarding our local group and signalling AlreadyExists",
-            conversation_id
-        );
-        {
-            let mut state = mls_state.inner.lock_or_err()?;
-            let inner = state.as_mut().ok_or("MLS not initialized")?;
-            inner.conversation_groups.remove(conversation_id);
-            inner.groups.remove(&group_id_bytes);
-            inner.save_state()?;
-        }
-        if response.existing_group_id.is_none() {
-            // success=false but no existing_group_id is unexpected — propagate as error
-            return Err(response
-                .error
-                .unwrap_or_else(|| "register_group failed without details".to_string()));
-        }
-        return Ok(CreateGroupOutcome::AlreadyExists);
-    }
-
-    let commit_body = FanOutCommitBody {
-        group_id: group_id_bytes,
-        commit_data: commit_bytes,
-    };
-    let _: serde_json::Value =
-        client.post("/mls/commit", &commit_body).await?;
-
-    log::info!("create_group_inner: SUCCESS for conv={}", conversation_id);
-    Ok(CreateGroupOutcome::NewGroup(welcome_bytes))
-}
-
-/// Creates an MLS group with N members. Welcomes are sent to each other member
-/// via the /mls/welcome endpoint (not embedded in a message like DMs).
-pub async fn create_group_multi_inner(
-    conversation_id: &str,
-    member_ids: &[String],
-    mls_state: &State<'_, MlsState>,
-    session_store: &State<'_, SessionStore>,
-) -> Result<(), String> {
-    let client = AuthorizedClient::from_session(session_store)?;
-    let my_user_id = auth::get_user_id_from_session(session_store)?;
-
-    let other_ids: Vec<&String> = member_ids.iter()
-        .filter(|id| id.as_str() != my_user_id)
-        .collect();
-
-    if other_ids.is_empty() {
-        return Err("No other members to add".to_string());
-    }
-
-    let mut claimed_kps = Vec::new();
-    for other_id in &other_ids {
-        let claimed: ClaimedKeyPackage = client.get(
-            &format!("/mls/key-packages/{}", other_id),
-        ).await.map_err(|e| format!("Failed to claim key package for {}: {}", other_id, e))?;
-        claimed_kps.push(claimed.key_package_data);
-    }
-
-    let (group_id_bytes, welcome_bytes, commit_bytes) = {
-        let mut state = mls_state.inner.lock_or_err()?;
-        let inner = state.as_mut().ok_or("MLS not initialized")?;
-
-        let mut validated_kps = Vec::new();
-        for kp_data in &claimed_kps {
-            let kp_in = KeyPackageIn::tls_deserialize(&mut kp_data.as_slice())
-                .map_err(|e| format!("Failed to deserialize key package: {:?}", e))?;
-            let validated = kp_in
-                .validate(inner.provider.crypto(), ProtocolVersion::Mls10)
-                .map_err(|e| format!("Failed to validate key package: {:?}", e))?;
-            validated_kps.push(validated);
-        }
-
-        let group_config = MlsGroupCreateConfig::builder()
-            .ciphersuite(CIPHERSUITE)
-            .use_ratchet_tree_extension(true)
-            .build();
-
-        let group_id = GroupId::from_slice(&uuid::Uuid::new_v4().as_bytes()[..]);
-
-        let mut group = MlsGroup::new_with_group_id(
-            &inner.provider, &inner.signer, &group_config,
-            group_id, inner.credential_with_key.clone(),
-        ).map_err(|e| format!("Failed to create MLS group: {:?}", e))?;
-
-        let (commit, welcome, _) = group
-            .add_members(&inner.provider, &inner.signer, &validated_kps)
-            .map_err(|e| format!("Failed to add members: {:?}", e))?;
-
-        group.merge_pending_commit(&inner.provider)
-            .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
-
-        let gid = group.group_id().as_slice().to_vec();
-        let wb = welcome.tls_serialize_detached()
-            .map_err(|e| format!("Failed to serialize welcome: {:?}", e))?;
-        let cb = commit.tls_serialize_detached()
-            .map_err(|e| format!("Failed to serialize commit: {:?}", e))?;
-
-        inner.conversation_groups.insert(conversation_id.to_string(), gid.clone());
-        inner.groups.insert(gid.clone(), group);
-        inner.save_state()?;
-
-        (gid, wb, cb)
-    };
-
-    let register_body = RegisterGroupBody {
-        group_id: group_id_bytes.clone(),
-        conversation_id: conversation_id.to_string(),
-        member_ids: member_ids.to_vec(),
-    };
-    let response: RegisterGroupResponse =
-        client.post("/mls/groups", &register_body).await?;
-
-    if !response.success {
-        // Group already exists for this conversation. For group chats this
-        // is genuinely unexpected (the conversation row should not have a
-        // prior group). Roll back the local state and surface a clear error.
-        log::warn!(
-            "create_group_multi_inner: server rejected new group registration for conv={} (existing group=hex:{:?})",
-            conversation_id,
-            response.existing_group_id.as_ref().map(hex::encode),
-        );
-        {
-            let mut state = mls_state.inner.lock_or_err()?;
-            let inner = state.as_mut().ok_or("MLS not initialized")?;
-            inner.conversation_groups.remove(conversation_id);
-            inner.groups.remove(&group_id_bytes);
-            inner.save_state()?;
-        }
-        return Err(format!(
-            "Group already exists for this conversation. Please refresh and try again. {}",
-            response.error.unwrap_or_default()
-        ));
-    }
-
-    for other_id in &other_ids {
-        let welcome_body = serde_json::json!({
-            "recipient_id": other_id,
-            "group_id": group_id_bytes,
-            "welcome_data": welcome_bytes,
-        });
-        let _: serde_json::Value =
-            client.post("/mls/welcome", &welcome_body).await?;
-    }
-
-    let commit_body = FanOutCommitBody {
-        group_id: group_id_bytes,
-        commit_data: commit_bytes,
-    };
-    let _: serde_json::Value =
-        client.post("/mls/commit", &commit_body).await?;
-
-    Ok(())
-}
-
-pub fn has_group_inner(mls_state: &State<'_, MlsState>, conversation_id: &str) -> bool {
-    let state = match mls_state.inner.lock() {
-        Ok(s) => s,
-        Err(_) => return false,
-    };
-    match state.as_ref() {
-        Some(inner) => inner.conversation_groups.contains_key(conversation_id),
-        None => false,
-    }
-}
-
-pub fn encrypt_message_inner(
-    mls_state: &State<'_, MlsState>,
-    conversation_id: &str,
-    plaintext: &str,
-) -> Result<Vec<u8>, String> {
-    let mut state = mls_state.inner.lock_or_err()?;
-    let inner = state.as_mut().ok_or("MLS not initialized")?;
-
-    let group_id = inner.conversation_groups.get(conversation_id)
-        .ok_or("No MLS group for this conversation")?.clone();
-
-    let group = inner.groups.get_mut(&group_id)
-        .ok_or("MLS group not found in local state")?;
-
-    let ciphertext = group
-        .create_message(&inner.provider, &inner.signer, plaintext.as_bytes())
-        .map_err(|e| format!("Failed to encrypt message: {:?}", e))?;
-
-    inner.save_state()?;
-
-    ciphertext.tls_serialize_detached()
-        .map_err(|e| format!("Failed to serialize ciphertext: {:?}", e))
-}
-
-pub fn decrypt_message_inner(
-    mls_state: &State<'_, MlsState>,
-    conversation_id: &str,
-    ciphertext: &[u8],
-) -> Result<String, String> {
-    let mut state = mls_state.inner.lock_or_err()?;
-    let inner = state.as_mut().ok_or("MLS not initialized")?;
-
-    let group_id = inner.conversation_groups.get(conversation_id)
-        .ok_or("No MLS group for this conversation")?.clone();
-
-    let group = inner.groups.get_mut(&group_id)
-        .ok_or("MLS group not found in local state")?;
-
-    let mls_message = MlsMessageIn::tls_deserialize(&mut &ciphertext[..])
-        .map_err(|e| format!("Failed to deserialize MLS message: {:?}", e))?;
-
-    let protocol_message: ProtocolMessage = mls_message
-        .try_into_protocol_message()
-        .map_err(|e| format!("Not a protocol message: {:?}", e))?;
-
-    let processed = group
-        .process_message(&inner.provider, protocol_message)
-        .map_err(|e| format!("Failed to process message: {:?}", e))?;
-
-    let result = match processed.into_content() {
-        ProcessedMessageContent::ApplicationMessage(app_msg) => {
-            inner.save_state()?;
-            String::from_utf8(app_msg.into_bytes())
-                .map_err(|e| format!("Invalid UTF-8 in decrypted message: {}", e))
-        }
-        ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
-            group.merge_staged_commit(&inner.provider, *staged_commit)
-                .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
-            inner.save_state()?;
-            Err("Commit processed".to_string())
-        }
-        ProcessedMessageContent::ProposalMessage(_) => {
-            inner.save_state()?;
-            Err("Proposal processed".to_string())
-        }
-        _ => {
-            inner.save_state()?;
-            Err("Unknown message type".to_string())
-        }
-    };
-
-    result
-}
-
-pub async fn fetch_welcomes_inner(
-    mls_state: &State<'_, MlsState>,
-    session_store: &State<'_, SessionStore>,
-) -> Result<u32, String> {
-    let client = AuthorizedClient::from_session(session_store)?;
-
-    let welcomes: Vec<WelcomeMessageResponse> =
-        client.get("/mls/welcome").await?;
-
-    if welcomes.is_empty() {
-        return Ok(0);
-    }
-
-    let mut count = 0u32;
-    for welcome_msg in &welcomes {
-        match process_welcome(mls_state, &welcome_msg.welcome_data, welcome_msg.conversation_id.as_deref()) {
-            Ok(_) => {
-                // Send ACK to server so queued messages can be released
-                let ack_body = serde_json::json!({ "group_id": welcome_msg.group_id });
-                let _ = client.post::<serde_json::Value, _>(
-                    "/mls/welcome-ack", &ack_body,
-                ).await;
-                count += 1;
-            }
-            Err(e) => eprintln!("Failed to process welcome: {}", e),
-        }
-    }
-
-    Ok(count)
-}
-
-// ============================================
-// PRIVATE HELPERS
-// ============================================
-
-pub fn process_welcome(
-    mls_state: &State<'_, MlsState>,
-    welcome_data: &[u8],
-    conversation_id: Option<&str>,
-) -> Result<(), String> {
-    let mut state = mls_state.inner.lock_or_err()?;
-    let inner = state.as_mut().ok_or("MLS not initialized")?;
-
-    // Skip if we already have a group for this conversation (duplicate welcome)
-    if let Some(conv_id) = conversation_id {
-        if inner.conversation_groups.contains_key(conv_id) {
-            return Ok(());
-        }
-    }
-
-    let mls_msg_in = MlsMessageIn::tls_deserialize(&mut &welcome_data[..])
-        .map_err(|e| format!("Failed to deserialize welcome: {:?}", e))?;
-
-    let welcome = match mls_msg_in.extract() {
-        openmls::framing::MlsMessageBodyIn::Welcome(w) => w,
-        _ => return Err("Message is not a Welcome".to_string()),
-    };
-
-    let group_config = MlsGroupJoinConfig::builder().build();
-
-    let group = StagedWelcome::new_from_welcome(
-        &inner.provider, &group_config, welcome, None,
-    )
-    .map_err(|e| format!("Failed to stage welcome: {:?}", e))?
-    .into_group(&inner.provider)
-    .map_err(|e| format!("Failed to join group from welcome: {:?}", e))?;
-
-    let group_id = group.group_id().as_slice().to_vec();
-
-    // Map conversation_id to this group so we can decrypt messages
-    if let Some(conv_id) = conversation_id {
-        inner.conversation_groups.insert(conv_id.to_string(), group_id.clone());
-    }
-
-    inner.groups.insert(group_id, group);
-    inner.save_state()?;
-
-    Ok(())
+    Ok(mls_state.has_group(&conversation_id))
 }

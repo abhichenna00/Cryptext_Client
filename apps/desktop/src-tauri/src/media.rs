@@ -313,12 +313,11 @@ pub async fn send_media(
 
     // 6. Auto-create MLS group if needed (DMs only — groups create MLS eagerly)
     let mut welcome_bytes: Option<Vec<u8>> = None;
-    if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
+    if !mls_state.has_group(&conversation_id) {
         if let Some(ref other_id) = other_user_id {
-            match crate::mls::create_group_inner(
+            match mls_state.create_group(
                 &conversation_id,
                 other_id,
-                &mls_state,
                 &session_store,
             ).await? {
                 crate::mls::CreateGroupOutcome::NewGroup(wb) => {
@@ -339,7 +338,7 @@ pub async fn send_media(
     }
 
     // 7. Encrypt metadata via MLS and send as message
-    let ciphertext = crate::mls::encrypt_message_inner(&mls_state, &conversation_id, &metadata_json)?;
+    let ciphertext = mls_state.encrypt_message(&conversation_id, &metadata_json)?;
     let body = SendMessageBody {
         content: "[encrypted]".to_string(),
         content_type: Some("mls".to_string()),
