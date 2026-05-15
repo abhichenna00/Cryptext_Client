@@ -68,7 +68,7 @@ export default function SplashPage() {
       fontFamily: 'sans-serif',
       userSelect: 'none',
     }}>
-      <span style={{ fontSize: '20px', fontWeight: 'bold' }}>Cryptext</span>
+      <span style={{ fontSize: '20px', fontWeight: 'bold' }}>NShroud</span>
       <span style={{ fontSize: '13px', color: '#888', marginTop: 12 }}>{status}</span>
       {updating && (
         <div style={{

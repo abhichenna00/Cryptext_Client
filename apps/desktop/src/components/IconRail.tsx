@@ -54,9 +54,9 @@ export default function IconRail({
     <aside className="flex w-[52px] flex-col items-center gap-2 border-r border-border bg-chrome px-2 py-3 text-chrome-fg">
       <div
         className="grid size-7 place-items-center rounded-[7px] bg-[var(--brand)] font-mono text-[13px] font-semibold text-[var(--brand-fg)]"
-        title="Cryptext"
+        title="NShroud"
       >
-        C
+        N
       </div>
 
       <div className="mt-2 flex flex-col gap-1">

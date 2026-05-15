@@ -274,7 +274,7 @@ export default function EditProfileDialog({ open, onOpenChange, onSaved }: EditP
             </h3>
             {isProfile && (
               <p className="mt-0.5 text-[12.5px] text-fg-muted">
-                How you appear to friends across Cryptext.
+                How you appear to friends across NShroud.
               </p>
             )}
           </header>
@@ -354,7 +354,7 @@ export default function EditProfileDialog({ open, onOpenChange, onSaved }: EditP
                   <span className="font-mono text-[10.5px] tracking-[0.02em] text-fg-dim">
                     {usernameLocked
                       ? 'Set by your organization'
-                      : `@${username || 'handle'} · unique across Cryptext`}
+                      : `@${username || 'handle'} · unique across NShroud`}
                   </span>
                 </label>
 

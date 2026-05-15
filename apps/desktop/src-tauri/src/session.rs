@@ -35,7 +35,7 @@ use std::path::PathBuf;
 use tauri::{command, AppHandle, State};
 use zeroize::Zeroizing;
 
-const KEYRING_SERVICE: &str = "cryptex.app.com";
+const KEYRING_SERVICE: &str = "com.nshroud.app";
 const KEYRING_ACCOUNT: &str = "active_session";
 const NONCE_LEN: usize = 12;
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Cryptext",
+  "productName": "NShroud",
   "version": "0.1.4",
-  "identifier": "cryptex.app.com",
+  "identifier": "com.nshroud.app",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
@@ -13,14 +13,14 @@
     "windows": [
       {
         "label": "main",
-        "title": "Cryptext",
+        "title": "NShroud",
         "width": 800,
         "height": 600,
         "visible": false
       },
       {
         "label": "splash",
-        "title": "Cryptext",
+        "title": "NShroud",
         "width": 300,
         "height": 200,
         "resizable": false,
@@ -52,7 +52,7 @@
     "deep-link": {
       "desktop": {
         "schemes": [
-          "cryptex"
+          "nshroud"
         ]
       }
     },

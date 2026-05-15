@@ -315,9 +315,9 @@ export default function AuthPage() {
             className="grid size-[30px] place-items-center rounded-[7px] bg-[var(--brand)] font-mono text-[14px] font-semibold text-[var(--brand-fg)]"
             aria-hidden
           >
-            C
+            N
           </div>
-          <span className="text-[20px] font-semibold tracking-[-0.02em] text-fg">Cryptext</span>
+          <span className="text-[20px] font-semibold tracking-[-0.02em] text-fg">NShroud</span>
         </div>
 
         <p className="mt-2 text-[13px] text-fg-muted">
