@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-05-15
+
+### Changed
+- Application rebranded from Cryptext to NShroud — product name, window titles, splash screen, sidebar icon, auth-page header, and profile-dialog copy all reflect the new name
+- Bundle identifier changed from `cryptex.app.com` to `com.nshroud.app` — existing installs will treat the first NShroud build as a fresh install since the local vault, keyring entry, message database, and MLS state are all keyed off the bundle ID
+- Deep link scheme changed from `cryptex://` to `nshroud://`
+- API server URL default changed from `cryptext.duckdns.org` to `api.nshroud.com`; the WebSocket URL derives from this and updates automatically
+- Code-signing info URL on the Windows installer updated to `nshroud.com`
+
 ## [0.4.0] - 2026-05-11
 
 ### Added
