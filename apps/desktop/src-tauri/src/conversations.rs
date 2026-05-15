@@ -25,8 +25,7 @@ async fn fetch_and_process_pending_welcomes(
     for msg in &server_messages {
         if let Some(ref welcome_data) = msg.welcome_data {
             if msg.sender_id != current_user_id {
-                match crate::mls::process_welcome(
-                    mls_state,
+                match mls_state.process_welcome(
                     welcome_data,
                     Some(conversation_id),
                 ) {
@@ -211,8 +210,8 @@ pub async fn get_messages(
     for msg in &server_messages {
         if let Some(ref welcome_data) = msg.welcome_data {
             if msg.sender_id != current_user_id {
-                let _ = crate::mls::process_welcome(
-                    &mls_state, welcome_data, Some(&conversation_id),
+                let _ = mls_state.process_welcome(
+                    welcome_data, Some(&conversation_id),
                 );
             }
         }
@@ -231,7 +230,7 @@ pub async fn get_messages(
                 continue;
             }
             if let Some(ref ciphertext) = msg.content_bytes {
-                match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
+                match mls_state.decrypt_message(&conversation_id, ciphertext) {
                     Ok(plaintext) => {
                         let ct = classify_decrypted(&plaintext);
                         (plaintext, ct)
@@ -308,12 +307,11 @@ pub async fn send_message(
     // (e.g. after MLS state loss), we can't auto-recover yet — the user would
     // need to be re-added to the group.
     let mut welcome_bytes: Option<Vec<u8>> = None;
-    if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
+    if !mls_state.has_group(&conversation_id) {
         if let Some(ref other_id) = other_user_id {
-            match crate::mls::create_group_inner(
+            match mls_state.create_group(
                 &conversation_id,
                 other_id,
-                &mls_state,
                 &session_store,
             ).await? {
                 crate::mls::CreateGroupOutcome::NewGroup(wb) => {
@@ -332,7 +330,7 @@ pub async fn send_message(
                         &session_store,
                         &mls_state,
                     ).await?;
-                    if !crate::mls::has_group_inner(&mls_state, &conversation_id) {
+                    if !mls_state.has_group(&conversation_id) {
                         return Err(
                             "Could not join the existing conversation group. Try sending again in a moment.".to_string(),
                         );
@@ -347,7 +345,7 @@ pub async fn send_message(
     }
 
     let plaintext = content.clone();
-    let ciphertext = crate::mls::encrypt_message_inner(&mls_state, &conversation_id, &content)?;
+    let ciphertext = mls_state.encrypt_message(&conversation_id, &content)?;
     let body = SendMessageBody {
         content: "[encrypted]".to_string(),
         content_type: Some("mls".to_string()),
@@ -408,8 +406,8 @@ pub async fn fetch_new_messages(
     for msg in &server_messages {
         if let Some(ref welcome_data) = msg.welcome_data {
             if msg.sender_id != current_user_id {
-                match crate::mls::process_welcome(
-                    &mls_state, welcome_data, Some(&conversation_id),
+                match mls_state.process_welcome(
+                    welcome_data, Some(&conversation_id),
                 ) {
                     Ok(_) => {
                         log::info!(
@@ -442,7 +440,7 @@ pub async fn fetch_new_messages(
                 continue;
             }
             if let Some(ref ciphertext) = msg.content_bytes {
-                match crate::mls::decrypt_message_inner(&mls_state, &conversation_id, ciphertext) {
+                match mls_state.decrypt_message(&conversation_id, ciphertext) {
                     Ok(plaintext) => {
                         let ct = classify_decrypted(&plaintext);
                         (plaintext, ct)
@@ -565,8 +563,8 @@ pub async fn create_group(
         }),
     };
 
-    if let Err(e) = crate::mls::create_group_multi_inner(
-        &conversation_id, &all_members, &mls_state, &session_store,
+    if let Err(e) = mls_state.create_group_multi(
+        &conversation_id, &all_members, &session_store,
     ).await {
         return Ok(GroupResult {
             success: false,
