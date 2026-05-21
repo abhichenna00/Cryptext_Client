@@ -74,6 +74,7 @@ pub struct SendMessageRequest {
     pub content_type: Option<String>,
     pub content_bytes: Option<Vec<u8>>,
     pub welcome_data: Option<Vec<u8>>,
+    pub client_message_id: Option<uuid::Uuid>,
 }
 
 // ============================================
@@ -169,7 +170,7 @@ pub async fn get_or_create_dm_conversation(
     };
 
     let existing: Option<(String,)> = sqlx::query_as(
-        "SELECT id::text FROM conversations 
+        "SELECT id::text FROM conversations
          WHERE type = 'direct' AND dm_participant_key = $1
          FOR UPDATE"
     )
@@ -183,7 +184,7 @@ pub async fn get_or_create_dm_conversation(
     }
 
     let insert_result: Result<(String,), _> = sqlx::query_as(
-        "INSERT INTO conversations (type, dm_participant_key) VALUES ('direct', $1) 
+        "INSERT INTO conversations (type, dm_participant_key) VALUES ('direct', $1)
          ON CONFLICT (dm_participant_key) WHERE type = 'direct' AND dm_participant_key IS NOT NULL
          DO NOTHING
          RETURNING id::text"
@@ -327,10 +328,10 @@ pub async fn send_message(
     let timestamp = chrono::Utc::now().timestamp_millis();
     let content_type = req.content_type.as_deref().unwrap_or("plaintext");
 
-    let (message_id,): (String,) = sqlx::query_as(
-        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, content_type, content_bytes, welcome_data)
-         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7)
-         RETURNING id::text"
+    let insert_result: Result<(String, i64), sqlx::Error> = sqlx::query_as(
+        "INSERT INTO messages (conversation_id, sender_id, content, timestamp, content_type, content_bytes, welcome_data, client_message_id)
+         VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8)
+         RETURNING id::text, timestamp"
     )
     .bind(&conversation_id)
     .bind(claims.user_id())
@@ -339,44 +340,68 @@ pub async fn send_message(
     .bind(content_type)
     .bind(&req.content_bytes)
     .bind(&req.welcome_data)
+    .bind(req.client_message_id)
     .fetch_one(pool.as_ref())
-    .await?;
+    .await;
 
-    // For MLS messages, queue delivery for recipients who haven't confirmed their epoch
-    if content_type == "mls" {
-        let unconfirmed: Vec<(String,)> = sqlx::query_as(
-            "SELECT gm.user_id FROM mls_group_members gm
-             JOIN mls_groups g ON g.group_id = gm.group_id
-             WHERE g.conversation_id = $1::uuid
-               AND gm.user_id != $2
-               AND gm.confirmed_epoch < 1"
-        )
-        .bind(&conversation_id)
-        .bind(claims.user_id())
-        .fetch_all(pool.as_ref())
-        .await?;
+    let (message_id, stored_timestamp, deduped) = match insert_result {
+        Ok((id, ts)) => (id, ts, false),
+        Err(sqlx::Error::Database(ref db_err))
+            if db_err.constraint() == Some("idx_messages_sender_client_id") =>
+        {
+            let cmid = req.client_message_id.ok_or_else(|| {
+                AppError::Internal("dedupe constraint hit with no client_message_id".to_string())
+            })?;
+            let (id, ts): (String, i64) = sqlx::query_as(
+                "SELECT id::text, timestamp FROM messages
+                 WHERE sender_id = $1 AND client_message_id = $2"
+            )
+            .bind(claims.user_id())
+            .bind(cmid)
+            .fetch_one(pool.as_ref())
+            .await?;
+            (id, ts, true)
+        }
+        Err(e) => return Err(AppError::Database(e)),
+    };
 
-        for (recipient_id,) in &unconfirmed {
-            sqlx::query(
-                "INSERT INTO mls_pending_messages (group_id, conversation_id, recipient_id, message_id)
-                 SELECT g.group_id, $1, $2, $3
-                 FROM mls_groups g WHERE g.conversation_id = $1::uuid
-                 LIMIT 1"
+    if !deduped {
+        // For MLS messages, queue delivery for recipients who haven't confirmed their epoch
+        if content_type == "mls" {
+            let unconfirmed: Vec<(String,)> = sqlx::query_as(
+                "SELECT gm.user_id FROM mls_group_members gm
+                 JOIN mls_groups g ON g.group_id = gm.group_id
+                 WHERE g.conversation_id = $1::uuid
+                   AND gm.user_id != $2
+                   AND gm.confirmed_epoch < 1"
             )
             .bind(&conversation_id)
-            .bind(recipient_id)
-            .bind(&message_id)
-            .execute(pool.as_ref())
+            .bind(claims.user_id())
+            .fetch_all(pool.as_ref())
             .await?;
+
+            for (recipient_id,) in &unconfirmed {
+                sqlx::query(
+                    "INSERT INTO mls_pending_messages (group_id, conversation_id, recipient_id, message_id)
+                     SELECT g.group_id, $1, $2, $3
+                     FROM mls_groups g WHERE g.conversation_id = $1::uuid
+                     LIMIT 1"
+                )
+                .bind(&conversation_id)
+                .bind(recipient_id)
+                .bind(&message_id)
+                .execute(pool.as_ref())
+                .await?;
+            }
         }
+
+        let _ = sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1::uuid")
+            .bind(&conversation_id)
+            .execute(pool.as_ref())
+            .await;
     }
 
-    let _ = sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1::uuid")
-        .bind(&conversation_id)
-        .execute(pool.as_ref())
-        .await;
-
-    Ok(Json(serde_json::json!({ "success": true, "error": null, "message_id": message_id, "timestamp": timestamp, "queued": content_type == "mls" })))
+    Ok(Json(serde_json::json!({ "success": true, "error": null, "message_id": message_id, "timestamp": stored_timestamp, "queued": content_type == "mls" })))
 }
 
 pub async fn mark_conversation_read(
