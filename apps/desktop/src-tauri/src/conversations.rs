@@ -199,74 +199,124 @@ pub async fn get_messages(
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
     let path = format!("/conversations/{}/messages", conversation_id);
 
-    // Get IDs of messages we already have locally
+    // Serialize with any other fetch/decrypt for this conversation so two
+    // callers can't both advance the MLS ratchet on the same ciphertext.
+    let conv_lock = mls_state.conversation_lock(&conversation_id)?;
+    let _guard = conv_lock.lock().await;
+
+    // If the local DB read fails we must not silently treat every server
+    // message as new — that would burn through the MLS ratchet and desync
+    // both ends. Surface the error to the caller instead.
     let existing_ids =
-        local_db::get_existing_message_ids(&local_db, &conversation_id).unwrap_or_default();
+        local_db::get_existing_message_ids(&local_db, &conversation_id)?;
 
     // Fetch from server
     let server_messages: Vec<Message> = client.get(&path).await?;
 
-    // Process any Welcome data embedded in messages before decrypting
+    // Process any Welcome data embedded in messages before decrypting.
+    // Mirror fetch_new_messages: log success and failure rather than
+    // swallowing — a silent welcome failure leaves us without a group and
+    // later trips the duplicate-group desync.
     for msg in &server_messages {
         if let Some(ref welcome_data) = msg.welcome_data {
             if msg.sender_id != current_user_id {
-                let _ = mls_state.process_welcome(
+                match mls_state.process_welcome(
                     welcome_data, Some(&conversation_id),
-                );
+                ) {
+                    Ok(_) => {
+                        log::info!(
+                            "get_messages: processed welcome for conv={} from sender={}",
+                            conversation_id, msg.sender_id
+                        );
+                    }
+                    Err(e) => {
+                        log::error!(
+                            "get_messages: process_welcome FAILED for conv={} sender={}: {}",
+                            conversation_id, msg.sender_id, e
+                        );
+                    }
+                }
             }
         }
     }
 
-    // Only decrypt new messages we haven't seen before
-    let mut new_to_store: Vec<LocalMessage> = Vec::new();
+    // Decrypt and persist each new message in lockstep with the MLS
+    // ratchet. If we batched stores at the end of the loop and crashed
+    // mid-loop, the ratchet would have advanced past messages that never
+    // made it into local_db, leaving the conversation permanently
+    // un-resyncable.
     for msg in &server_messages {
         if existing_ids.contains(&msg.id) {
             continue;
         }
 
-        let (content, content_type) = if msg.content_type == "mls" {
+        if msg.content_type == "mls" {
             // Never decrypt our own MLS messages — the ratchet already advanced when we encrypted
             if msg.sender_id == current_user_id {
                 continue;
             }
-            if let Some(ref ciphertext) = msg.content_bytes {
-                match mls_state.decrypt_message(&conversation_id, ciphertext) {
-                    Ok(plaintext) => {
-                        let ct = classify_decrypted(&plaintext);
-                        (plaintext, ct)
-                    }
-                    Err(e) => {
+            let ciphertext = match msg.content_bytes.as_ref() {
+                Some(ct) => ct,
+                None => {
+                    log::warn!(
+                        "MLS message msg_id={} conv={} has no content_bytes",
+                        msg.id, conversation_id
+                    );
+                    continue;
+                }
+            };
+            match mls_state.decrypt_message(&conversation_id, ciphertext) {
+                Ok(Some(plaintext)) => {
+                    let content_type = classify_decrypted(&plaintext);
+                    let local_msg = LocalMessage {
+                        id: msg.id.clone(),
+                        conversation_id: msg.conversation_id.clone(),
+                        sender_id: msg.sender_id.clone(),
+                        content: plaintext,
+                        timestamp: msg.timestamp,
+                        content_type,
+                    };
+                    if let Err(e) =
+                        local_db::store_messages(&local_db, std::slice::from_ref(&local_msg))
+                    {
                         log::error!(
-                            "decrypt FAILED for msg_id={} conv={} sender={}: {}",
-                            msg.id, conversation_id, msg.sender_id, e
+                            "get_messages: store_messages FAILED for msg_id={} conv={}: {}",
+                            msg.id, conversation_id, e
                         );
-                        ("[encrypted message]".to_string(), "plaintext".to_string())
+                        return Err(e);
                     }
                 }
-            } else {
-                log::warn!(
-                    "MLS message msg_id={} conv={} has no content_bytes",
-                    msg.id, conversation_id
-                );
-                ("[encrypted message]".to_string(), "plaintext".to_string())
+                Ok(None) => {
+                    // Commit / proposal / non-application content. Ratchet
+                    // and group state have already been updated inside
+                    // decrypt_message; nothing to persist locally.
+                }
+                Err(e) => {
+                    log::error!(
+                        "decrypt FAILED for msg_id={} conv={} sender={}: {}",
+                        msg.id, conversation_id, msg.sender_id, e
+                    );
+                }
             }
         } else {
-            (msg.content.clone(), msg.content_type.clone())
-        };
-
-        new_to_store.push(LocalMessage {
-            id: msg.id.clone(),
-            conversation_id: msg.conversation_id.clone(),
-            sender_id: msg.sender_id.clone(),
-            content,
-            timestamp: msg.timestamp,
-            content_type,
-        });
-    }
-
-    // Store newly decrypted messages locally
-    if !new_to_store.is_empty() {
-        let _ = local_db::store_messages(&local_db, &new_to_store);
+            let local_msg = LocalMessage {
+                id: msg.id.clone(),
+                conversation_id: msg.conversation_id.clone(),
+                sender_id: msg.sender_id.clone(),
+                content: msg.content.clone(),
+                timestamp: msg.timestamp,
+                content_type: msg.content_type.clone(),
+            };
+            if let Err(e) =
+                local_db::store_messages(&local_db, std::slice::from_ref(&local_msg))
+            {
+                log::error!(
+                    "get_messages: store_messages FAILED for msg_id={} conv={}: {}",
+                    msg.id, conversation_id, e
+                );
+                return Err(e);
+            }
+        }
     }
 
     // Return all messages from local DB
@@ -385,6 +435,11 @@ pub async fn fetch_new_messages(
     let client = AuthorizedClient::from_session(&session_store)?;
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
 
+    // Serialize with any other fetch/decrypt for this conversation so two
+    // callers can't both advance the MLS ratchet on the same ciphertext.
+    let conv_lock = mls_state.conversation_lock(&conversation_id)?;
+    let _guard = conv_lock.lock().await;
+
     let latest_ts = local_db::get_latest_timestamp(&local_db, &conversation_id)?;
     let path = match latest_ts {
         Some(ts) => format!("/conversations/{}/messages?after={}", conversation_id, ts),
@@ -397,8 +452,11 @@ pub async fn fetch_new_messages(
         return Ok(Vec::new());
     }
 
+    // If the local DB read fails we must not silently treat every server
+    // message as new — that would burn through the MLS ratchet and desync
+    // both ends. Surface the error to the caller instead.
     let existing_ids =
-        local_db::get_existing_message_ids(&local_db, &conversation_id).unwrap_or_default();
+        local_db::get_existing_message_ids(&local_db, &conversation_id)?;
 
     // Process Welcome data. Log failures explicitly — a swallowed welcome
     // here is one of the ways a recipient ends up with no MLS group, which
@@ -426,69 +484,102 @@ pub async fn fetch_new_messages(
         }
     }
 
-    // Decrypt and store new messages
+    // Decrypt and persist each new message in lockstep with the MLS
+    // ratchet. Same reasoning as get_messages: batching the stores would
+    // let a crash leave the ratchet ahead of local_db.
     let mut new_messages: Vec<Message> = Vec::new();
-    let mut to_store: Vec<LocalMessage> = Vec::new();
 
     for msg in &server_messages {
         if existing_ids.contains(&msg.id) {
             continue;
         }
 
-        let (content, content_type) = if msg.content_type == "mls" {
+        if msg.content_type == "mls" {
             if msg.sender_id == current_user_id {
                 continue;
             }
-            if let Some(ref ciphertext) = msg.content_bytes {
-                match mls_state.decrypt_message(&conversation_id, ciphertext) {
-                    Ok(plaintext) => {
-                        let ct = classify_decrypted(&plaintext);
-                        (plaintext, ct)
-                    }
-                    Err(e) => {
-                        log::error!(
-                            "decrypt FAILED for msg_id={} conv={} sender={}: {}",
-                            msg.id, conversation_id, msg.sender_id, e
-                        );
-                        ("[encrypted message]".to_string(), "plaintext".to_string())
-                    }
+            let ciphertext = match msg.content_bytes.as_ref() {
+                Some(ct) => ct,
+                None => {
+                    log::warn!(
+                        "MLS message msg_id={} conv={} has no content_bytes",
+                        msg.id, conversation_id
+                    );
+                    continue;
                 }
-            } else {
-                log::warn!(
-                    "MLS message msg_id={} conv={} has no content_bytes",
-                    msg.id, conversation_id
-                );
-                ("[encrypted message]".to_string(), "plaintext".to_string())
+            };
+            match mls_state.decrypt_message(&conversation_id, ciphertext) {
+                Ok(Some(plaintext)) => {
+                    let content_type = classify_decrypted(&plaintext);
+                    let local_msg = LocalMessage {
+                        id: msg.id.clone(),
+                        conversation_id: msg.conversation_id.clone(),
+                        sender_id: msg.sender_id.clone(),
+                        content: plaintext.clone(),
+                        timestamp: msg.timestamp,
+                        content_type: content_type.clone(),
+                    };
+                    if let Err(e) =
+                        local_db::store_messages(&local_db, std::slice::from_ref(&local_msg))
+                    {
+                        log::error!(
+                            "fetch_new_messages: store_messages FAILED for msg_id={} conv={}: {}",
+                            msg.id, conversation_id, e
+                        );
+                        return Err(e);
+                    }
+                    new_messages.push(Message {
+                        id: msg.id.clone(),
+                        conversation_id: msg.conversation_id.clone(),
+                        sender_id: msg.sender_id.clone(),
+                        content: plaintext,
+                        timestamp: msg.timestamp,
+                        content_type,
+                        content_bytes: None,
+                        welcome_data: None,
+                    });
+                }
+                Ok(None) => {
+                    // Commit / proposal / non-application content. Ratchet
+                    // and group state have already been updated inside
+                    // decrypt_message; nothing to persist or surface.
+                }
+                Err(e) => {
+                    log::error!(
+                        "decrypt FAILED for msg_id={} conv={} sender={}: {}",
+                        msg.id, conversation_id, msg.sender_id, e
+                    );
+                }
             }
         } else {
-            (msg.content.clone(), msg.content_type.clone())
-        };
-
-        let local_msg = LocalMessage {
-            id: msg.id.clone(),
-            conversation_id: msg.conversation_id.clone(),
-            sender_id: msg.sender_id.clone(),
-            content: content.clone(),
-            timestamp: msg.timestamp,
-            content_type: content_type.clone(),
-        };
-
-        new_messages.push(Message {
-            id: msg.id.clone(),
-            conversation_id: msg.conversation_id.clone(),
-            sender_id: msg.sender_id.clone(),
-            content,
-            timestamp: msg.timestamp,
-            content_type,
-            content_bytes: None,
-            welcome_data: None,
-        });
-
-        to_store.push(local_msg);
-    }
-
-    if !to_store.is_empty() {
-        let _ = local_db::store_messages(&local_db, &to_store);
+            let local_msg = LocalMessage {
+                id: msg.id.clone(),
+                conversation_id: msg.conversation_id.clone(),
+                sender_id: msg.sender_id.clone(),
+                content: msg.content.clone(),
+                timestamp: msg.timestamp,
+                content_type: msg.content_type.clone(),
+            };
+            if let Err(e) =
+                local_db::store_messages(&local_db, std::slice::from_ref(&local_msg))
+            {
+                log::error!(
+                    "fetch_new_messages: store_messages FAILED for msg_id={} conv={}: {}",
+                    msg.id, conversation_id, e
+                );
+                return Err(e);
+            }
+            new_messages.push(Message {
+                id: msg.id.clone(),
+                conversation_id: msg.conversation_id.clone(),
+                sender_id: msg.sender_id.clone(),
+                content: msg.content.clone(),
+                timestamp: msg.timestamp,
+                content_type: msg.content_type.clone(),
+                content_bytes: None,
+                welcome_data: None,
+            });
+        }
     }
 
     Ok(new_messages)
