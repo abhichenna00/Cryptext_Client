@@ -83,6 +83,38 @@ fn local_message_from_row(row: &rusqlite::Row) -> rusqlite::Result<LocalMessage>
     })
 }
 
+/// Durable outbox row for messages whose ciphertext has been generated
+/// (ratchet already advanced) but whose server ACK has not yet been seen.
+/// Retried via `retry_pending_sends`; deleted once the server confirms.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct PendingSend {
+    pub client_message_id: String,
+    pub conversation_id: String,
+    pub content_type: String,
+    pub ciphertext: Vec<u8>,
+    pub welcome_data: Option<Vec<u8>>,
+    pub plaintext: String,
+    pub other_user_id: Option<String>,
+    pub created_at: i64,
+    pub attempts: i64,
+    pub last_error: Option<String>,
+}
+
+fn pending_send_from_row(row: &rusqlite::Row) -> rusqlite::Result<PendingSend> {
+    Ok(PendingSend {
+        client_message_id: row.get(0)?,
+        conversation_id: row.get(1)?,
+        content_type: row.get(2)?,
+        ciphertext: row.get(3)?,
+        welcome_data: row.get(4)?,
+        plaintext: row.get(5)?,
+        other_user_id: row.get(6)?,
+        created_at: row.get(7)?,
+        attempts: row.get(8)?,
+        last_error: row.get(9)?,
+    })
+}
+
 fn init_schema(conn: &Connection) -> Result<(), String> {
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS messages (
@@ -102,7 +134,21 @@ fn init_schema(conn: &Connection) -> Result<(), String> {
             file_size INTEGER NOT NULL,
             cached_at INTEGER NOT NULL,
             PRIMARY KEY (message_id, is_thumbnail)
-        );",
+        );
+        CREATE TABLE IF NOT EXISTS pending_sends (
+            client_message_id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            content_type TEXT NOT NULL,
+            ciphertext BLOB NOT NULL,
+            welcome_data BLOB,
+            plaintext TEXT NOT NULL,
+            other_user_id TEXT,
+            created_at INTEGER NOT NULL,
+            attempts INTEGER NOT NULL DEFAULT 0,
+            last_error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_pending_sends_created_at
+            ON pending_sends (created_at);",
     )
     .map_err(|e| format!("Failed to init schema: {}", e))
 }
@@ -443,6 +489,109 @@ pub fn get_existing_message_ids(
         .collect();
 
     Ok(ids)
+}
+
+/// Persist an outbox row for an encrypted-but-not-yet-acked message. Must be
+/// called BEFORE the HTTP POST so a crash mid-flight leaves the ciphertext
+/// recoverable — the MLS ratchet has already advanced and re-encrypting the
+/// same plaintext would yield different bytes.
+pub fn insert_pending_send(db: &LocalDb, row: &PendingSend) -> Result<(), String> {
+    let guard = db.conn.lock_or_err()?;
+    let conn = guard.as_ref().ok_or("Local DB not initialized")?;
+    conn.execute(
+        "INSERT INTO pending_sends (
+            client_message_id, conversation_id, content_type, ciphertext,
+            welcome_data, plaintext, other_user_id, created_at, attempts, last_error
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            row.client_message_id,
+            row.conversation_id,
+            row.content_type,
+            row.ciphertext,
+            row.welcome_data,
+            row.plaintext,
+            row.other_user_id,
+            row.created_at,
+            row.attempts,
+            row.last_error,
+        ],
+    )
+    .map_err(|e| format!("Failed to insert pending send: {}", e))?;
+    Ok(())
+}
+
+pub fn delete_pending_send(db: &LocalDb, client_message_id: &str) -> Result<(), String> {
+    let guard = db.conn.lock_or_err()?;
+    let conn = guard.as_ref().ok_or("Local DB not initialized")?;
+    conn.execute(
+        "DELETE FROM pending_sends WHERE client_message_id = ?1",
+        params![client_message_id],
+    )
+    .map_err(|e| format!("Failed to delete pending send: {}", e))?;
+    Ok(())
+}
+
+pub fn list_pending_sends(
+    db: &LocalDb,
+    conversation_id: Option<&str>,
+) -> Result<Vec<PendingSend>, String> {
+    let guard = db.conn.lock_or_err()?;
+    let conn = guard.as_ref().ok_or("Local DB not initialized")?;
+
+    let rows: Vec<PendingSend> = match conversation_id {
+        Some(cid) => {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT client_message_id, conversation_id, content_type, ciphertext,
+                            welcome_data, plaintext, other_user_id, created_at, attempts, last_error
+                     FROM pending_sends
+                     WHERE conversation_id = ?1
+                     ORDER BY created_at ASC",
+                )
+                .map_err(|e| format!("Failed to prepare query: {}", e))?;
+            let results: Vec<PendingSend> = stmt
+                .query_map(params![cid], pending_send_from_row)
+                .map_err(|e| format!("Failed to query pending sends: {}", e))?
+                .filter_map(|r| r.ok())
+                .collect();
+            results
+        }
+        None => {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT client_message_id, conversation_id, content_type, ciphertext,
+                            welcome_data, plaintext, other_user_id, created_at, attempts, last_error
+                     FROM pending_sends
+                     ORDER BY created_at ASC",
+                )
+                .map_err(|e| format!("Failed to prepare query: {}", e))?;
+            let results: Vec<PendingSend> = stmt
+                .query_map([], pending_send_from_row)
+                .map_err(|e| format!("Failed to query pending sends: {}", e))?
+                .filter_map(|r| r.ok())
+                .collect();
+            results
+        }
+    };
+
+    Ok(rows)
+}
+
+pub fn increment_pending_send_attempt(
+    db: &LocalDb,
+    client_message_id: &str,
+    error_msg: Option<&str>,
+) -> Result<(), String> {
+    let guard = db.conn.lock_or_err()?;
+    let conn = guard.as_ref().ok_or("Local DB not initialized")?;
+    conn.execute(
+        "UPDATE pending_sends
+         SET attempts = attempts + 1, last_error = ?2
+         WHERE client_message_id = ?1",
+        params![client_message_id, error_msg],
+    )
+    .map_err(|e| format!("Failed to update pending send attempt: {}", e))?;
+    Ok(())
 }
 
 #[command]

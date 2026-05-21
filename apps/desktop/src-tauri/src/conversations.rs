@@ -2,10 +2,11 @@
 
 use crate::auth::{self, SessionStore};
 use crate::http_client::{self, AuthorizedClient};
-use crate::local_db::{self, LocalDb, LocalMessage};
+use crate::local_db::{self, LocalDb, LocalMessage, PendingSend};
 use crate::mls::MlsState;
 use serde::{Deserialize, Serialize};
 use tauri::{command, State};
+use uuid::Uuid;
 
 /// Pull the full message history for a conversation and process any
 /// embedded Welcome data so the local MLS state catches up. Used when
@@ -121,6 +122,14 @@ pub struct ReadResult {
     pub success: bool,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RetryResult {
+    pub success: bool,
+    pub attempted: u32,
+    pub succeeded: u32,
+    pub failed: u32,
+}
+
 #[derive(Serialize)]
 struct CreateDmBody {
     other_user_id: String,
@@ -128,6 +137,7 @@ struct CreateDmBody {
 
 #[derive(Serialize)]
 pub struct SendMessageBody {
+    pub client_message_id: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<String>,
@@ -396,17 +406,59 @@ pub async fn send_message(
 
     let plaintext = content.clone();
     let ciphertext = mls_state.encrypt_message(&conversation_id, &content)?;
+    let client_message_id = Uuid::new_v4().to_string();
+
+    // Persist the ciphertext to the outbox BEFORE the POST. The ratchet has
+    // already advanced — if the request fails or the app dies before ACK,
+    // these bytes are the only way to resend without burning a new generation.
+    let pending = PendingSend {
+        client_message_id: client_message_id.clone(),
+        conversation_id: conversation_id.clone(),
+        content_type: "mls".to_string(),
+        ciphertext: ciphertext.clone(),
+        welcome_data: welcome_bytes.clone(),
+        plaintext: plaintext.clone(),
+        other_user_id: other_user_id.clone(),
+        created_at: chrono::Utc::now().timestamp_millis(),
+        attempts: 0,
+        last_error: None,
+    };
+    local_db::insert_pending_send(&local_db, &pending)?;
+
     let body = SendMessageBody {
+        client_message_id: client_message_id.clone(),
         content: "[encrypted]".to_string(),
         content_type: Some("mls".to_string()),
         content_bytes: Some(ciphertext),
         welcome_data: welcome_bytes,
     };
 
-    let result: MessageResult = client.post(&path, &body).await?;
+    let result: MessageResult = match client.post(&path, &body).await {
+        Ok(r) => r,
+        Err(e) => {
+            // Leave the outbox row so the next retry trigger can resend.
+            if let Err(upd_err) = local_db::increment_pending_send_attempt(
+                &local_db, &client_message_id, Some(&e),
+            ) {
+                log::warn!(
+                    "send_message: failed to mark pending_sends attempt for cmid={}: {}",
+                    client_message_id, upd_err
+                );
+            }
+            return Err(e);
+        }
+    };
 
-    // Store plaintext locally with the real server ID
     if result.success {
+        // ACK received — drop the outbox row. A failure to delete here means
+        // a retry will redundantly POST the same client_message_id; the
+        // server's UNIQUE constraint will dedupe so it's safe but noisy.
+        if let Err(e) = local_db::delete_pending_send(&local_db, &client_message_id) {
+            log::warn!(
+                "send_message: failed to delete pending_sends row cmid={}: {}",
+                client_message_id, e
+            );
+        }
         if let (Some(ref msg_id), Some(ts)) = (&result.message_id, result.timestamp) {
             let msg = LocalMessage {
                 id: msg_id.clone(),
@@ -416,11 +468,125 @@ pub async fn send_message(
                 timestamp: ts,
                 content_type: "plaintext".to_string(),
             };
-            let _ = local_db::store_message(&local_db, &msg);
+            local_db::store_message(&local_db, &msg)?;
+        }
+    } else {
+        // Server reported the send as failed at the application level. Mark
+        // the outbox attempt and leave the row so retry can pick it up.
+        if let Err(upd_err) = local_db::increment_pending_send_attempt(
+            &local_db,
+            &client_message_id,
+            result.error.as_deref(),
+        ) {
+            log::warn!(
+                "send_message: failed to mark pending_sends attempt for cmid={}: {}",
+                client_message_id, upd_err
+            );
         }
     }
 
     Ok(result)
+}
+
+/// Replay every outbox row (optionally filtered to one conversation). Each
+/// retry posts the persisted ciphertext with its original `client_message_id`
+/// — the server's UNIQUE constraint dedupes against the first successful
+/// insert, so this is safe to call repeatedly. Sequential by design: parallel
+/// POSTs offer no win when the server is already dedupe-protected.
+#[command]
+pub async fn retry_pending_sends(
+    conversation_id: Option<String>,
+    session_store: State<'_, SessionStore>,
+    local_db: State<'_, LocalDb>,
+) -> Result<RetryResult, String> {
+    let pending = local_db::list_pending_sends(&local_db, conversation_id.as_deref())?;
+    if pending.is_empty() {
+        return Ok(RetryResult {
+            success: true,
+            attempted: 0,
+            succeeded: 0,
+            failed: 0,
+        });
+    }
+
+    let client = AuthorizedClient::from_session(&session_store)?;
+    let current_user_id = auth::get_user_id_from_session(&session_store)?;
+
+    let mut succeeded: u32 = 0;
+    let mut failed: u32 = 0;
+    let attempted = pending.len() as u32;
+
+    for row in pending {
+        let path = format!("/conversations/{}/messages", row.conversation_id);
+        let body = SendMessageBody {
+            client_message_id: row.client_message_id.clone(),
+            content: "[encrypted]".to_string(),
+            content_type: Some(row.content_type.clone()),
+            content_bytes: Some(row.ciphertext.clone()),
+            welcome_data: row.welcome_data.clone(),
+        };
+
+        match client.post::<MessageResult, _>(&path, &body).await {
+            Ok(result) if result.success => {
+                if let Err(e) = local_db::delete_pending_send(&local_db, &row.client_message_id) {
+                    log::warn!(
+                        "retry_pending_sends: failed to delete pending_sends row cmid={}: {}",
+                        row.client_message_id, e
+                    );
+                }
+                if let (Some(ref msg_id), Some(ts)) = (&result.message_id, result.timestamp) {
+                    let local_msg = LocalMessage {
+                        id: msg_id.clone(),
+                        conversation_id: row.conversation_id.clone(),
+                        sender_id: current_user_id.clone(),
+                        content: row.plaintext.clone(),
+                        timestamp: ts,
+                        content_type: classify_decrypted(&row.plaintext),
+                    };
+                    if let Err(e) = local_db::store_message(&local_db, &local_msg) {
+                        log::error!(
+                            "retry_pending_sends: store_message FAILED for cmid={} msg_id={}: {}",
+                            row.client_message_id, msg_id, e
+                        );
+                    }
+                }
+                succeeded += 1;
+            }
+            Ok(result) => {
+                failed += 1;
+                if let Err(e) = local_db::increment_pending_send_attempt(
+                    &local_db,
+                    &row.client_message_id,
+                    result.error.as_deref(),
+                ) {
+                    log::warn!(
+                        "retry_pending_sends: failed to mark attempt cmid={}: {}",
+                        row.client_message_id, e
+                    );
+                }
+            }
+            Err(e) => {
+                failed += 1;
+                if let Err(upd_err) = local_db::increment_pending_send_attempt(
+                    &local_db,
+                    &row.client_message_id,
+                    Some(&e),
+                ) {
+                    log::warn!(
+                        "retry_pending_sends: failed to mark attempt cmid={}: {}",
+                        row.client_message_id, upd_err
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(RetryResult {
+        success: failed == 0,
+        attempted,
+        succeeded,
+        failed,
+    })
 }
 
 /// Fetch only new messages since the latest local timestamp.
