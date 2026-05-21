@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Cursor;
 use std::path::PathBuf;
 use tauri::{command, AppHandle, Manager, State};
+use uuid::Uuid;
 
 // ============================================
 // TYPES
@@ -340,6 +341,7 @@ pub async fn send_media(
     // 7. Encrypt metadata via MLS and send as message
     let ciphertext = mls_state.encrypt_message(&conversation_id, &metadata_json)?;
     let body = SendMessageBody {
+        client_message_id: Uuid::new_v4().to_string(),
         content: "[encrypted]".to_string(),
         content_type: Some("mls".to_string()),
         content_bytes: Some(ciphertext),

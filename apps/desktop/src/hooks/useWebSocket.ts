@@ -90,6 +90,18 @@ function getBackoffDelay(attempt: number, baseInterval: number): number {
 }
 
 /**
+ * Drain any outbox rows whose ciphertext was generated but never ack'd.
+ * Server's `(sender_id, client_message_id)` UNIQUE constraint absorbs the
+ * common case where the original POST actually landed and only the response
+ * was lost.
+ */
+function flushPendingSends(): void {
+  invoke('retry_pending_sends', { conversationId: null }).catch((err) => {
+    console.warn('[WebSocket] retry_pending_sends failed:', err)
+  })
+}
+
+/**
  * Hook that manages a WebSocket connection to the Axum server.
  * Authenticates via first message after connection (not query param).
  */
@@ -194,6 +206,9 @@ export function useWebSocket(options: UseWebSocketOptions = {}): UseWebSocketRet
           setIsConnected(true)
           reconnectAttemptsRef.current = 0
           onOpenRef.current?.()
+          // Fires for both initial connect and post-reconnect — covers both
+          // outbox retry triggers (startup and WS reconnect) in one hook.
+          flushPendingSends()
           return
         }
         if (data.action === 'auth_error') {

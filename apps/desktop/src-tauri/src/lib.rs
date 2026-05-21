@@ -93,6 +93,7 @@ pub fn run() {
             conversations::get_messages,
             conversations::fetch_new_messages,
             conversations::send_message,
+            conversations::retry_pending_sends,
             conversations::mark_read,
             conversations::create_group,
             conversations::get_group_members,
