@@ -10,7 +10,7 @@ use openmls_rust_crypto::OpenMlsRustCrypto;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{command, Manager, State};
 use zeroize::Zeroizing;
 
@@ -20,6 +20,11 @@ use zeroize::Zeroizing;
 
 pub struct MlsState {
     inner: Mutex<Option<MlsInner>>,
+    /// Per-conversation async locks. Held across the entire fetch → decrypt →
+    /// store sequence so two concurrent callers (StrictMode double-mount in
+    /// dev, or a WebSocket push overlapping a manual refresh in prod) cannot
+    /// both attempt to decrypt the same ciphertext and trip SecretReuseError.
+    conversation_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 /// Serializable metadata persisted alongside the MLS key store
@@ -71,7 +76,24 @@ impl Default for MlsState {
     fn default() -> Self {
         Self {
             inner: Mutex::new(None),
+            conversation_locks: Mutex::new(HashMap::new()),
         }
+    }
+}
+
+impl MlsState {
+    /// Get (or lazily create) the async lock guarding a conversation's
+    /// fetch → decrypt → store sequence. Callers must hold the returned
+    /// guard for the entire sequence.
+    pub fn conversation_lock(
+        &self,
+        conversation_id: &str,
+    ) -> Result<Arc<tokio::sync::Mutex<()>>, String> {
+        let mut map = self.conversation_locks.lock_or_err()?;
+        Ok(map
+            .entry(conversation_id.to_string())
+            .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+            .clone())
     }
 }
 
@@ -715,14 +737,17 @@ impl MlsState {
             .map_err(|e| format!("Failed to serialize ciphertext: {:?}", e))
     }
 
-    /// Decrypt an incoming application/commit/proposal message. Consumes the
-    /// sender's ratchet generation for application messages, merges staged
-    /// commits, and persists state.
+    /// Decrypt an incoming MLS message. Returns `Ok(Some(plaintext))` for
+    /// application messages and `Ok(None)` for non-application content
+    /// (commits, proposals, anything else the protocol layer accepts but
+    /// surfaces no plaintext for). Callers should skip storage on `None`
+    /// rather than treating it as a decrypt failure — the ratchet still
+    /// advances and state is persisted.
     pub fn decrypt_message(
         &self,
         conversation_id: &str,
         ciphertext: &[u8],
-    ) -> Result<String, String> {
+    ) -> Result<Option<String>, String> {
         let mut state = self.inner.lock_or_err()?;
         let inner = state.as_mut().ok_or("MLS not initialized")?;
 
@@ -743,29 +768,28 @@ impl MlsState {
             .process_message(&inner.provider, protocol_message)
             .map_err(|e| format!("Failed to process message: {:?}", e))?;
 
-        let result = match processed.into_content() {
+        match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(app_msg) => {
                 inner.save_state()?;
-                String::from_utf8(app_msg.into_bytes())
-                    .map_err(|e| format!("Invalid UTF-8 in decrypted message: {}", e))
+                let plaintext = String::from_utf8(app_msg.into_bytes())
+                    .map_err(|e| format!("Invalid UTF-8 in decrypted message: {}", e))?;
+                Ok(Some(plaintext))
             }
             ProcessedMessageContent::StagedCommitMessage(staged_commit) => {
                 group.merge_staged_commit(&inner.provider, *staged_commit)
                     .map_err(|e| format!("Failed to merge commit: {:?}", e))?;
                 inner.save_state()?;
-                Err("Commit processed".to_string())
+                Ok(None)
             }
             ProcessedMessageContent::ProposalMessage(_) => {
                 inner.save_state()?;
-                Err("Proposal processed".to_string())
+                Ok(None)
             }
             _ => {
                 inner.save_state()?;
-                Err("Unknown message type".to_string())
+                Ok(None)
             }
-        };
-
-        result
+        }
     }
 
     /// Pull queued Welcome messages from the server, join the groups locally,
@@ -923,7 +947,7 @@ pub async fn mls_decrypt_message(
     conversation_id: String,
     ciphertext: Vec<u8>,
     mls_state: State<'_, MlsState>,
-) -> Result<String, String> {
+) -> Result<Option<String>, String> {
     mls_state.decrypt_message(&conversation_id, &ciphertext)
 }
 
