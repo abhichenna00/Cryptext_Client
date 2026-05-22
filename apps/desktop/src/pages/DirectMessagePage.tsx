@@ -507,7 +507,7 @@ export default function DirectMessagePage() {
           viewportProps={{ onScroll: handleScroll }}
           className="h-full"
         >
-          <div className="flex flex-col gap-0.5 px-5 py-4">
+          <div className="flex flex-col px-5 py-4">
             {/* Intro block */}
             <div className="mb-4 flex flex-col items-center gap-3 py-6 text-center">
               <Avatar
