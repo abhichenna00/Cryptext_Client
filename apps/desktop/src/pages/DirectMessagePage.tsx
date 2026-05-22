@@ -121,10 +121,12 @@ export default function DirectMessagePage() {
   const conversationIdRef = useRef<string | null>(null)
   const userIdRef = useRef<string | null>(null)
   const isAtBottomRef = useRef(true)
+  const messagesRef = useRef<Message[]>([])
 
   useEffect(() => { conversationIdRef.current = conversationId }, [conversationId])
   useEffect(() => { userIdRef.current = userId }, [userId])
   useEffect(() => { isAtBottomRef.current = isAtBottom }, [isAtBottom])
+  useEffect(() => { messagesRef.current = messages }, [messages])
 
   const handleWsMessage = useCallback(async (data: WebSocketMessage) => {
     if (data.action !== 'new_message') return
@@ -133,10 +135,29 @@ export default function DirectMessagePage() {
     if (notification.sender_id === userIdRef.current) return
 
     try {
-      const newMessages = await invoke<Message[]>('fetch_new_messages', {
+      // Fire decrypt+store. The return value is unreliable: HomePage's
+      // useLiveConversationList subscribes to the same push and may win the
+      // per-conversation mutex first, in which case our call returns []
+      // even though the message landed in local DB. Read from local DB
+      // afterwards instead.
+      await invoke('fetch_new_messages', { conversationId: notification.conversation_id })
+
+      const lastShownTs = messagesRef.current.length > 0
+        ? messagesRef.current[messagesRef.current.length - 1].timestamp
+        : 0
+      const fresh = await invoke<Message[]>('get_local_messages_after', {
         conversationId: notification.conversation_id,
+        afterTimestamp: lastShownTs,
       })
-      if (newMessages.length > 0) setMessages((prev) => [...prev, ...newMessages])
+
+      if (fresh.length > 0) {
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id))
+          const toAppend = fresh.filter((m) => !seen.has(m.id))
+          return toAppend.length > 0 ? [...prev, ...toAppend] : prev
+        })
+      }
+
       if (conversationIdRef.current) {
         invoke('mark_read', { conversationId: conversationIdRef.current }).catch(console.error)
       }

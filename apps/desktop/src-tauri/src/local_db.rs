@@ -689,6 +689,43 @@ pub fn get_local_messages_inner(
     Ok(messages)
 }
 
+/// Read messages with timestamp strictly greater than `after_timestamp`,
+/// ordered chronologically. Used by chat pages to pick up new messages
+/// after `fetch_new_messages` may have returned empty due to a race with
+/// another subscriber that won the decrypt mutex first.
+#[command]
+pub fn get_local_messages_after(
+    local_db: State<'_, LocalDb>,
+    conversation_id: String,
+    after_timestamp: i64,
+    limit: Option<u32>,
+) -> Result<Vec<LocalMessage>, String> {
+    let guard = local_db.conn.lock_or_err()?;
+    let conn = guard.as_ref().ok_or("Local DB not initialized")?;
+
+    let limit = limit.unwrap_or(100);
+
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, conversation_id, sender_id, content, timestamp, content_type
+             FROM messages
+             WHERE conversation_id = ?1 AND timestamp > ?2
+             ORDER BY timestamp ASC, id ASC
+             LIMIT ?3",
+        )
+        .map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+    let results: Vec<LocalMessage> = stmt
+        .query_map(params![conversation_id, after_timestamp, limit], |row| {
+            local_message_from_row(row)
+        })
+        .map_err(|e| format!("Failed to query: {}", e))?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(results)
+}
+
 #[command]
 pub fn store_decrypted_message(
     local_db: State<'_, LocalDb>,
