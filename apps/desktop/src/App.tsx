@@ -8,6 +8,7 @@ import '@radix-ui/themes/styles.css'
 import './App.css'
 
 import { useTheme } from '@/hooks'
+import { WebSocketProvider } from '@/contexts/WebSocketContext'
 
 import SplashPage from './pages/SplashPage'
 import AuthPage from './pages/AuthPage'
@@ -182,6 +183,7 @@ export default function App() {
             </button>
           </div>
         )}
+        <WebSocketProvider enabled={!!session && hasProfile && !vaultError}>
         <Routes>
           <Route path="/splash" element={<SplashPage />} />
 
@@ -251,6 +253,7 @@ export default function App() {
 
           <Route path="/chat/:friendId" element={<LegacyChatRedirect />} />
         </Routes>
+        </WebSocketProvider>
       </BrowserRouter>
     </Theme>
   )
