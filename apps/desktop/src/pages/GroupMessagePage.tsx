@@ -91,33 +91,49 @@ export default function GroupMessagePage() {
   const conversationIdRef = useRef<string | null>(null)
   const userIdRef = useRef<string | null>(null)
   const isAtBottomRef = useRef(true)
+  const messagesRef = useRef<Message[]>([])
 
   useEffect(() => { conversationIdRef.current = conversationId ?? null }, [conversationId])
   useEffect(() => { userIdRef.current = userId }, [userId])
   useEffect(() => { isAtBottomRef.current = isAtBottom }, [isAtBottom])
+  useEffect(() => { messagesRef.current = messages }, [messages])
 
   const handleWsMessage = useCallback(async (data: WebSocketMessage) => {
-    if (data.action === 'new_message') {
-      const notification = data.message as Message
-      if (notification.conversation_id !== conversationIdRef.current) return
-      if (notification.sender_id === userIdRef.current) return
+    if (data.action !== 'new_message') return
+    const notification = data.message as Message
+    if (notification.conversation_id !== conversationIdRef.current) return
+    if (notification.sender_id === userIdRef.current) return
 
-      try {
-        const newMessages = await invoke<Message[]>('fetch_new_messages', {
-          conversationId: notification.conversation_id,
+    try {
+      // Fire decrypt+store. Read truth from local DB after, since another
+      // subscriber (HomePage) may win the per-conversation mutex and leave
+      // our return empty even though the message landed.
+      await invoke('fetch_new_messages', { conversationId: notification.conversation_id })
+
+      const lastShownTs = messagesRef.current.length > 0
+        ? messagesRef.current[messagesRef.current.length - 1].timestamp
+        : 0
+      const fresh = await invoke<Message[]>('get_local_messages_after', {
+        conversationId: notification.conversation_id,
+        afterTimestamp: lastShownTs,
+      })
+
+      if (fresh.length > 0) {
+        setMessages((prev) => {
+          const seen = new Set(prev.map((m) => m.id))
+          const toAppend = fresh.filter((m) => !seen.has(m.id))
+          return toAppend.length > 0 ? [...prev, ...toAppend] : prev
         })
-        if (newMessages.length > 0) {
-          setMessages((prev) => [...prev, ...newMessages])
-        }
-        if (conversationIdRef.current) {
-          invoke('mark_read', { conversationId: conversationIdRef.current }).catch(console.error)
-        }
-        if (isAtBottomRef.current) {
-          setTimeout(() => scrollToBottom(), 100)
-        }
-      } catch (err) {
-        console.error('Failed to fetch new messages:', err)
       }
+
+      if (conversationIdRef.current) {
+        invoke('mark_read', { conversationId: conversationIdRef.current }).catch(console.error)
+      }
+      if (isAtBottomRef.current) {
+        setTimeout(() => scrollToBottom(), 100)
+      }
+    } catch (err) {
+      console.error('Failed to fetch new messages:', err)
     }
   }, [])
 
