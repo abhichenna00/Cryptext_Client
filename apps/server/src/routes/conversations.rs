@@ -47,6 +47,7 @@ pub struct ConversationWithDetails {
     pub last_message_time: Option<i64>,
     pub last_message_content_type: Option<String>,
     pub has_unread: bool,
+    pub unread_count: i64,
 }
 
 #[derive(Deserialize)]
@@ -88,7 +89,7 @@ pub async fn get_conversations(claims: Claims) -> AppResult<impl IntoResponse> {
     let rows: Vec<(
         String, String, Option<String>, Option<String>, Option<String>,
         Option<String>, Option<String>, Option<i64>,
-        Option<String>, Option<i64>, Option<String>, bool,
+        Option<String>, Option<i64>, Option<String>, bool, i64,
     )> = sqlx::query_as(
         r#"
         SELECT
@@ -104,7 +105,11 @@ pub async fn get_conversations(claims: Claims) -> AppResult<impl IntoResponse> {
             lm.content as last_message,
             lm.timestamp as last_message_time,
             lm.content_type as last_message_content_type,
-            COALESCE(lm.timestamp > COALESCE(EXTRACT(EPOCH FROM cp.last_read_at) * 1000, 0), false) as has_unread
+            COALESCE(lm.timestamp > COALESCE(EXTRACT(EPOCH FROM cp.last_read_at) * 1000, 0), false) as has_unread,
+            (SELECT COUNT(*) FROM messages um
+             WHERE um.conversation_id = c.id
+               AND um.timestamp > COALESCE(EXTRACT(EPOCH FROM cp.last_read_at) * 1000, 0))
+             as unread_count
         FROM conversations c
         JOIN conversation_participants cp ON c.id = cp.conversation_id AND cp.user_id = $1
         LEFT JOIN LATERAL (
@@ -130,13 +135,13 @@ pub async fn get_conversations(claims: Claims) -> AppResult<impl IntoResponse> {
 
     let conversations: Vec<ConversationWithDetails> = rows
         .into_iter()
-        .map(|(conversation_id, conversation_type, name, other_user_id, other_user_nickname, other_user_avatar_url, other_user_status, member_count, last_message, last_message_time, last_message_content_type, has_unread)| {
+        .map(|(conversation_id, conversation_type, name, other_user_id, other_user_nickname, other_user_avatar_url, other_user_status, member_count, last_message, last_message_time, last_message_content_type, has_unread, unread_count)| {
             ConversationWithDetails {
                 conversation_id, conversation_type, name,
                 other_user_id, other_user_nickname,
                 other_user_avatar_url, other_user_status,
                 member_count,
-                last_message, last_message_time, last_message_content_type, has_unread,
+                last_message, last_message_time, last_message_content_type, has_unread, unread_count,
             }
         })
         .collect();
