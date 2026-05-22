@@ -1,6 +1,8 @@
 export { useIsMobile } from './use-mobile'
 export { useFriendActions } from './useFriendActions'
 export { useWebSocket } from './useWebSocket'
+export { useLiveConversationList } from './useLiveConversationList'
+export type { ConversationWithDetails } from './useLiveConversationList'
 export { useWindowSize } from './useWindowSize'
 export { useAutoDownloadMedia } from './useAutoDownloadMedia'
 export { useTheme } from './useTheme'

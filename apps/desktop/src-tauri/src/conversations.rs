@@ -81,6 +81,8 @@ pub struct ConversationWithDetails {
     pub last_message_time: Option<i64>,
     pub last_message_content_type: Option<String>,
     pub has_unread: bool,
+    #[serde(default)]
+    pub unread_count: i64,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

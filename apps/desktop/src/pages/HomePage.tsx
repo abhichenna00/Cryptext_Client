@@ -10,7 +10,7 @@ import CreateGroupDialog from '@/components/CreateGroupDialog'
 import { Button } from '@/components/ui/button'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import { STATUS_LABELS, Status } from '@/constants/status'
-import { useTheme } from '@/hooks'
+import { useLiveConversationList, useTheme, type ConversationWithDetails } from '@/hooks'
 import { cn } from '@/lib/utils'
 
 interface HomePageProps {
@@ -23,21 +23,6 @@ interface ProfileData {
   nickname: string
   avatar_url: string | null
   status: string | null
-}
-
-interface ConversationWithDetails {
-  conversation_id: string
-  conversation_type: string
-  name: string | null
-  other_user_id: string | null
-  other_user_nickname: string | null
-  other_user_avatar_url?: string | null
-  other_user_status?: string | null
-  member_count?: number | null
-  last_message: string | null
-  last_message_time: number | null
-  last_message_content_type: string | null
-  has_unread: boolean
 }
 
 function conversationDisplayName(c: ConversationWithDetails): string {
@@ -73,12 +58,15 @@ export default function HomePage({ onSignOut }: HomePageProps) {
   const { friendId: activeFriendId } = useParams<{ friendId: string }>()
   const { theme, toggle: toggleTheme } = useTheme()
 
-  const [recentChats, setRecentChats] = useState<ConversationWithDetails[]>([])
+  const { conversations: recentChats, loading: conversationsLoading, refresh: refreshConversations } =
+    useLiveConversationList()
   const [profile, setProfile] = useState<ProfileData | null>(null)
-  const [loading, setLoading] = useState(true)
+  const [profileLoading, setProfileLoading] = useState(true)
   const [editProfileOpen, setEditProfileOpen] = useState(false)
   const [createGroupOpen, setCreateGroupOpen] = useState(false)
   const [query, setQuery] = useState('')
+
+  const loading = conversationsLoading || profileLoading
 
   const refreshProfile = async () => {
     try {
@@ -88,33 +76,14 @@ export default function HomePage({ onSignOut }: HomePageProps) {
     }
   }
 
-  const refreshConversations = async () => {
-    try {
-      setRecentChats(
-        await invoke<ConversationWithDetails[]>('get_conversations').catch(
-          () => [] as ConversationWithDetails[],
-        ),
-      )
-    } catch (err) {
-      console.error('Failed to refresh conversations:', err)
-    }
-  }
-
   useEffect(() => {
     ;(async () => {
       try {
-        const [conversations, profileData] = await Promise.all([
-          invoke<ConversationWithDetails[]>('get_conversations').catch(
-            () => [] as ConversationWithDetails[],
-          ),
-          invoke<ProfileData | null>('get_profile').catch(() => null),
-        ])
-        setRecentChats(conversations)
-        setProfile(profileData)
+        setProfile(await invoke<ProfileData | null>('get_profile'))
       } catch (err) {
-        console.error('Failed to load home data:', err)
+        console.error('Failed to load profile:', err)
       } finally {
-        setLoading(false)
+        setProfileLoading(false)
       }
     })()
   }, [])
@@ -250,7 +219,7 @@ export default function HomePage({ onSignOut }: HomePageProps) {
                       <div
                         className={cn(
                           'truncate text-[13.5px] leading-tight',
-                          chat.has_unread ? 'font-semibold text-fg' : 'text-fg',
+                          chat.unread_count > 0 ? 'font-semibold text-fg' : 'text-fg',
                         )}
                       >
                         {name}
@@ -258,15 +227,15 @@ export default function HomePage({ onSignOut }: HomePageProps) {
                       <div
                         className={cn(
                           'truncate text-[12px]',
-                          chat.has_unread ? 'text-fg-muted' : 'text-fg-dim',
+                          chat.unread_count > 0 ? 'text-fg-muted' : 'text-fg-dim',
                         )}
                       >
                         {conversationPreview(chat)}
                       </div>
                     </div>
-                    {chat.has_unread && (
+                    {chat.unread_count > 0 && (
                       <span className="grid h-[18px] min-w-[18px] place-items-center rounded-full bg-[var(--brand)] px-1 font-mono text-[10.5px] text-[var(--brand-fg)]">
-                        •
+                        {chat.unread_count > 99 ? '99+' : chat.unread_count}
                       </span>
                     )}
                   </button>
