@@ -394,9 +394,7 @@ export default function GroupMessagePage() {
 
   const shouldShowHeader = (msg: Message, index: number): boolean => {
     if (isNewDay(msg, index)) return true
-    const prevMsg = messages[index - 1]
-    if (prevMsg.sender_id !== msg.sender_id) return true
-    return msg.timestamp - prevMsg.timestamp > 5 * 60 * 1000
+    return messages[index - 1].sender_id !== msg.sender_id
   }
 
   if (loading) return <div className="dm-page"><div className="dm-loading">Loading...</div></div>

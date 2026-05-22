@@ -437,9 +437,7 @@ export default function DirectMessagePage() {
 
   const shouldShowHeader = (msg: Message, index: number): boolean => {
     if (isNewDay(msg, index)) return true
-    const prevMsg = messages[index - 1]
-    if (prevMsg.sender_id !== msg.sender_id) return true
-    return msg.timestamp - prevMsg.timestamp > 5 * 60 * 1000
+    return messages[index - 1].sender_id !== msg.sender_id
   }
 
   if (loading) {
@@ -548,7 +546,7 @@ export default function DirectMessagePage() {
                   <div
                     className={cn(
                       'group/msg grid grid-cols-[36px_1fr] gap-x-2',
-                      showHeader ? 'mt-3' : 'mt-0.5',
+                      showHeader && 'mt-3',
                     )}
                   >
                     {showHeader ? (
