@@ -545,7 +545,7 @@ export default function DirectMessagePage() {
                   {showDate && <DaySeparator timestamp={msg.timestamp} />}
                   <div
                     className={cn(
-                      'group/msg grid grid-cols-[36px_1fr] gap-x-2',
+                      'group/msg grid grid-cols-[36px_1fr] items-start gap-x-2 leading-none',
                       showHeader && 'mt-3',
                     )}
                   >
