@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
-import { useWebSocketContext } from '@/contexts/WebSocketContext'
+import { useWebSocketContext, type WsNewMessage } from '@/contexts/WebSocketContext'
 
 export interface ConversationWithDetails {
   conversation_id: string
@@ -57,10 +57,20 @@ export function useLiveConversationList(): UseLiveConversationListReturn {
   }, [refresh])
 
   useEffect(() => {
-    return ctx.subscribe((data) => {
-      if (data.action === 'new_message') {
-        refresh()
+    return ctx.subscribe(async (data) => {
+      if (data.action !== 'new_message') return
+      // The sidebar preview reads `last_message` from the local DB, which is
+      // populated by decrypt — without this fetch, the preview stays stale
+      // until the user opens the chat for that conversation.
+      const convId = (data as WsNewMessage).message?.conversation_id
+      if (convId) {
+        try {
+          await invoke('fetch_new_messages', { conversationId: convId })
+        } catch (err) {
+          console.warn('[useLiveConversationList] fetch_new_messages failed:', err)
+        }
       }
+      refresh()
     })
   }, [ctx, refresh])
 
