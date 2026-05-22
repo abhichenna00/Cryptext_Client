@@ -58,7 +58,7 @@ export default function HomePage({ onSignOut }: HomePageProps) {
   const { friendId: activeFriendId } = useParams<{ friendId: string }>()
   const { theme, toggle: toggleTheme } = useTheme()
 
-  const { conversations: recentChats, loading: conversationsLoading, refresh: refreshConversations } =
+  const { conversations: recentChats, loading: conversationsLoading, refresh: refreshConversations, clearUnreadFor } =
     useLiveConversationList()
   const [profile, setProfile] = useState<ProfileData | null>(null)
   const [profileLoading, setProfileLoading] = useState(true)
@@ -89,6 +89,9 @@ export default function HomePage({ onSignOut }: HomePageProps) {
   }, [])
 
   const handleOpenChat = (chat: ConversationWithDetails) => {
+    if (chat.unread_count > 0) {
+      clearUnreadFor(chat.conversation_id)
+    }
     if (chat.conversation_type === 'group') {
       navigate(`/home/group/${chat.conversation_id}`)
     } else if (chat.other_user_id) {
