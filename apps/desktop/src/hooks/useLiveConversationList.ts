@@ -28,6 +28,9 @@ interface UseLiveConversationListReturn {
   conversations: ConversationWithDetails[]
   loading: boolean
   refresh: () => Promise<void>
+  /** Optimistically zero the unread count for a conversation, e.g. when the
+   *  user clicks into the chat. The next server refresh will reconcile. */
+  clearUnreadFor: (conversationId: string) => void
 }
 
 export function useLiveConversationList(): UseLiveConversationListReturn {
@@ -44,6 +47,16 @@ export function useLiveConversationList(): UseLiveConversationListReturn {
     } catch (err) {
       console.error('Failed to refresh conversations:', err)
     }
+  }, [])
+
+  const clearUnreadFor = useCallback((conversationId: string) => {
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.conversation_id === conversationId
+          ? { ...c, unread_count: 0, has_unread: false }
+          : c,
+      ),
+    )
   }, [])
 
   useEffect(() => {
@@ -74,5 +87,5 @@ export function useLiveConversationList(): UseLiveConversationListReturn {
     })
   }, [ctx, refresh])
 
-  return { conversations, loading, refresh }
+  return { conversations, loading, refresh, clearUnreadFor }
 }
