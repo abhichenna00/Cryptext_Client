@@ -209,7 +209,6 @@ pub async fn get_messages(
 ) -> Result<Vec<Message>, String> {
     let client = AuthorizedClient::from_session(&session_store)?;
     let current_user_id = auth::get_user_id_from_session(&session_store)?;
-    let path = format!("/conversations/{}/messages", conversation_id);
 
     // Serialize with any other fetch/decrypt for this conversation so two
     // callers can't both advance the MLS ratchet on the same ciphertext.
@@ -221,15 +220,26 @@ pub async fn get_messages(
     // both ends. Surface the error to the caller instead.
     let existing_ids =
         local_db::get_existing_message_ids(&local_db, &conversation_id)?;
+    let latest_ts = local_db::get_latest_timestamp(&local_db, &conversation_id)?;
 
-    // Fetch from server
+    // Only ask the server for messages newer than what we already have. The
+    // first time we open a conversation the local DB is empty, so we fall
+    // through to the full pull.
+    let path = match latest_ts {
+        Some(ts) => format!("/conversations/{}/messages?after={}", conversation_id, ts),
+        None => format!("/conversations/{}/messages", conversation_id),
+    };
+
     let server_messages: Vec<Message> = client.get(&path).await?;
 
     // Process any Welcome data embedded in messages before decrypting.
-    // Mirror fetch_new_messages: log success and failure rather than
-    // swallowing — a silent welcome failure leaves us without a group and
-    // later trips the duplicate-group desync.
+    // Skip messages we've already stored locally — their welcomes were
+    // processed on the original fetch and re-processing is a no-op that
+    // just produces noisy logs.
     for msg in &server_messages {
+        if existing_ids.contains(&msg.id) {
+            continue;
+        }
         if let Some(ref welcome_data) = msg.welcome_data {
             if msg.sender_id != current_user_id {
                 match mls_state.process_welcome(
