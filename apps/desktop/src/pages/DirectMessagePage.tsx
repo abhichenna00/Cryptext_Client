@@ -437,9 +437,7 @@ export default function DirectMessagePage() {
 
   const shouldShowHeader = (msg: Message, index: number): boolean => {
     if (isNewDay(msg, index)) return true
-    const prevMsg = messages[index - 1]
-    if (prevMsg.sender_id !== msg.sender_id) return true
-    return msg.timestamp - prevMsg.timestamp > 5 * 60 * 1000
+    return messages[index - 1].sender_id !== msg.sender_id
   }
 
   if (loading) {
@@ -509,7 +507,7 @@ export default function DirectMessagePage() {
           viewportProps={{ onScroll: handleScroll }}
           className="h-full"
         >
-          <div className="flex flex-col gap-0.5 px-5 py-4">
+          <div className="flex flex-col px-5 py-4">
             {/* Intro block */}
             <div className="mb-4 flex flex-col items-center gap-3 py-6 text-center">
               <Avatar
@@ -547,8 +545,8 @@ export default function DirectMessagePage() {
                   {showDate && <DaySeparator timestamp={msg.timestamp} />}
                   <div
                     className={cn(
-                      'group/msg grid grid-cols-[36px_1fr] gap-x-2',
-                      showHeader ? 'mt-3' : 'mt-0.5',
+                      'group/msg grid grid-cols-[36px_1fr] items-start gap-x-2 leading-none',
+                      showHeader && 'mt-3',
                     )}
                   >
                     {showHeader ? (
