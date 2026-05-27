@@ -105,7 +105,6 @@ pub fn run() {
             local_db::discard_and_reset_vault,
             local_db::get_local_messages,
             local_db::get_local_messages_after,
-            local_db::store_decrypted_message,
             // MLS (E2E Encryption)
             mls::mls_init,
             mls::mls_upload_key_packages,
