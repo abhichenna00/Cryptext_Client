@@ -281,7 +281,13 @@ pub async fn sign_up(Json(req): Json<SignUpRequest>) -> AppResult<Json<AuthRespo
                 err if err.is_invalid_parameter_exception() => {
                     err.meta().message().unwrap_or("Invalid parameter").to_string()
                 }
-                err => format!("Signup failed: {:?}", err),
+                err => {
+                    // Never echo the raw SDK error back to the client — it
+                    // can carry the upstream request id and internal
+                    // exception names. Operators get the detail via logs.
+                    tracing::error!("Cognito signup failed: {:?}", err);
+                    "Signup failed. Please try again.".to_string()
+                }
             };
             Ok(Json(error_response(&msg)))
         }
