@@ -193,6 +193,18 @@ async fn handle_client_message(
                 return;
             }
 
+            // The sender must actually be a participant of the conversation
+            // they're broadcasting into. Without this check, any
+            // authenticated client could push fake notifications into any
+            // conversation whose id they could guess, forcing recipients
+            // through fetch + decrypt work for nothing.
+            if !registry
+                .is_conversation_member(&message.conversation_id, user_id)
+                .await
+            {
+                return;
+            }
+
             let server_msg = ServerMessage::NewMessage {
                 message: message.clone(),
             };
