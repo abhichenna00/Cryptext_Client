@@ -7,9 +7,31 @@ use std::sync::Mutex;
 use tauri::{command, AppHandle, Manager, State};
 use zeroize::Zeroizing;
 
+use crate::auth::{self, SessionStore};
 use crate::session;
 use crate::sync_utils::MutexExt;
 use crate::vault;
+
+/// Reject any `user_id` from the frontend that isn't a UUID, and — if a
+/// session is currently mounted — additionally require it to match the
+/// authenticated user. Vault commands flow this value straight into a
+/// `format!()` path on disk, so anything that escapes UUID shape would
+/// otherwise let a compromised webview read or write outside the app
+/// data directory.
+fn validated_user_id(
+    session_store: &State<'_, SessionStore>,
+    supplied: &str,
+) -> Result<String, String> {
+    if uuid::Uuid::parse_str(supplied).is_err() {
+        return Err("Invalid user_id format".to_string());
+    }
+    if let Ok(session_user_id) = auth::get_user_id_from_session(session_store) {
+        if session_user_id != supplied {
+            return Err("user_id does not match authenticated session".to_string());
+        }
+    }
+    Ok(supplied.to_string())
+}
 
 pub struct LocalDb {
     pub conn: Mutex<Option<Connection>>,
@@ -225,8 +247,10 @@ fn compute_vault_status(
 pub fn vault_status(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
+    session_store: State<'_, SessionStore>,
     user_id: String,
 ) -> Result<VaultStatus, String> {
+    let user_id = validated_user_id(&session_store, &user_id)?;
     let app_data = app
         .path()
         .app_data_dir()
@@ -241,8 +265,10 @@ pub fn vault_status(
 pub fn setup_vault(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
+    session_store: State<'_, SessionStore>,
     user_id: String,
 ) -> Result<(), String> {
+    let user_id = validated_user_id(&session_store, &user_id)?;
     log::info!("setup_vault: invoked for user_id={}", user_id);
     let app_data = app
         .path()
@@ -315,8 +341,10 @@ pub fn setup_vault(
 pub fn unlock_vault(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
+    session_store: State<'_, SessionStore>,
     user_id: String,
 ) -> Result<(), String> {
+    let user_id = validated_user_id(&session_store, &user_id)?;
     log::info!("unlock_vault: invoked for user_id={}", user_id);
     let app_data = app
         .path()
@@ -356,8 +384,10 @@ pub fn is_vault_unlocked(local_db: State<'_, LocalDb>) -> Result<bool, String> {
 pub fn discard_and_reset_vault(
     app: AppHandle,
     local_db: State<'_, LocalDb>,
+    session_store: State<'_, SessionStore>,
     user_id: String,
 ) -> Result<(), String> {
+    let user_id = validated_user_id(&session_store, &user_id)?;
     let app_data = app
         .path()
         .app_data_dir()
@@ -726,23 +756,3 @@ pub fn get_local_messages_after(
     Ok(results)
 }
 
-#[command]
-pub fn store_decrypted_message(
-    local_db: State<'_, LocalDb>,
-    id: String,
-    conversation_id: String,
-    sender_id: String,
-    content: String,
-    timestamp: i64,
-    content_type: Option<String>,
-) -> Result<(), String> {
-    let msg = LocalMessage {
-        id,
-        conversation_id,
-        sender_id,
-        content,
-        timestamp,
-        content_type: content_type.unwrap_or_else(|| "plaintext".to_string()),
-    };
-    store_message(&local_db, &msg)
-}
