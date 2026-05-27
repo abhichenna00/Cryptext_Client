@@ -135,16 +135,24 @@ export function WebSocketProvider({
 
     try {
       const wsUrl = await invoke<string>('get_websocket_url')
-      const token = await invoke<string | null>('get_auth_token')
+      // Single-use, short-lived ticket exchanged for the bearer inside Rust.
+      // The bearer never reaches the JS layer, so a compromised webview
+      // cannot exfiltrate it.
+      let ticket: string | null = null
+      try {
+        ticket = await invoke<string>('get_ws_ticket')
+      } catch (err) {
+        console.error('[WebSocket] Failed to obtain ticket:', err)
+      }
 
       const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
         console.log('[WebSocket] Connected, authenticating...')
-        if (token) {
-          ws.send(JSON.stringify({ action: 'authenticate', token }))
+        if (ticket) {
+          ws.send(JSON.stringify({ action: 'authenticate', token: ticket }))
         } else {
-          console.error('[WebSocket] No auth token available')
+          console.error('[WebSocket] No ticket available')
           ws.close()
         }
       }

@@ -70,7 +70,7 @@ pub fn run() {
             auth::sign_up,
             auth::sign_out,
             auth::get_session,
-            auth::get_auth_token,
+            auth::get_ws_ticket,
             auth::get_user_id,
             auth::refresh_session,
             auth::sync_oauth_session,

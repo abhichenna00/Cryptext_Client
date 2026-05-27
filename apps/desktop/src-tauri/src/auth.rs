@@ -340,19 +340,22 @@ pub async fn get_session(
     }
 }
 
-/// Get the access token for internal use (Tauri commands only, not exposed to frontend ideally)
+/// Exchange the bearer for a short-lived single-use WebSocket ticket. The
+/// frontend uses this on the WS handshake instead of receiving the bearer
+/// itself, so a compromised webview cannot exfiltrate the access token.
 #[command]
-pub async fn get_auth_token(
+pub async fn get_ws_ticket(
     session_store: State<'_, SessionStore>,
-) -> Result<Option<String>, String> {
-    let store = session_store.session.lock_or_err()?;
-
-    match &*store {
-        Some(session) if chrono::Utc::now().timestamp() + EXPIRY_BUFFER_SECS < session.expires_at => {
-            Ok(Some(session.access_token.clone()))
-        }
-        _ => Ok(None),
-    }
+) -> Result<String, String> {
+    let client = crate::http_client::AuthorizedClient::from_session(&session_store)?;
+    let response: serde_json::Value = client
+        .post("/auth/ws-ticket", &serde_json::json!({}))
+        .await?;
+    response
+        .get("ticket")
+        .and_then(|v| v.as_str())
+        .map(String::from)
+        .ok_or_else(|| "Ticket missing from server response".to_string())
 }
 
 /// Get user ID from the current session
