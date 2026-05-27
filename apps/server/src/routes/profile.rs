@@ -80,8 +80,20 @@ pub struct UpdateStatusRequest {
 #[derive(Deserialize)]
 pub struct UploadImageRequest {
     pub image_data: String,
-    pub file_name: String,
     pub content_type: String,
+}
+
+/// Map a validated image content-type to a safe file extension. Returns
+/// `None` for unknown types, but callers only invoke this after the
+/// `allowed_types` check so the `None` arm is defensive.
+fn extension_for_content_type(content_type: &str) -> Option<&'static str> {
+    match content_type {
+        "image/png" => Some("png"),
+        "image/jpeg" => Some("jpg"),
+        "image/webp" => Some("webp"),
+        "image/gif" => Some("gif"),
+        _ => None,
+    }
 }
 
 #[derive(Deserialize)]
@@ -282,7 +294,17 @@ pub async fn upload_profile_image(
 
     let config = get_config();
     let s3 = create_s3_client().await;
-    let key = format!("avatars/{}/{}", claims.user_id(), req.file_name);
+    // Build the S3 key entirely from server-side values so a client-supplied
+    // filename cannot escape the user's own avatars/ prefix.
+    let extension = extension_for_content_type(&req.content_type).ok_or_else(|| {
+        AppError::BadRequest("Unsupported content type".to_string())
+    })?;
+    let key = format!(
+        "avatars/{}/{}.{}",
+        claims.user_id(),
+        uuid::Uuid::new_v4(),
+        extension,
+    );
 
     s3.put_object()
         .bucket(&config.s3_bucket)
