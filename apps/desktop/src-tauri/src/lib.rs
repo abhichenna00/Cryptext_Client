@@ -73,7 +73,6 @@ pub fn run() {
             auth::get_auth_token,
             auth::get_user_id,
             auth::refresh_session,
-            auth::sync_oauth_session,
             auth::confirm_sign_up,
             auth::get_websocket_url,
             auth::sign_in_with_google,
