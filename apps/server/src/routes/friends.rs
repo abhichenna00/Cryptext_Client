@@ -237,14 +237,15 @@ pub async fn accept_friend_request(
         return Err(AppError::BadRequest("Invalid request ID".to_string()));
     }
     let pool = get_pool();
+    let mut tx = pool.begin().await?;
 
     let request: Option<(String, String)> = sqlx::query_as(
-        "SELECT from_user_id, to_user_id FROM friend_requests 
+        "SELECT from_user_id, to_user_id FROM friend_requests
          WHERE id = $1::uuid AND to_user_id = $2 AND status = 'pending'"
     )
     .bind(&request_id)
     .bind(claims.user_id())
-    .fetch_optional(pool.as_ref())
+    .fetch_optional(&mut *tx)
     .await?;
 
     let (from_user_id, to_user_id) = match request {
@@ -252,16 +253,21 @@ pub async fn accept_friend_request(
         None => return Err(AppError::NotFound("Friend request not found".to_string())),
     };
 
+    // Both writes go through the same transaction so a failure on the second
+    // step rolls the first back. Otherwise the request could end up marked
+    // accepted with no corresponding friend rows.
     sqlx::query("UPDATE friend_requests SET status = 'accepted' WHERE id = $1::uuid")
         .bind(&request_id)
-        .execute(pool.as_ref())
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query("INSERT INTO friends (user_id, friend_id) VALUES ($1, $2), ($2, $1)")
         .bind(&from_user_id)
         .bind(&to_user_id)
-        .execute(pool.as_ref())
+        .execute(&mut *tx)
         .await?;
+
+    tx.commit().await?;
 
     Ok(Json(serde_json::json!({ "success": true })))
 }
