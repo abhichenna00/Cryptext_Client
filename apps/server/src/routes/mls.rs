@@ -40,8 +40,6 @@ pub struct RegisterGroupResponse {
     /// and recover by fetching the original creator's welcome.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub existing_group_id: Option<Vec<u8>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub creator_id: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -285,8 +283,8 @@ pub async fn register_group(
     // second one — duplicate MLS groups produce permanent decryption
     // failures between participants. Return the existing group's identity
     // so the caller can recover by joining it instead.
-    let existing: Option<(Vec<u8>, String)> = sqlx::query_as(
-        "SELECT mg.group_id, mgm.user_id
+    let existing: Option<(Vec<u8>,)> = sqlx::query_as(
+        "SELECT mg.group_id
          FROM mls_groups mg
          JOIN mls_group_members mgm
            ON mgm.group_id = mg.group_id AND mgm.confirmed_epoch >= 1
@@ -297,7 +295,7 @@ pub async fn register_group(
     .fetch_optional(&mut *tx)
     .await?;
 
-    if let Some((existing_gid, creator_id)) = existing {
+    if let Some((existing_gid,)) = existing {
         tracing::warn!(
             "register_group: conflict for conversation_id={} — existing group already registered, returning recovery hint to caller",
             req.conversation_id
@@ -307,7 +305,6 @@ pub async fn register_group(
             success: false,
             error: Some("Group already exists for this conversation".to_string()),
             existing_group_id: Some(existing_gid),
-            creator_id: Some(creator_id),
         }));
     }
 
@@ -341,7 +338,6 @@ pub async fn register_group(
         success: true,
         error: None,
         existing_group_id: None,
-        creator_id: None,
     }))
 }
 

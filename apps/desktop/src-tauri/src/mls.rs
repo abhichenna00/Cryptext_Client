@@ -222,8 +222,6 @@ struct RegisterGroupResponse {
     #[allow(dead_code)]
     error: Option<String>,
     existing_group_id: Option<Vec<u8>>,
-    #[allow(dead_code)]
-    creator_id: Option<String>,
 }
 
 /// Outcome of attempting to register a new MLS group server-side. Either the
