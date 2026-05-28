@@ -151,6 +151,7 @@ pub async fn get_conversations(claims: Claims) -> AppResult<impl IntoResponse> {
 
 pub async fn get_or_create_dm_conversation(
     claims: Claims,
+    axum::Extension(registry): axum::Extension<std::sync::Arc<crate::ws::state::ConnectionRegistry>>,
     Json(req): Json<CreateDmRequest>,
 ) -> AppResult<impl IntoResponse> {
     let user_id = claims.user_id().to_string();
@@ -223,6 +224,10 @@ pub async fn get_or_create_dm_conversation(
     .await?;
 
     tx.commit().await?;
+
+    // Membership for this conversation just changed; drop the WS layer's
+    // cached member set so the next broadcast resolves from the DB.
+    registry.invalidate_conversation_cache(&conversation_id);
 
     Ok(Json(serde_json::json!({ "conversation_id": conversation_id })))
 }
@@ -432,6 +437,7 @@ pub async fn mark_conversation_read(
 
 pub async fn create_group_conversation(
     claims: Claims,
+    axum::Extension(registry): axum::Extension<std::sync::Arc<crate::ws::state::ConnectionRegistry>>,
     Json(req): Json<CreateGroupRequest>,
 ) -> AppResult<impl IntoResponse> {
     let creator_id = claims.user_id().to_string();
@@ -496,6 +502,10 @@ pub async fn create_group_conversation(
     }
 
     tx.commit().await?;
+
+    // Membership for the new conversation just changed; drop the WS layer's
+    // cached member set so the next broadcast resolves from the DB.
+    registry.invalidate_conversation_cache(&conversation_id);
 
     Ok(Json(serde_json::json!({ "conversation_id": conversation_id })))
 }
