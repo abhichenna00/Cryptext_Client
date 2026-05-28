@@ -112,6 +112,14 @@ impl ConnectionRegistry {
         self.conversation_members.remove(conversation_id);
     }
 
+    /// Check whether `user_id` is a participant of `conversation_id`.
+    /// Uses the same cache as `broadcast_to_conversation` so repeated checks
+    /// are cheap.
+    pub async fn is_conversation_member(&self, conversation_id: &str, user_id: &str) -> bool {
+        let members = self.get_conversation_members(conversation_id).await;
+        members.contains(user_id)
+    }
+
     /// Get friend IDs for a user from the DB.
     pub async fn get_friend_ids(&self, user_id: &str) -> Vec<String> {
         let pool = get_pool();
