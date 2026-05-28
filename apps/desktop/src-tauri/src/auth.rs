@@ -497,41 +497,6 @@ pub(crate) async fn bootstrap_from_refresh_token(
     Ok(())
 }
 
-/// Sync OAuth session (for Google sign-in — future use)
-#[command]
-pub async fn sync_oauth_session(
-    access_token: String,
-    refresh_token: String,
-    id_token: String,
-    user_id: String,
-    email: String,
-    expires_at: i64,
-    session_store: State<'_, SessionStore>,
-) -> Result<bool, String> {
-    if access_token.is_empty() {
-        return Err("Access token is required".to_string());
-    }
-    if user_id.is_empty() {
-        return Err("User ID is required".to_string());
-    }
-
-    let session = Session {
-        access_token,
-        refresh_token,
-        id_token,
-        user_id,
-        email,
-        expires_at,
-        auth_provider: AuthProvider::default(),
-        given_name: None,
-        family_name: None,
-        name: None,
-    };
-    let mut store = session_store.session.lock_or_err()?;
-    *store = Some(session);
-    Ok(true)
-}
-
 /// Get WebSocket URL for realtime connections
 #[tauri::command]
 pub fn get_websocket_url() -> Result<String, String> {
