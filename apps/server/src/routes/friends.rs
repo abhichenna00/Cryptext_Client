@@ -121,7 +121,9 @@ pub async fn send_friend_request(
 
     let to_user_id = match target {
         Some((id,)) => id,
-        None => return Err(AppError::NotFound("User not found".to_string())),
+        // Return a success-shaped response when the username doesn't exist
+        // so callers can't probe the user directory by iterating usernames.
+        None => return Ok(Json(serde_json::json!({ "success": true }))),
     };
 
     if to_user_id == from_user_id {
