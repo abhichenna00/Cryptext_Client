@@ -1,18 +1,26 @@
 // src/routes/cognito.rs
 
 use crate::{
+    auth::Claims,
     config::get_config,
     error::{AppError, AppResult},
+    redis::get_redis,
 };
 use aws_sdk_cognitoidentityprovider::{
     types::{AttributeType, AuthFlowType},
     Client as CognitoClient,
 };
-use axum::extract::Json;
+use axum::{extract::Json, response::IntoResponse};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use hmac::{Hmac, Mac};
+use redis::AsyncCommands;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
+
+/// Short-lived ticket TTL. The window only needs to cover the round-trip
+/// between issuing the ticket and the client presenting it on the WS
+/// handshake — kept tight on purpose to limit replay value.
+const WS_TICKET_TTL_SECS: u64 = 30;
 
 // ============================================
 // TYPES
@@ -382,4 +390,31 @@ pub async fn refresh_token(Json(req): Json<RefreshRequest>) -> AppResult<Json<Au
         }
         Err(_) => Ok(Json(error_response("Session expired, please sign in again"))),
     }
+}
+
+/// Issue a single-use, short-lived ticket for the WebSocket handshake.
+/// Clients exchange their bearer for a ticket here and then present the
+/// ticket on the `/ws` upgrade. Keeps the bearer out of the JS layer
+/// entirely.
+pub async fn issue_ws_ticket(claims: Claims) -> AppResult<impl IntoResponse> {
+    let ticket = uuid::Uuid::new_v4().to_string();
+    let mut conn = get_redis();
+    let key = format!("ws_ticket:{}", ticket);
+    let _: () = conn
+        .set_ex(&key, claims.user_id(), WS_TICKET_TTL_SECS)
+        .await
+        .map_err(|e| AppError::Internal(format!("Redis error: {}", e)))?;
+    Ok(Json(serde_json::json!({ "ticket": ticket })))
+}
+
+/// Atomically consume a WebSocket ticket. Returns the bound user_id on
+/// success, or None if the ticket is unknown, already used, or expired.
+pub async fn redeem_ws_ticket(ticket: &str) -> Option<String> {
+    let mut conn = get_redis();
+    let key = format!("ws_ticket:{}", ticket);
+    redis::cmd("GETDEL")
+        .arg(&key)
+        .query_async(&mut conn)
+        .await
+        .ok()
 }

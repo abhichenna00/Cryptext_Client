@@ -81,6 +81,7 @@ pub fn build_router() -> Router {
         // WebSocket
         .route("/ws", get(crate::ws::handler::ws_handler))
         .route("/config/ws", get(get_ws_config))
+        .route("/auth/ws-ticket", post(cognito::issue_ws_ticket))
 
         // Auth routes (no JWT required)
         .merge(credential_auth_routes)

@@ -15,7 +15,7 @@ use tokio::sync::mpsc;
 use super::messages::{ClientMessage, ServerMessage};
 use super::pubsub;
 use super::state::ConnectionRegistry;
-use crate::auth;
+use crate::routes::cognito::redeem_ws_ticket;
 
 const AUTH_TIMEOUT_SECS: u64 = 10;
 const MAX_MESSAGE_SIZE: usize = 256 * 1024; // 256 KB
@@ -132,19 +132,21 @@ async fn authenticate(
     .await;
 
     match auth_result {
-        Ok(Some(token)) => {
-            // Validate JWT using existing auth logic
-            match auth::validate_token(&token).await {
-                Ok(claims) => {
-                    let user_id = claims.user_id().to_string();
+        Ok(Some(ticket)) => {
+            // The handshake message carries a short-lived ticket from
+            // `/auth/ws-ticket`, not a bearer. Redeeming the ticket is
+            // single-use and binds the connection to a user_id without
+            // ever putting the bearer through the JS layer.
+            match redeem_ws_ticket(&ticket).await {
+                Some(user_id) => {
                     let _ = tx.send(ServerMessage::Authenticated {
                         user_id: user_id.clone(),
                     });
                     Some(user_id)
                 }
-                Err(e) => {
+                None => {
                     let _ = tx.send(ServerMessage::AuthError {
-                        error: format!("{}", e),
+                        error: "Invalid or expired ticket".to_string(),
                     });
                     None
                 }
