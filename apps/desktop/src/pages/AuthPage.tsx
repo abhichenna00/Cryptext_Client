@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { invoke } from '@tauri-apps/api/core'
 import { ErrorMessage } from '@/components/ui/ErrorMessage'
 import { FlickeringGrid } from '@/components/ui/flickering-grid'
+import NshroudMark from '@/components/NshroudMark'
 import { useWindowSize } from '@/hooks'
 import { cn } from '@/lib/utils'
 
@@ -311,12 +312,7 @@ export default function AuthPage() {
 
       <div className="relative z-10 w-[380px] rounded-xl border border-border bg-surface p-7 shadow-[var(--shadow-card)]">
         <div className="flex items-center gap-2.5">
-          <img
-            src="/nshroud-mark.svg"
-            alt=""
-            aria-hidden
-            className="size-[30px]"
-          />
+          <NshroudMark className="size-[30px] text-fg" />
           <span className="text-[20px] font-semibold tracking-[-0.02em] text-fg">NShroud</span>
         </div>
 
