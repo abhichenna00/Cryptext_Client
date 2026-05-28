@@ -311,12 +311,12 @@ export default function AuthPage() {
 
       <div className="relative z-10 w-[380px] rounded-xl border border-border bg-surface p-7 shadow-[var(--shadow-card)]">
         <div className="flex items-center gap-2.5">
-          <div
-            className="grid size-[30px] place-items-center rounded-[7px] bg-[var(--brand)] font-mono text-[14px] font-semibold text-[var(--brand-fg)]"
+          <img
+            src="/nshroud-mark.svg"
+            alt=""
             aria-hidden
-          >
-            N
-          </div>
+            className="size-[30px]"
+          />
           <span className="text-[20px] font-semibold tracking-[-0.02em] text-fg">NShroud</span>
         </div>
 

@@ -68,6 +68,12 @@ export default function SplashPage() {
       fontFamily: 'sans-serif',
       userSelect: 'none',
     }}>
+      <img
+        src="/nshroud-mark.svg"
+        alt=""
+        aria-hidden
+        style={{ width: 56, height: 56, marginBottom: 14 }}
+      />
       <span style={{ fontSize: '20px', fontWeight: 'bold' }}>NShroud</span>
       <span style={{ fontSize: '13px', color: '#888', marginTop: 12 }}>{status}</span>
       {updating && (
