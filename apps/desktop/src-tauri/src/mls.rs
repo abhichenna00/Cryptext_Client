@@ -289,51 +289,34 @@ impl MlsState {
         let meta_path = meta_path_for(&storage_path);
 
         let provider = OpenMlsRustCrypto::default();
-        let mut needs_migration_save = false;
 
-        // Load storage state into the provider
+        // Refuse to load legacy plaintext MLS state files. An on-disk MLS
+        // state could otherwise be arbitrarily modified before the user
+        // re-signs-in, and we'd load attacker-controlled bytes straight
+        // into the OpenMLS provider. Users still on the legacy layout can
+        // recover by signing out and signing back in.
         if storage_path.exists() {
             match read_encrypted(&storage_path, &dek) {
                 Ok(plaintext) => {
                     deserialize_storage_into(&plaintext, provider.storage())?;
                 }
                 Err(e) if e == "LEGACY_PLAINTEXT" => {
-                    // One-time migration: read legacy plaintext, load into provider,
-                    // re-encrypt below via save_state().
-                    let mut tmp = openmls_memory_storage::MemoryStorage::default();
-                    if let Ok(file) = std::fs::File::open(&storage_path) {
-                        tmp.load_from_file(&file)
-                            .map_err(|e| format!("Failed to load legacy MLS state: {}", e))?;
-                    }
-                    let loaded = tmp
-                        .values
-                        .read()
-                        .map_err(|e| format!("MLS storage read lock poisoned: {}", e))?;
-                    let mut provider_values = provider
-                        .storage()
-                        .values
-                        .write()
-                        .map_err(|e| format!("MLS provider write lock poisoned: {}", e))?;
-                    for (k, v) in loaded.iter() {
-                        provider_values.insert(k.clone(), v.clone());
-                    }
-                    needs_migration_save = true;
+                    return Err(
+                        "Local encryption state is in an unsupported legacy format. Please sign out and sign back in.".to_string(),
+                    );
                 }
                 Err(e) => return Err(e),
             }
         }
 
-        // Load metadata (conversation mappings + signer public key)
         let metadata: MlsMetadata = if meta_path.exists() {
             match read_encrypted(&meta_path, &dek) {
                 Ok(plaintext) => serde_json::from_slice(&plaintext)
                     .map_err(|e| format!("Failed to parse MLS metadata: {}", e))?,
                 Err(e) if e == "LEGACY_PLAINTEXT" => {
-                    needs_migration_save = true;
-                    std::fs::File::open(&meta_path)
-                        .ok()
-                        .and_then(|f| serde_json::from_reader(f).ok())
-                        .unwrap_or_default()
+                    return Err(
+                        "Local encryption state is in an unsupported legacy format. Please sign out and sign back in.".to_string(),
+                    );
                 }
                 Err(e) => return Err(e),
             }
@@ -395,9 +378,6 @@ impl MlsState {
             dek: Zeroizing::new(dek_copy),
         };
 
-        if needs_migration_save {
-            inner.save_state()?;
-        }
 
         let mut state = self.inner.lock_or_err()?;
         *state = Some(inner);
