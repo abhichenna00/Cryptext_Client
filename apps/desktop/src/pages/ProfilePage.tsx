@@ -12,7 +12,6 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Circle, ChevronDown } from 'lucide-react'
 import { Status, STATUS_OPTIONS } from '@/constants/status'
-import { MediaStreamManager } from '@/lib/calls/MediaStreamManager'
 import '../styles/ProfilePage.css'
 
 interface ProfileData {
@@ -49,54 +48,6 @@ interface AvatarResult {
   success: boolean
   url?: string
   error?: string
-}
-
-const sharedMediaManager = new MediaStreamManager()
-
-function MediaCheck() {
-  const [devices, setDevices] = useState<string[]>([])
-  const [trackKinds, setTrackKinds] = useState<string[] | null>(null)
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const handleClick = async () => {
-    setBusy(true)
-    setErr(null)
-    setTrackKinds(null)
-    try {
-      const list = await sharedMediaManager.enumerateDevices()
-      setDevices(list.map((d) => (d.label || d.kind).slice(0, 40)))
-      const stream = await sharedMediaManager.acquireLocalStream({ audio: true, video: true })
-      setTrackKinds(stream.getTracks().map((t) => t.kind))
-      setTimeout(() => sharedMediaManager.stop(stream), 5000)
-    } catch (e: unknown) {
-      const name = e instanceof Error ? e.name : 'Error'
-      const msg = e instanceof Error ? e.message : String(e)
-      setErr(`${name}: ${msg}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="field">
-      <label>Media check (dev)</label>
-      <Button variant="outline" size="sm" onClick={handleClick} disabled={busy}>
-        {busy ? 'Checking...' : 'Run media check'}
-      </Button>
-      {devices.length > 0 && (
-        <ul className="text-[12px] text-fg-muted mt-1">
-          {devices.map((d, i) => (
-            <li key={i}>{d}</li>
-          ))}
-        </ul>
-      )}
-      {trackKinds && (
-        <p className="text-[12px] text-fg-muted mt-1">OK — tracks: {trackKinds.join(', ')}</p>
-      )}
-      {err && <p className="text-[12px] text-red-500 mt-1">{err}</p>}
-    </div>
-  )
 }
 
 export default function ProfilePage() {
@@ -403,9 +354,6 @@ export default function ProfilePage() {
               <Input id="displayname" placeholder="Your Name" value={nickname} onChange={(e) => setNickname(e.target.value)} />
             </div>
           </div>
-
-          {/* TEMP: removed in PR 3 (feat/call-ui). See plan PR sequence. */}
-          {import.meta.env.DEV && <MediaCheck />}
 
           <ErrorMessage error={error} className="error-message" />
         </div>

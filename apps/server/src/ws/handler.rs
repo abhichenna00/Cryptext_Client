@@ -9,8 +9,10 @@ use axum::{
     Extension,
 };
 use futures::{SinkExt, StreamExt};
+use std::collections::HashSet;
 use std::net::SocketAddr;
 use tokio::sync::mpsc;
+use uuid::Uuid;
 
 use super::messages::{ClientMessage, ServerMessage};
 use super::pubsub;
@@ -239,5 +241,123 @@ async fn handle_client_message(
         ClientMessage::Authenticate { .. } => {
             // Already authenticated, ignore duplicate auth attempts
         }
+        ClientMessage::CallInvite { conversation_id, sdp } => {
+            let Some(sender_uuid) = parse_sender_uuid(user_id) else { return };
+            let conv_str = conversation_id.to_string();
+            if !verify_member(registry, &conv_str, user_id, "call_invite").await {
+                return;
+            }
+            let server_msg = ServerMessage::CallInvite {
+                conversation_id,
+                sdp,
+                from_user_id: sender_uuid,
+                from_device_id: None,
+            };
+            fan_out_to_other_members(registry, &conv_str, user_id, &server_msg).await;
+        }
+        ClientMessage::CallAnswer { conversation_id, sdp } => {
+            let Some(sender_uuid) = parse_sender_uuid(user_id) else { return };
+            let conv_str = conversation_id.to_string();
+            if !verify_member(registry, &conv_str, user_id, "call_answer").await {
+                return;
+            }
+            let server_msg = ServerMessage::CallAnswer {
+                conversation_id,
+                sdp,
+                from_user_id: sender_uuid,
+                from_device_id: None,
+            };
+            fan_out_to_other_members(registry, &conv_str, user_id, &server_msg).await;
+
+            // Tell every session of every conversation member that the call has
+            // been answered, so other ringing UIs clear. The accepting session
+            // may receive a redundant copy since we cannot identify the specific
+            // socket here; clients ignore it once already in-call.
+            let elsewhere = ServerMessage::CallAcceptedElsewhere { conversation_id };
+            let members = registry.conversation_members_snapshot(&conv_str).await;
+            let mut unique: HashSet<String> = members.into_iter().collect();
+            unique.insert(user_id.to_string());
+            for member in &unique {
+                registry.send_to_user(member, &elsewhere);
+            }
+            let user_ids: Vec<String> = unique.into_iter().collect();
+            let _ = pubsub::publish_to_users(&user_ids, &elsewhere).await;
+        }
+        ClientMessage::CallDecline { conversation_id, reason } => {
+            let Some(sender_uuid) = parse_sender_uuid(user_id) else { return };
+            let conv_str = conversation_id.to_string();
+            if !verify_member(registry, &conv_str, user_id, "call_decline").await {
+                return;
+            }
+            let server_msg = ServerMessage::CallDecline {
+                conversation_id,
+                reason,
+                from_user_id: sender_uuid,
+                from_device_id: None,
+            };
+            fan_out_to_other_members(registry, &conv_str, user_id, &server_msg).await;
+        }
+        ClientMessage::CallEnd { conversation_id } => {
+            let Some(sender_uuid) = parse_sender_uuid(user_id) else { return };
+            let conv_str = conversation_id.to_string();
+            if !verify_member(registry, &conv_str, user_id, "call_end").await {
+                return;
+            }
+            let server_msg = ServerMessage::CallEnd {
+                conversation_id,
+                from_user_id: sender_uuid,
+                from_device_id: None,
+            };
+            fan_out_to_other_members(registry, &conv_str, user_id, &server_msg).await;
+        }
+        ClientMessage::IceCandidate { conversation_id, candidate } => {
+            let Some(sender_uuid) = parse_sender_uuid(user_id) else { return };
+            let conv_str = conversation_id.to_string();
+            if !verify_member(registry, &conv_str, user_id, "ice_candidate").await {
+                return;
+            }
+            let server_msg = ServerMessage::IceCandidate {
+                conversation_id,
+                candidate,
+                from_user_id: sender_uuid,
+                from_device_id: None,
+            };
+            fan_out_to_other_members(registry, &conv_str, user_id, &server_msg).await;
+        }
     }
+}
+
+fn parse_sender_uuid(user_id: &str) -> Option<Uuid> {
+    Uuid::parse_str(user_id).ok()
+}
+
+async fn verify_member(
+    registry: &Arc<ConnectionRegistry>,
+    conversation_id: &str,
+    user_id: &str,
+    action: &str,
+) -> bool {
+    if registry.is_conversation_member(conversation_id, user_id).await {
+        true
+    } else {
+        tracing::warn!(
+            "Dropping {} from non-member: user={} conversation={}",
+            action,
+            user_id,
+            conversation_id
+        );
+        false
+    }
+}
+
+async fn fan_out_to_other_members(
+    registry: &Arc<ConnectionRegistry>,
+    conversation_id: &str,
+    sender_user_id: &str,
+    msg: &ServerMessage,
+) {
+    registry
+        .broadcast_to_conversation(conversation_id, sender_user_id, msg)
+        .await;
+    let _ = pubsub::publish_to_conversation(conversation_id, sender_user_id, msg).await;
 }

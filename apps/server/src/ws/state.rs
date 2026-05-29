@@ -120,6 +120,17 @@ impl ConnectionRegistry {
         members.contains(user_id)
     }
 
+    /// Snapshot the cached member set of a conversation as a Vec, fetching
+    /// from DB if it isn't already cached. Used by signaling fan-outs that
+    /// need to iterate the membership directly rather than broadcast through
+    /// it.
+    pub async fn conversation_members_snapshot(&self, conversation_id: &str) -> Vec<String> {
+        self.get_conversation_members(conversation_id)
+            .await
+            .into_iter()
+            .collect()
+    }
+
     /// Get friend IDs for a user from the DB.
     pub async fn get_friend_ids(&self, user_id: &str) -> Vec<String> {
         let pool = get_pool();
