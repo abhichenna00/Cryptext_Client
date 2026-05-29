@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { check } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { getCurrentWindow, Window } from '@tauri-apps/api/window';
+import NshroudMark from '@/components/NshroudMark';
 
 export default function SplashPage() {
   const [status, setStatus] = useState('Checking for updates...');
@@ -68,6 +69,9 @@ export default function SplashPage() {
       fontFamily: 'sans-serif',
       userSelect: 'none',
     }}>
+      <NshroudMark
+        style={{ width: 56, height: 56, marginBottom: 14, color: '#fff' }}
+      />
       <span style={{ fontSize: '20px', fontWeight: 'bold' }}>NShroud</span>
       <span style={{ fontSize: '13px', color: '#888', marginTop: 12 }}>{status}</span>
       {updating && (
