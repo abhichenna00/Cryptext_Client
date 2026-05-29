@@ -405,10 +405,20 @@ pub async fn send_message(
             }
         }
 
-        let _ = sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1::uuid")
+        // Bookkeeping only — sort order on the conversation list depends on
+        // this. The message itself is already committed, so a failure here
+        // shouldn't fail the whole send; log loudly so it shows up if the
+        // table or query ever drifts.
+        if let Err(e) = sqlx::query("UPDATE conversations SET updated_at = NOW() WHERE id = $1::uuid")
             .bind(&conversation_id)
             .execute(pool.as_ref())
-            .await;
+            .await
+        {
+            tracing::warn!(
+                "send_message: failed to bump conversations.updated_at for conv={}: {}",
+                conversation_id, e
+            );
+        }
     }
 
     Ok(Json(serde_json::json!({ "success": true, "error": null, "message_id": message_id, "timestamp": stored_timestamp, "queued": content_type == "mls" })))
