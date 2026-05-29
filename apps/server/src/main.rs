@@ -4,6 +4,7 @@ mod db;
 mod error;
 pub mod redis;
 mod routes;
+mod s3;
 mod ws;
 
 use axum::{
@@ -47,7 +48,13 @@ async fn main() {
         std::process::exit(1);
     }
 
-    // 4. Initialize WebSocket infrastructure
+    // 4. Initialize S3 client (shared across profile/media/sync routes)
+    if let Err(e) = s3::init_s3().await {
+        tracing::error!("Failed to initialize S3 client: {}", e);
+        std::process::exit(1);
+    }
+
+    // 5. Initialize WebSocket infrastructure
     ws::pubsub::init_instance_id();
     let registry = ws::state::ConnectionRegistry::new();
 

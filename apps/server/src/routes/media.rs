@@ -3,8 +3,9 @@ use crate::{
     config::get_config,
     db::get_pool,
     error::{AppError, AppResult},
+    s3::get_s3,
 };
-use aws_sdk_s3::{primitives::ByteStream, Client as S3Client};
+use aws_sdk_s3::primitives::ByteStream;
 use axum::{
     extract::{Multipart, Query},
     http::header,
@@ -24,15 +25,6 @@ pub struct DownloadQuery {
 // ============================================
 // HELPERS
 // ============================================
-
-async fn create_s3_client() -> S3Client {
-    let config_ref = get_config();
-    let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-        .region(aws_config::Region::new(config_ref.aws_region.clone()))
-        .load()
-        .await;
-    S3Client::new(&sdk_config)
-}
 
 /// Validate that the user is a participant in the given conversation.
 async fn validate_participant(user_id: &str, conversation_id: &str) -> AppResult<()> {
@@ -133,7 +125,7 @@ pub async fn upload(claims: Claims, mut multipart: Multipart) -> AppResult<impl 
 
     let s3_key = format!("media/{}/{}.enc", conversation_id, uuid::Uuid::new_v4());
     let config = get_config();
-    let s3 = create_s3_client().await;
+    let s3 = get_s3();
 
     s3.put_object()
         .bucket(&config.s3_bucket)
@@ -161,7 +153,7 @@ pub async fn download(claims: Claims, Query(query): Query<DownloadQuery>) -> App
     validate_participant(claims.user_id(), conversation_id).await?;
 
     let config = get_config();
-    let s3 = create_s3_client().await;
+    let s3 = get_s3();
 
     let result = s3
         .get_object()

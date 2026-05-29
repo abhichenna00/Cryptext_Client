@@ -2,8 +2,9 @@ use crate::{
     auth::Claims,
     config::get_config,
     error::{AppError, AppResult},
+    s3::get_s3,
 };
-use aws_sdk_s3::{primitives::ByteStream, Client as S3Client};
+use aws_sdk_s3::primitives::ByteStream;
 use axum::{
     body::Bytes,
     extract::Path,
@@ -14,15 +15,6 @@ use axum::{
 const MAX_VAULT_SIZE: usize = 4 * 1024;
 const MAX_MLS_STATE_SIZE: usize = 10 * 1024 * 1024;
 const MAX_MESSAGES_DB_SIZE: usize = 500 * 1024 * 1024;
-
-async fn create_s3_client() -> S3Client {
-    let config_ref = get_config();
-    let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-        .region(aws_config::Region::new(config_ref.aws_region.clone()))
-        .load()
-        .await;
-    S3Client::new(&sdk_config)
-}
 
 fn sync_key(user_id: &str, file_name: &str) -> String {
     format!("sync/{}/{}", user_id, file_name)
@@ -45,7 +37,7 @@ async fn upload_sync_file(
     }
 
     let config = get_config();
-    let s3 = create_s3_client().await;
+    let s3 = get_s3();
     let key = sync_key(user_id, file_name);
 
     s3.put_object()
@@ -62,7 +54,7 @@ async fn upload_sync_file(
 
 async fn download_sync_file(user_id: &str, file_name: &str) -> AppResult<Bytes> {
     let config = get_config();
-    let s3 = create_s3_client().await;
+    let s3 = get_s3();
     let key = sync_key(user_id, file_name);
 
     let result = s3
@@ -85,7 +77,7 @@ async fn download_sync_file(user_id: &str, file_name: &str) -> AppResult<Bytes> 
 
 async fn delete_sync_file(user_id: &str, file_name: &str) -> AppResult<()> {
     let config = get_config();
-    let s3 = create_s3_client().await;
+    let s3 = get_s3();
     let key = sync_key(user_id, file_name);
 
     s3.delete_object()
@@ -142,7 +134,7 @@ pub async fn delete_all_sync_data(claims: Claims) -> AppResult<impl IntoResponse
 
 pub async fn check_sync_exists(claims: Claims) -> AppResult<impl IntoResponse> {
     let config = get_config();
-    let s3 = create_s3_client().await;
+    let s3 = get_s3();
     let key = sync_key(claims.user_id(), "vault");
 
     let exists = s3

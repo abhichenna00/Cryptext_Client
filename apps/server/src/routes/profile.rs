@@ -3,8 +3,9 @@ use crate::{
     config::get_config,
     db::get_pool,
     error::{AppError, AppResult},
+    s3::get_s3,
 };
-use aws_sdk_s3::{primitives::ByteStream, Client as S3Client};
+use aws_sdk_s3::primitives::ByteStream;
 use axum::{extract::Json, response::IntoResponse};
 use base64::{engine::general_purpose::STANDARD, Engine};
 use rand::{seq::SliceRandom, Rng};
@@ -119,15 +120,6 @@ fn detect_image_format(bytes: &[u8]) -> Option<&'static str> {
         return Some("image/gif");
     }
     None
-}
-
-async fn create_s3_client() -> S3Client {
-    let config_ref = get_config();
-    let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
-        .region(aws_config::Region::new(config_ref.aws_region.clone()))
-        .load()
-        .await;
-    S3Client::new(&sdk_config)
 }
 
 // ============================================
@@ -293,7 +285,7 @@ pub async fn upload_profile_image(
     }
 
     let config = get_config();
-    let s3 = create_s3_client().await;
+    let s3 = get_s3();
     // Build the S3 key entirely from server-side values so a client-supplied
     // filename cannot escape the user's own avatars/ prefix.
     let extension = extension_for_content_type(&req.content_type).ok_or_else(|| {
@@ -321,7 +313,7 @@ pub async fn upload_profile_image(
 
 pub async fn delete_profile_image(claims: Claims) -> AppResult<impl IntoResponse> {
     let config = get_config();
-    let s3 = create_s3_client().await;
+    let s3 = get_s3();
     let prefix = format!("avatars/{}/", claims.user_id());
 
     let list = s3
