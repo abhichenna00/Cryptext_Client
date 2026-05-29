@@ -501,15 +501,16 @@ pub async fn create_group_conversation(
     .fetch_one(&mut *tx)
     .await?;
 
-    for member_id in &req.member_ids {
-        sqlx::query(
-            "INSERT INTO conversation_participants (conversation_id, user_id) VALUES ($1::uuid, $2)"
-        )
-        .bind(&conversation_id)
-        .bind(member_id)
-        .execute(&mut *tx)
-        .await?;
-    }
+    // One round-trip for all members instead of N. UNNEST keeps the binding
+    // strictly parameterized; no string interpolation of member ids.
+    sqlx::query(
+        "INSERT INTO conversation_participants (conversation_id, user_id)
+         SELECT $1::uuid, m FROM UNNEST($2::text[]) AS m"
+    )
+    .bind(&conversation_id)
+    .bind(&req.member_ids)
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
 

@@ -305,19 +305,25 @@ pub async fn register_group(
     .execute(&mut *tx)
     .await?;
 
-    // Insert group members — creator gets confirmed_epoch=1, others get 0
-    for member_id in &req.member_ids {
-        let epoch = if member_id == claims.user_id() { 1i64 } else { 0i64 };
-        sqlx::query(
-            "INSERT INTO mls_group_members (group_id, user_id, confirmed_epoch) VALUES ($1, $2, $3)
-             ON CONFLICT (group_id, user_id) DO NOTHING"
-        )
-        .bind(&req.group_id)
-        .bind(member_id)
-        .bind(epoch)
-        .execute(&mut *tx)
-        .await?;
-    }
+    // Insert group members in a single round-trip. Creator gets
+    // confirmed_epoch=1, others 0 — paired via UNNEST so the per-member
+    // epoch travels with its id.
+    let epochs: Vec<i64> = req
+        .member_ids
+        .iter()
+        .map(|m| if m == claims.user_id() { 1 } else { 0 })
+        .collect();
+    sqlx::query(
+        "INSERT INTO mls_group_members (group_id, user_id, confirmed_epoch)
+         SELECT $1, member, epoch
+         FROM UNNEST($2::text[], $3::bigint[]) AS t(member, epoch)
+         ON CONFLICT (group_id, user_id) DO NOTHING"
+    )
+    .bind(&req.group_id)
+    .bind(&req.member_ids)
+    .bind(&epochs)
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
 
