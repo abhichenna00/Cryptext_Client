@@ -4,6 +4,7 @@ import {
   User,
   ShieldCheck,
   Palette,
+  Volume2,
   Bell,
   KeyRound,
   Smartphone,
@@ -14,6 +15,7 @@ import {
 } from 'lucide-react'
 
 import Avatar from '@/components/Avatar'
+import AudioVideoSection from '@/components/settings/AudioVideoSection'
 import { Button } from '@/components/ui/button'
 import { ErrorMessage } from '@/components/ui/ErrorMessage'
 import {
@@ -23,7 +25,6 @@ import {
 } from '@/components/ui/dialog'
 import { STATUS_COLORS, STATUS_OPTIONS, Status } from '@/constants/status'
 import { cn } from '@/lib/utils'
-import { MediaStreamManager } from '@/lib/calls/MediaStreamManager'
 
 interface ProfileData {
   user_id: string
@@ -61,6 +62,7 @@ type SectionId =
   | 'profile'
   | 'account'
   | 'appearance'
+  | 'audio-video'
   | 'notifications'
   | 'privacy'
   | 'devices'
@@ -72,6 +74,7 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ComponentType<{ size
   { id: 'profile', label: 'Profile', icon: User },
   { id: 'account', label: 'Account', icon: ShieldCheck },
   { id: 'appearance', label: 'Appearance', icon: Palette },
+  { id: 'audio-video', label: 'Audio & Video', icon: Volume2 },
   { id: 'notifications', label: 'Notifications', icon: Bell },
   { id: 'privacy', label: 'Privacy & keys', icon: KeyRound },
   { id: 'devices', label: 'Devices', icon: Smartphone },
@@ -79,54 +82,6 @@ const SECTIONS: { id: SectionId; label: string; icon: React.ComponentType<{ size
   { id: 'advanced', label: 'Advanced', icon: Sliders },
   { id: 'about', label: 'About', icon: Info },
 ]
-
-const sharedMediaManager = new MediaStreamManager()
-
-function MediaCheck() {
-  const [devices, setDevices] = useState<string[]>([])
-  const [trackKinds, setTrackKinds] = useState<string[] | null>(null)
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const handleClick = async () => {
-    setBusy(true)
-    setErr(null)
-    setTrackKinds(null)
-    try {
-      const list = await sharedMediaManager.enumerateDevices()
-      setDevices(list.map((d) => (d.label || d.kind).slice(0, 40)))
-      const stream = await sharedMediaManager.acquireLocalStream({ audio: true, video: true })
-      setTrackKinds(stream.getTracks().map((t) => t.kind))
-      setTimeout(() => sharedMediaManager.stop(stream), 5000)
-    } catch (e: unknown) {
-      const name = e instanceof Error ? e.name : 'Error'
-      const msg = e instanceof Error ? e.message : String(e)
-      setErr(`${name}: ${msg}`)
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="flex flex-col gap-1.5">
-      <span className="text-[12px] font-medium text-fg-muted">Media check (dev)</span>
-      <Button variant="outline" onClick={handleClick} disabled={busy} className="h-8 self-start">
-        {busy ? 'Checking...' : 'Run media check'}
-      </Button>
-      {devices.length > 0 && (
-        <ul className="mt-1 text-[12px] text-fg-muted">
-          {devices.map((d, i) => (
-            <li key={i}>{d}</li>
-          ))}
-        </ul>
-      )}
-      {trackKinds && (
-        <p className="mt-1 text-[12px] text-fg-muted">OK — tracks: {trackKinds.join(', ')}</p>
-      )}
-      {err && <p className="mt-1 text-[12px] text-red-500">{err}</p>}
-    </div>
-  )
-}
 
 function SectionStub({ label }: { label: string }) {
   return (
@@ -268,6 +223,7 @@ export default function EditProfileDialog({ open, onOpenChange, onSaved }: EditP
 
   const isSaveDisabled = !username.trim() || !nickname.trim() || loading || uploadingImage
   const isProfile = section === 'profile'
+  const isAudioVideo = section === 'audio-video'
   const currentSectionLabel = SECTIONS.find((s) => s.id === section)?.label || 'Settings'
 
   return (
@@ -437,17 +393,9 @@ export default function EditProfileDialog({ open, onOpenChange, onSaved }: EditP
                 </div>
 
                 <ErrorMessage error={error} />
-
-                {/* TEMP: removed in PR 3 (feat/call-ui). See plan PR sequence. */}
-                {import.meta.env.DEV && (
-                  <div className="mt-2 flex flex-col gap-3 border-t border-border pt-4">
-                    <h4 className="text-[12px] font-semibold uppercase tracking-[0.04em] text-fg-muted">
-                      Developer tools
-                    </h4>
-                    <MediaCheck />
-                  </div>
-                )}
               </div>
+            ) : isAudioVideo ? (
+              <AudioVideoSection />
             ) : (
               <SectionStub label={currentSectionLabel} />
             )}
