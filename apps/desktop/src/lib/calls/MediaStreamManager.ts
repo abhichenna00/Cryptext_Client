@@ -4,9 +4,6 @@ import type { CallMode } from './types'
 export class MediaStreamManager {
   #activeStreams: Set<MediaStream> = new Set()
 
-  /** Build a getUserMedia constraint set from the user's stored A/V preferences.
-   *  CallManager (PR 3) calls this when starting a call so the right hardware
-   *  is selected without the UI having to thread prefs through. */
   getPreferredConstraints(mode: CallMode): MediaStreamConstraints {
     const prefs = loadMediaPreferences()
     const audio: MediaTrackConstraints = {

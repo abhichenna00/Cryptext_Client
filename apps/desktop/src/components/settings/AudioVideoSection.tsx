@@ -205,7 +205,6 @@ export default function AudioVideoSection() {
     if (audioRef.current) audioRef.current.volume = prefs.outputVolume
   }, [prefs.outputVolume])
 
-  // Restart preview when input constraints change while live, debounced to one frame.
   useEffect(() => {
     if (previewState !== 'live' || restartRequestedRef.current) return
     restartRequestedRef.current = true
@@ -380,7 +379,6 @@ export default function AudioVideoSection() {
           <Button variant="outline" onClick={playTestTone} className="h-8">
             Test speaker
           </Button>
-          {/* Audio element used as the sink for setSinkId + volume — kept off-screen. */}
           <audio ref={audioRef} className="hidden" />
         </div>
       </section>
