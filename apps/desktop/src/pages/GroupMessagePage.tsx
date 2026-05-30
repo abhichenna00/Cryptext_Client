@@ -281,15 +281,19 @@ export default function GroupMessagePage() {
               : m
           )
         )
-        wsSend({
-          action: 'new_message',
-          message: {
-            id: result.message_id,
-            conversation_id: conversationId,
-            sender_id: userId,
-            timestamp: result.timestamp || optimisticMessage.timestamp,
-          },
-        })
+        try {
+          wsSend({
+            action: 'new_message',
+            message: {
+              id: result.message_id,
+              conversation_id: conversationId,
+              sender_id: userId,
+              timestamp: result.timestamp || optimisticMessage.timestamp,
+            },
+          })
+        } catch (err) {
+          console.warn('[group] ws notify failed:', err)
+        }
       } else if (!result.success) {
         setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id))
         setError(result.error || 'Failed to send message')
@@ -359,15 +363,19 @@ export default function GroupMessagePage() {
       if (result.success && result.message_id) {
         await loadMessages(conversationId)
         setTimeout(() => scrollToBottom(), 100)
-        wsSend({
-          action: 'new_message',
-          message: {
-            id: result.message_id,
-            conversation_id: conversationId,
-            sender_id: userId,
-            timestamp: result.timestamp || Date.now(),
-          },
-        })
+        try {
+          wsSend({
+            action: 'new_message',
+            message: {
+              id: result.message_id,
+              conversation_id: conversationId,
+              sender_id: userId,
+              timestamp: result.timestamp || Date.now(),
+            },
+          })
+        } catch (err) {
+          console.warn('[group] ws notify failed:', err)
+        }
       } else {
         setError(result.error || 'Failed to send media')
       }

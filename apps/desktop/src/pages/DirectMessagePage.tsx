@@ -14,6 +14,7 @@ import { useWebSocket, WebSocketMessage } from '@/hooks'
 import { ErrorMessage } from '@/components/ui/ErrorMessage'
 import { ScrollArea } from '@/components/ui/scroll-area'
 import Avatar from '@/components/Avatar'
+import CallButton from '@/components/calls/CallButton'
 import MediaMessage from '@/components/MediaMessage'
 import StatusPill from '@/components/StatusPill'
 import { extractVideoFirstFrame } from '@/lib/videoThumbnail'
@@ -317,16 +318,20 @@ export default function DirectMessagePage() {
               : m,
           ),
         )
-        wsSend({
-          action: 'new_message',
-          message: {
-            id: result.message_id,
-            conversation_id: conversationId,
-            sender_id: userId,
-            recipient_id: friendId,
-            timestamp: result.timestamp || optimisticMessage.timestamp,
-          },
-        })
+        try {
+          wsSend({
+            action: 'new_message',
+            message: {
+              id: result.message_id,
+              conversation_id: conversationId,
+              sender_id: userId,
+              recipient_id: friendId,
+              timestamp: result.timestamp || optimisticMessage.timestamp,
+            },
+          })
+        } catch (err) {
+          console.warn('[chat] ws notify failed:', err)
+        }
       } else if (!result.success) {
         setMessages((prev) => prev.filter((m) => m.id !== optimisticMessage.id))
         setError(result.error || 'Failed to send message')
@@ -405,15 +410,19 @@ export default function DirectMessagePage() {
       if (result.success && result.message_id) {
         await loadMessages(conversationId)
         setTimeout(() => scrollToBottom(), 100)
-        wsSend({
-          action: 'new_message',
-          message: {
-            id: result.message_id,
-            conversation_id: conversationId,
-            sender_id: userId,
-            timestamp: result.timestamp || Date.now(),
-          },
-        })
+        try {
+          wsSend({
+            action: 'new_message',
+            message: {
+              id: result.message_id,
+              conversation_id: conversationId,
+              sender_id: userId,
+              timestamp: result.timestamp || Date.now(),
+            },
+          })
+        } catch (err) {
+          console.warn('[chat] ws notify failed:', err)
+        }
       } else {
         setError(result.error || 'Failed to send media')
       }
@@ -481,6 +490,12 @@ export default function DirectMessagePage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {conversationId && friendId && (
+            <>
+              <CallButton conversationId={conversationId} peerUserId={friendId} mode="audio" />
+              <CallButton conversationId={conversationId} peerUserId={friendId} mode="video" />
+            </>
+          )}
           <EncryptionChip />
           <button
             type="button"
