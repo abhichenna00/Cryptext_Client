@@ -1,0 +1,11 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro'
+import LandingApp from '../components/LandingApp.jsx'
+import { loadChangelog } from '../lib/changelog'
+
+const releases = loadChangelog()
+---
+
+<BaseLayout title="NShroud — Enterprise messaging the server can't read.">
+	<LandingApp releases={releases} client:load />
+</BaseLayout>
