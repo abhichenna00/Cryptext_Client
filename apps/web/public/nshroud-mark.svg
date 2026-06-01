@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="512" height="512" role="img" aria-label="NShroud">
+  <title>NShroud</title>
+  <defs>
+    
+    <pattern id="nshroud-hatch" width="4" height="4" patternUnits="userSpaceOnUse" patternTransform="rotate(-45)">
+      <line x1="0" y1="0" x2="0" y2="4" stroke="currentColor" stroke-width="1.4"></line>
+    </pattern>
+    
+    <mask id="nshroud-mask">
+      <rect x="4" y="4" width="56" height="56" fill="white"></rect>
+      <path d="M16.5 15.5 H25.3 L39.5 36.3 V15.5 H47.5 V48.5 H38.7 L24.5 27.7 V48.5 H16.5 Z" fill="black"></path>
+    </mask>
+  </defs>
+
+  
+  <rect x="4" y="4" width="56" height="56" fill="none" stroke="currentColor" stroke-width="3"></rect>
+
+  
+  <rect x="4" y="4" width="56" height="56" fill="url(#nshroud-hatch)" mask="url(#nshroud-mask)"></rect>
+
+  
+  <path d="M16.5 15.5 H25.3 L39.5 36.3 V15.5 H47.5 V48.5 H38.7 L24.5 27.7 V48.5 H16.5 Z" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="3.5 1.5" opacity="1"></path>
+</svg>

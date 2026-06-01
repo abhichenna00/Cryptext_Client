@@ -1,0 +1,11 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro'
+import ChangelogApp from '../components/ChangelogApp.jsx'
+import { loadChangelog } from '../lib/changelog'
+
+const releases = loadChangelog()
+---
+
+<BaseLayout title="Changelog — NShroud">
+	<ChangelogApp releases={releases} client:load />
+</BaseLayout>
