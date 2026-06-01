@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- Voice and video calling between users — peer-to-peer WebRTC with a call modal, an in-call overlay, and start-call buttons on the DM page. Call state is managed by an app-wide `CallProvider`; signaling (offer, answer, ICE candidates, hangup) is carried over the existing WebSocket connection.
+- Audio & Video settings section in the profile dialog — device pickers for camera, microphone, and speaker, persisted user preferences, and an in-app media-permissions diagnostic.
+- Live-updating conversation list — the home sidebar now reflects new messages, new conversations, and unread counts in real time over WebSocket, without requiring a refresh.
+- Per-conversation unread counts — server-side count of unseen messages is returned in the conversation-list response and rendered as a badge on each sidebar row; the badge clears when the conversation is opened.
+- Idempotent message sends — each outgoing message carries a `client_message_id`; the server collapses repeated submissions to the same logical message, and the desktop client persists an outbox so in-flight sends survive an app restart.
+- NShroud marketing website (`apps/web/`) — Astro + React landing and changelog pages, with the changelog sourced from this file at build time.
+
+### Changed
+- WebSocket connection lifted to an App-level provider — a single socket per session is shared across pages, replacing the previous per-page hook instances.
+- NShroud mark — the slatted-N logo is now an inline React component (recolorable gradient + knockout N), and replaces the previous icon in the favicon, splash screen, auth header, and sidebar.
+- Server shares a single S3 client across handlers via `OnceCell`, avoiding a fresh AWS client and connection pool on every avatar/media request.
+- Group member inserts batched via Postgres `UNNEST` — a single query replaces the per-row loop on group creation, cutting round-trips for larger groups.
+- `accept_friend_request` wrapped in a transaction — the row update and friendship insert now succeed or fail together; previously a crash between the two could leave a half-accepted request.
+- Conversation `updated_at` write failures are surfaced as warnings instead of silently swallowed.
+- Removed the unused `sync_oauth_session` command, the stale `pending_welcomes` cleanup path with its swallowed errors, and the legacy plaintext-MLS-state migration.
+- Sidebar message rows now group consecutive messages from the same sender without gaps, and grid rows no longer stretch to inherited line-height.
+- Chat pages fetch only new messages when opening a conversation, instead of refetching the whole history.
+
+### Fixed
+- MLS decrypt loop and the local message store are now kept in lockstep — read errors during decryption are surfaced instead of silently dropped, and the two no longer drift apart on partial failures.
+- Chat-page render race when the sidebar finishes decrypting before the chat page mounts — the chat page now re-reads from the local DB after fetch, so the new messages appear.
+- Sidebar pushes now decrypt inbound messages on receipt, so the preview text and unread count update without opening the conversation.
+- Clicking a conversation row in the sidebar now clears its unread badge immediately.
+- `register_group` no longer leaks `creator_id` back in the response.
+
+### Security
+- WebSocket connections now authenticate with a short-lived, single-use ticket fetched over HTTPS — replaces passing the long-lived JWT as a query-string parameter, which was visible to proxies and logs.
+- WebSocket broadcast verifies the sender is a participant of the conversation before relaying; the per-conversation member cache is also invalidated on conversation creation so newly-added members start receiving messages immediately.
+- Friend-request submission no longer enumerates accounts — the server returns a generic success whether or not the target username exists.
+- Vault commands now require an authenticated session — previously some vault operations could be invoked without auth.
+- Avatar S3 keys are built entirely from server-side values, preventing client-supplied path components from steering uploads.
+- Signup-failure responses no longer return raw AWS SDK error strings; the server returns a scrubbed generic error instead.
+- Legacy plaintext MLS-state files on disk are now rejected at load time, forcing a re-key so the app never reads from pre-0.3.6 unencrypted state.
+
 ## [0.5.1] - 2026-05-15
 
 ### Changed
