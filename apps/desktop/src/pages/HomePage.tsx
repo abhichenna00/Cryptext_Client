@@ -4,7 +4,7 @@ import { useLocation, useNavigate, useParams, Outlet } from 'react-router-dom'
 import { Plus, Search, Users } from 'lucide-react'
 
 import Avatar from '@/components/Avatar'
-import IconRail, { IconRailView } from '@/components/IconRail'
+import IconRail from '@/components/IconRail'
 import EditProfileDialog from '@/components/EditProfileDialog'
 import CreateGroupDialog from '@/components/CreateGroupDialog'
 import { Button } from '@/components/ui/button'
@@ -104,15 +104,6 @@ export default function HomePage({ onSignOut }: HomePageProps) {
     navigate(`/home/group/${conversationId}`)
   }
 
-  // IconRail view state is derived from the current route. DM if we're in a
-  // chat/group conversation; otherwise the default (Friends/index).
-  const railView: IconRailView = useMemo(() => {
-    if (location.pathname.startsWith('/home/chat/') || location.pathname.startsWith('/home/group/')) {
-      return 'dm'
-    }
-    return 'friends'
-  }, [location.pathname])
-
   const filteredChats = useMemo(() => {
     if (!query.trim()) return recentChats
     const q = query.trim().toLowerCase()
@@ -130,10 +121,8 @@ export default function HomePage({ onSignOut }: HomePageProps) {
   return (
     <div className="grid h-screen grid-cols-[52px_280px_1fr] bg-bg text-fg">
       <IconRail
-        view={railView}
         theme={theme}
         onSelectDM={() => navigate('/home')}
-        onSelectFriends={() => navigate('/home')}
         onToggleTheme={toggleTheme}
         onOpenSettings={() => setEditProfileOpen(true)}
         onSignOut={onSignOut}

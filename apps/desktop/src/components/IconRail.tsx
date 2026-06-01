@@ -1,14 +1,10 @@
-import { MessageSquare, Users, Sun, Moon, Settings, LogOut } from 'lucide-react'
+import { MessageSquare, Sun, Moon, Settings, LogOut } from 'lucide-react'
 import NshroudMark from '@/components/NshroudMark'
 import { cn } from '@/lib/utils'
 
-export type IconRailView = 'dm' | 'friends'
-
 interface IconRailProps {
-  view: IconRailView
   theme: 'light' | 'dark'
   onSelectDM: () => void
-  onSelectFriends: () => void
   onToggleTheme: () => void
   onOpenSettings: () => void
   onSignOut: () => void
@@ -43,10 +39,8 @@ function RailButton({
 }
 
 export default function IconRail({
-  view,
   theme,
   onSelectDM,
-  onSelectFriends,
   onToggleTheme,
   onOpenSettings,
   onSignOut,
@@ -56,11 +50,8 @@ export default function IconRail({
       <NshroudMark title="NShroud" className="size-7 text-fg" />
 
       <div className="mt-2 flex flex-col gap-1">
-        <RailButton active={view === 'dm'} title="Messages" onClick={onSelectDM}>
+        <RailButton active title="Messages" onClick={onSelectDM}>
           <MessageSquare size={18} strokeWidth={1.75} />
-        </RailButton>
-        <RailButton active={view === 'friends'} title="Friends" onClick={onSelectFriends}>
-          <Users size={18} strokeWidth={1.75} />
         </RailButton>
       </div>
 
