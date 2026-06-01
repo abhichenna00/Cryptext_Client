@@ -42,19 +42,6 @@ function HeroCTAs() {
   )
 }
 
-function HeroTicker() {
-  return (
-    <div className="ticker" style={{ marginTop: 56, borderTop: '1px solid var(--border)' }}>
-      <span>1:1 &amp; group chats</span>
-      <span>Encrypted file sharing</span>
-      <span>Forward secrecy (MLS)</span>
-      <span>Microsoft Entra SSO</span>
-      <span>On-device encrypted vault</span>
-      <span>Hosted on AWS</span>
-    </div>
-  )
-}
-
 function MsgBubble({ who, name, body, attach }) {
   const me = who === 'me'
   return (
@@ -367,7 +354,7 @@ function AppMockup({ wide = false }) {
                 color: 'var(--fg-3)',
               }}
             >
-              Message Security Engineering — encrypted
+              Message Security Engineering · encrypted
             </div>
             <div style={{ width: 30, height: 30, borderRadius: 6, background: 'var(--fg)' }} />
           </div>
@@ -396,13 +383,12 @@ export default function Hero({ grid = true }) {
               </em>
             </h1>
             <p className="lede" style={{ marginTop: 28 }}>
-              NShroud is private team chat for companies that handle things they can't afford to leak. It feels like the messenger your team already knows — but every conversation is locked to your own devices, leaving the people who run the service, us included, with nothing but ciphertext.
+              NShroud is private team chat for companies that handle things they can't afford to leak. It feels like the messenger your team already knows, but every conversation is locked to your own devices, leaving the people who run the service, us included, with nothing but ciphertext.
             </p>
             <HeroCTAs />
           </div>
           <AppMockup />
         </div>
-        <HeroTicker />
       </div>
     </header>
   )

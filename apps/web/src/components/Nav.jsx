@@ -12,8 +12,7 @@ export default function Nav({ active = 'home', changelogVersion = 'v0.5.1' }) {
 
   const links = [
     { href: '/#features', label: 'Product', key: 'product' },
-    { href: '/#security', label: 'Security', key: 'security' },
-    { href: '/#architecture', label: 'Architecture', key: 'architecture' },
+    { href: '/#how', label: 'How it works', key: 'how' },
     { href: '/#pricing', label: 'Pricing', key: 'pricing' },
     { href: 'https://datatracker.ietf.org/doc/rfc9420/', label: 'Docs', key: 'docs', external: true },
     { href: '/changelog', label: 'Changelog', key: 'changelog' },

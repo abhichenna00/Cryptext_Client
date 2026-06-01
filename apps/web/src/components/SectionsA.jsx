@@ -6,23 +6,23 @@ const HATCH = 'repeating-linear-gradient(-45deg, transparent 0 5px, var(--border
 const REASONS = [
   {
     n: '01',
-    t: 'A breach reveals nothing.',
-    d: 'We only ever hold ciphertext. A server compromise, a rogue insider, or a legal demand turns up unreadable bytes — never the contents of a conversation.',
+    t: 'Private by design.',
+    d: 'Every message and file is sealed on your own devices before it leaves. A breach, a rogue insider, or a legal demand turns up nothing but ciphertext, because the keys to open it never reach our servers.',
   },
   {
     n: '02',
     t: 'No trade-off for privacy.',
-    d: 'Private tools usually feel like a downgrade. NShroud keeps the group chats, encrypted file sharing, and single sign-on your team already expects.',
+    d: 'Most private tools feel like a step backward. NShroud feels like the modern messenger your team already knows, so people actually use it instead of routing around it.',
   },
   {
     n: '03',
-    t: 'Trust the math, not the vendor.',
-    d: 'You don’t have to believe a privacy promise. Keys never leave your devices, so nobody else can read your messages. That includes us.',
+    t: 'Ready for how IT works.',
+    d: 'Single sign-on with Microsoft Entra and Google Workspace, silent provisioning for new hires, and managed AWS hosting with an uptime target. Your IT team gets the controls it expects.',
   },
   {
     n: '04',
-    t: 'Ready for a real company.',
-    d: 'SSO with Microsoft Entra and Google Workspace, silent provisioning, and managed AWS hosting. It fits IT — not just privacy enthusiasts.',
+    t: 'Your servers, or ours.',
+    d: 'NShroud ships as a single Docker container you can run in your own cloud, on-prem, or fully air-gapped, and the full client and server are on GitHub to audit. Prefer hands-off? Let us host it for you.',
   },
 ]
 
@@ -36,7 +36,7 @@ export function WhyNShroud() {
             Most work chat can read every word you send.
           </h2>
           <p className="lede" style={{ marginTop: 20 }}>
-            Most work chat keeps your messages in plaintext on its servers — legible to the provider, to anyone they're compelled to hand them to, and to anyone who breaches them. NShroud is built so that simply isn't possible.
+            Most work chat keeps your messages in plaintext on its servers, legible to the provider, to anyone they're compelled to hand them to, and to anyone who breaches them. NShroud is built so that simply isn't possible.
           </p>
         </div>
 
@@ -177,7 +177,7 @@ function Endpoint({ role, sub, text, align }) {
         “{text}”
       </div>
       <div className="small" style={{ fontSize: 11.5, color: 'var(--fg-3)', marginTop: 'auto' }}>
-        Plaintext — exists only here, on a device that holds the keys.
+        Plaintext that exists only here, on a device that holds the keys.
       </div>
     </div>
   )
@@ -319,7 +319,7 @@ function ServerNode() {
           <span style={{ color: 'var(--fg-4)' }}> …</span>
         </div>
         <div className="small" style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
-          Ciphertext — what we relay and store. No keys live here, so there is nothing for us, or anyone who breaches us, to read.
+          Ciphertext is all we relay and store. No keys live here, so there is nothing for us, or anyone who breaches us, to read.
         </div>
       </div>
     </div>
@@ -355,7 +355,7 @@ function MessageLifecycle() {
           marginRight: 'auto',
         }}
       >
-        Same message, two readable ends. Between them — across the network and on our servers — it only ever exists as ciphertext.
+        You and the people you message can read it. Everywhere in between, on the network and on our servers, it stays encrypted.
       </p>
     </div>
   )
@@ -369,13 +369,13 @@ const STEPS = [
   },
   {
     n: '02',
-    t: 'Relayed, never read',
-    d: 'Our servers route the sealed bytes to the right people and hold them until devices come online. We can see that a message moved — never what it said.',
+    t: 'Sent through our servers',
+    d: 'Our servers deliver the encrypted message to the right people and hold it until their devices come online. We can tell a message was sent, but we cannot read what it says.',
   },
   {
     n: '03',
     t: 'Opened by the recipient',
-    d: 'Only your teammates’ devices hold the keys to open it. The message decrypts inside their app and appears in the conversation — instant and familiar, with no server, network, or onlooker in between that could ever read along.',
+    d: 'Only your teammates’ devices hold the keys to open it. The message decrypts inside their app and appears in the conversation. It feels instant and familiar, with no server, network, or onlooker in between that could ever read along.',
   },
 ]
 
@@ -384,13 +384,6 @@ const CAN_SEE = [
   'Which accounts exchange messages, and when',
   'Approximate message and file sizes',
   'Public key packages devices publish to start a chat',
-]
-
-const CANT_SEE = [
-  'The text of any message',
-  'Files, images, and attachments',
-  'Group, channel, and conversation names',
-  'Anything you actually say to each other',
 ]
 
 export function HowItWorks() {
@@ -411,7 +404,7 @@ export function HowItWorks() {
             Follow one message, end to end.
           </h2>
           <p className="lede" style={{ marginTop: 18, maxWidth: 640 }}>
-            Encryption is easy to claim and hard to picture. So here is the whole journey of a single message — from the moment you send it to the moment it's read — and exactly what we can do with it along the way.
+            Encryption is easy to claim and hard to picture. So here is the whole journey of a single message, from the moment you send it to the moment it's read, and exactly what we can do with it along the way.
           </p>
         </div>
 
@@ -442,155 +435,70 @@ export function HowItWorks() {
           ))}
         </div>
 
+        {/* The honest part: some metadata stays visible */}
         <div style={{ marginTop: 40 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
-            <h3 className="h-2">Where the line falls.</h3>
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 20 }}>
-            <div className="surface" style={{ padding: 28 }}>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  marginBottom: 18,
-                }}
-              >
-                <span
-                  className="mono"
-                  style={{
-                    fontSize: 11,
-                    letterSpacing: '0.1em',
-                    textTransform: 'uppercase',
-                    color: 'var(--fg-2)',
-                  }}
-                >
-                  What we can see
-                </span>
-                <span className="small" style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
-                  metadata
-                </span>
-              </div>
-              <ul
-                style={{
-                  listStyle: 'none',
-                  padding: 0,
-                  margin: 0,
-                  display: 'flex',
-                  flexDirection: 'column',
-                }}
-              >
-                {CAN_SEE.map((c, i) => (
-                  <li
-                    key={i}
-                    className="small"
-                    style={{
-                      display: 'flex',
-                      gap: 12,
-                      padding: '11px 0',
-                      borderTop: i ? '1px solid var(--border)' : 'none',
-                      alignItems: 'flex-start',
-                    }}
-                  >
-                    <svg
-                      width="15"
-                      height="15"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="var(--hl)"
-                      strokeWidth="1.8"
-                      style={{ flexShrink: 0, marginTop: 2 }}
-                    >
-                      <circle cx="12" cy="12" r="3" />
-                      <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
-                    </svg>
-                    <span>{c}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
+          <h3 className="h-2" style={{ marginBottom: 16 }}>
+            The honest part: we still see a little metadata.
+          </h3>
+          <div className="surface" style={{ padding: 28 }}>
+            <p className="small" style={{ marginBottom: 22, maxWidth: 680 }}>
+              Encryption hides what you say, not that you said it. To route a message, our servers handle a small amount of metadata. The content itself stays sealed, and only your devices can open it.
+            </p>
             <div
               style={{
-                position: 'relative',
-                border: '1px solid var(--border-strong)',
-                borderRadius: 'var(--radius-lg)',
-                padding: 28,
-                overflow: 'hidden',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                marginBottom: 16,
               }}
             >
-              <div
+              <span
+                className="mono"
                 style={{
-                  position: 'absolute',
-                  inset: 0,
-                  background: HATCH,
-                  opacity: 0.5,
-                  pointerEvents: 'none',
+                  fontSize: 11,
+                  letterSpacing: '0.1em',
+                  textTransform: 'uppercase',
+                  color: 'var(--fg-2)',
                 }}
-              />
-              <div style={{ position: 'relative' }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    marginBottom: 18,
-                  }}
-                >
-                  <span
-                    className="mono"
-                    style={{
-                      fontSize: 11,
-                      letterSpacing: '0.1em',
-                      textTransform: 'uppercase',
-                      color: 'var(--fg)',
-                    }}
-                  >
-                    What we can never see
-                  </span>
-                  <span className="small" style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
-                    content
-                  </span>
-                </div>
-                <ul
-                  style={{
-                    listStyle: 'none',
-                    padding: 0,
-                    margin: 0,
-                    display: 'flex',
-                    flexDirection: 'column',
-                  }}
-                >
-                  {CANT_SEE.map((c, i) => (
-                    <li
-                      key={i}
-                      className="small"
-                      style={{
-                        display: 'flex',
-                        gap: 12,
-                        padding: '11px 0',
-                        borderTop: i ? '1px solid var(--border)' : 'none',
-                        alignItems: 'flex-start',
-                        color: 'var(--fg)',
-                      }}
-                    >
-                      <svg
-                        width="15"
-                        height="15"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="var(--hl)"
-                        strokeWidth="1.8"
-                        style={{ flexShrink: 0, marginTop: 2 }}
-                      >
-                        <rect x="5" y="11" width="14" height="9" rx="2" />
-                        <path d="M8 11V7a4 4 0 0 1 8 0v4" />
-                      </svg>
-                      <span>{c}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
+              >
+                What stays visible
+              </span>
+              <span className="small" style={{ fontSize: 11.5, color: 'var(--fg-3)' }}>
+                metadata only
+              </span>
             </div>
+            <ul
+              style={{
+                listStyle: 'none',
+                padding: 0,
+                margin: 0,
+                display: 'grid',
+                gridTemplateColumns: '1fr 1fr',
+                gap: '14px 28px',
+              }}
+            >
+              {CAN_SEE.map((c, i) => (
+                <li
+                  key={i}
+                  className="small"
+                  style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}
+                >
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="var(--hl)"
+                    strokeWidth="1.8"
+                    style={{ flexShrink: 0, marginTop: 2 }}
+                  >
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+                  </svg>
+                  <span>{c}</span>
+                </li>
+              ))}
+            </ul>
           </div>
         </div>
 
@@ -608,7 +516,7 @@ export function HowItWorks() {
           >
             <span style={{ color: 'var(--fg)' }}>Read more</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-              — the deeper crypto, forward secrecy, post-compromise security
+              forward secrecy, post-compromise, and the deeper crypto
             </span>
           </summary>
           <div className="surface" style={{ padding: 28, marginTop: 16 }}>
@@ -621,10 +529,10 @@ export function HowItWorks() {
               <strong style={{ color: 'var(--fg)' }}>Forward secrecy:</strong> keys ratchet forward on every message. Compromise a device and you still can't read history.
             </p>
             <p className="small" style={{ marginBottom: 16 }}>
-              <strong style={{ color: 'var(--fg)' }}>Post-compromise security:</strong> the ratchet also heals — once a compromised member commits a fresh key, future messages are out of reach again.
+              <strong style={{ color: 'var(--fg)' }}>Post-compromise security:</strong> the ratchet also heals. Once a compromised member commits a fresh key, future messages are out of reach again.
             </p>
             <p className="small">
-              <strong style={{ color: 'var(--fg)' }}>What we use:</strong> X25519 key exchange, AES-128-GCM symmetric encryption, SHA-256 hashing, Ed25519 signatures — all specified by MLS ciphersuite 1. Media gets a separate AES-256-GCM key delivered inside the MLS-encrypted message and stored as a ciphertext blob in S3.
+              <strong style={{ color: 'var(--fg)' }}>What we use:</strong> X25519 key exchange, AES-128-GCM symmetric encryption, SHA-256 hashing, Ed25519 signatures, all specified by MLS ciphersuite 1. Media gets a separate AES-256-GCM key delivered inside the MLS-encrypted message and stored as a ciphertext blob in S3.
             </p>
           </div>
         </details>
@@ -638,42 +546,32 @@ const FEATURES = [
   {
     icon: 'users',
     title: 'Group chats',
-    body: 'Bring your team into rooms of any size. Add and remove members, change names, leave a group — all end-to-end encrypted.',
+    body: 'Bring your team into rooms of any size. Add and remove members, rename, and leave a group, all end-to-end encrypted.',
   },
   {
     icon: 'image',
     title: 'Encrypted files',
-    body: 'Share images, videos, and documents. Drag, drop, done. Encrypted on your device, stored as opaque bytes, opened only by the people in the chat.',
+    body: 'Share images, videos, and documents. Drag, drop, done. Files are encrypted on your device and opened only by the people in the chat.',
   },
   {
-    icon: 'lock',
-    title: 'Encrypted by default',
-    body: 'There is no “privacy mode.” Every conversation is end-to-end encrypted the moment it starts — no setting to flip, no tier to upgrade, no admin checkbox to forget.',
-  },
-  {
-    icon: 'arrow',
-    title: 'Forward secrecy',
-    body: 'Keys roll forward with every message. If a device is ever lost or compromised, past conversations stay locked. The cryptography heals itself.',
+    icon: 'video',
+    title: 'Voice & video calls',
+    body: 'Start a 1:1 or group call from any conversation. The audio and video are encrypted the same way your messages are.',
   },
   {
     icon: 'building',
     title: 'Single sign-on',
-    body: 'Microsoft Entra (Azure AD), Google Workspace, and email/password. New hires onboard silently — federated users land in the app, already provisioned.',
-  },
-  {
-    icon: 'server',
-    title: 'Managed on AWS',
-    body: "We run the production stack on AWS so you don't have to. Managed updates, monitoring, and a 99.9% uptime target — included in every paid plan.",
+    body: 'Microsoft Entra (Azure AD), Google Workspace, and email/password. New hires land in the app already provisioned, with no manual setup.',
   },
   {
     icon: 'desktop',
-    title: 'Native desktop client',
-    body: 'Built with Tauri — small (~12MB), fast, and signed. Available for Windows and Linux today, with macOS, iOS, and Android in development.',
+    title: 'Native desktop app',
+    body: 'Built with Tauri, so it stays small (~12MB), fast, and signed. Windows and Linux today, with macOS, iOS, and Android in development.',
   },
   {
     icon: 'database',
     title: 'On-device vault',
-    body: 'Your message history lives in a SQLCipher vault on your own machine, unlocked by a PIN that never reaches our servers. Lock the vault and the app goes dark.',
+    body: 'Your message history lives in an encrypted vault on your own machine, unlocked by a PIN that never reaches our servers. Lock it and the app goes dark.',
   },
 ]
 
@@ -689,6 +587,7 @@ const FEATURE_ICONS = {
   desktop: 'M2 4h20v13H2zM8 21h8M12 17v4',
   database:
     'M4 7c0-2 3.58-4 8-4s8 2 8 4-3.58 4-8 4-8-2-8-4zm0 5c0 2 3.58 4 8 4s8-2 8-4M4 7v10c0 2 3.58 4 8 4s8-2 8-4V7',
+  video: 'M2 7a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2zM17 10l5-3v10l-5-3z',
 }
 
 function FeatureIcon({ name }) {
@@ -742,14 +641,11 @@ export function Features() {
               Everything your team needs to talk.
             </h2>
           </div>
-          <p className="lede" style={{ maxWidth: 380 }}>
-            Direct messages, group chats, encrypted files, and single sign-on — the messaging surface your team needs, encrypted top to bottom.
-          </p>
         </div>
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(4, 1fr)',
+            gridTemplateColumns: 'repeat(3, 1fr)',
             gap: 0,
             border: '1px solid var(--border)',
             borderRadius: 12,
@@ -760,10 +656,10 @@ export function Features() {
             <div
               key={i}
               style={{
-                padding: 24,
-                borderRight: i % 4 !== 3 ? '1px solid var(--border)' : 'none',
-                borderBottom: i < 4 ? '1px solid var(--border)' : 'none',
-                minHeight: 220,
+                padding: 28,
+                borderRight: i % 3 !== 2 ? '1px solid var(--border)' : 'none',
+                borderBottom: i < 3 ? '1px solid var(--border)' : 'none',
+                minHeight: 210,
               }}
             >
               <FeatureIcon name={f.icon} />

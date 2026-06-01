@@ -165,7 +165,7 @@ const TIERS = [
     price: 'Free',
     sub: 'for public use, forever',
     blurb:
-      'The full end-to-end encrypted core, hosted by us, for individuals and teams that just want to message privately — every conversation is sealed the same way.',
+      'The full end-to-end encrypted core, hosted by us, for individuals and teams that just want to message privately. Every conversation is sealed the same way.',
     features: [
       '1:1 & group chats, encrypted media & files',
       'Forward secrecy on every message (MLS)',
@@ -183,7 +183,7 @@ const TIERS = [
     blurb:
       'For organizations that need control. Self-host the container on your own infrastructure, set your data residency, and get the SSO and operational guarantees IT signs off on.',
     features: [
-      'Self-host the container on your infra — or have us run it',
+      'Self-host the container on your infra, or have us run it',
       'Microsoft Entra & Google Workspace SSO',
       'Choose your region · BYOK envelope encryption',
       'Security review · DPA · custom terms',
@@ -298,7 +298,7 @@ export function Pricing() {
           ))}
         </div>
         <div className="small" style={{ textAlign: 'center', marginTop: 28, color: 'var(--fg-3)' }}>
-          The Free plan is genuinely free for public use. Enterprise pricing is scoped to your deployment — talk to us.
+          Enterprise pricing is scoped to your deployment. Talk to us.
         </div>
       </div>
     </section>
@@ -327,7 +327,7 @@ export function ChangelogTeaser({ releases = [] }) {
               Shipped, weekly.
             </h2>
             <p className="lede" style={{ marginTop: 18, fontSize: 16 }}>
-              We publish every change — security fixes, refactors, and the occasional user-visible feature. Sourced live from <code className="kbd">CHANGELOG.md</code>.
+              We publish every change, from security fixes to refactors to the occasional user-visible feature. Sourced live from <code className="kbd">CHANGELOG.md</code>.
             </p>
           </div>
           <a href="/changelog" className="btn btn-secondary btn-arrow">
@@ -389,7 +389,7 @@ export function ChangelogTeaser({ releases = [] }) {
 export function FinalCTA() {
   return (
     <section className="section" style={{ background: 'var(--surface)' }}>
-      <div className="container" style={{ padding: '120px 24px', textAlign: 'center' }}>
+      <div className="container" style={{ padding: '60px 24px', textAlign: 'center' }}>
         <span className="eyebrow">Get started</span>
         <h2
           className="h-display"
