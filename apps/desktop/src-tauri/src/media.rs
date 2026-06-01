@@ -362,7 +362,7 @@ pub async fn send_media(
                 timestamp: ts,
                 content_type: "media".to_string(),
             };
-            let _ = local_db::store_message(&local_db, &msg);
+            local_db::store_message(&local_db, &msg)?;
 
             // Cache the original file locally
             if let Ok(cache_dir) = media_cache_dir(&app, &conversation_id) {
