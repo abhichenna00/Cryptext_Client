@@ -3,6 +3,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type ReactNode,
@@ -254,8 +255,17 @@ export function WebSocketProvider({
     }
   }, [enabled, connect])
 
+  // Memoize so the context value's identity is stable across re-renders that
+  // don't change isConnected. Consumers that pass `ctx` into a useEffect dep
+  // list (e.g. useLiveConversationList) would otherwise unsubscribe and
+  // resubscribe on every provider render.
+  const value = useMemo(
+    () => ({ isConnected, sendMessage, subscribe }),
+    [isConnected, sendMessage, subscribe],
+  )
+
   return (
-    <WebSocketContext.Provider value={{ isConnected, sendMessage, subscribe }}>
+    <WebSocketContext.Provider value={value}>
       {children}
     </WebSocketContext.Provider>
   )
