@@ -147,6 +147,10 @@ export class CallManager {
     if (this.#status === 'idle' || this.#status === 'ended') {
       return
     }
+    if (this.#status === 'error') {
+      this.#resetToIdle()
+      return
+    }
     const convId = this.#conversationId
     this.#transitionTo('ended')
     this.#cleanup()

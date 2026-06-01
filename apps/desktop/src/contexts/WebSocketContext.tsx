@@ -98,11 +98,12 @@ export function WebSocketProvider({
   }, [])
 
   const sendMessage = useCallback<WebSocketContextValue['sendMessage']>((data) => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(data))
-    } else {
-      console.warn('[WebSocket] Cannot send — not connected')
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(data))
+      return
     }
+    throw new Error('WebSocket not connected')
   }, [])
 
   const scheduleReconnect = useCallback((connectFn: () => void) => {

@@ -9,6 +9,9 @@ import './App.css'
 
 import { useTheme } from '@/hooks'
 import { WebSocketProvider } from '@/contexts/WebSocketContext'
+import { CallProvider } from '@/contexts/CallContext'
+import IncomingCallModal from '@/components/calls/IncomingCallModal'
+import InCallView from '@/components/calls/InCallView'
 
 import SplashPage from './pages/SplashPage'
 import AuthPage from './pages/AuthPage'
@@ -184,6 +187,9 @@ export default function App() {
           </div>
         )}
         <WebSocketProvider enabled={!!session && hasProfile && !vaultError}>
+        <CallProvider>
+        <IncomingCallModal vaultReady={!!session && hasProfile && !vaultError} />
+        <InCallView />
         <Routes>
           <Route path="/splash" element={<SplashPage />} />
 
@@ -253,6 +259,7 @@ export default function App() {
 
           <Route path="/chat/:friendId" element={<LegacyChatRedirect />} />
         </Routes>
+        </CallProvider>
         </WebSocketProvider>
       </BrowserRouter>
     </Theme>

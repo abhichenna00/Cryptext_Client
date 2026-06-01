@@ -301,6 +301,24 @@ describe('CallManager state machine', () => {
     expect(manager.state.cameraEnabled).toBe(false)
   })
 
+  it('endCall from error state resets to idle without throwing or sending an End', async () => {
+    const { signaling, manager } = build()
+    signaling.triggerInvite({
+      conversationId: 'conv-1',
+      fromUserId: 'peer-1',
+      fromDeviceId: 'dev-1',
+      sdp: { type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' },
+    })
+    await manager.acceptCall()
+    expect(manager.state.status).toBe('connecting')
+    const pc = FakePeerConnection.instances[0]
+    pc.setConnectionState('failed')
+    expect(manager.state.status).toBe('error')
+    await expect(manager.endCall()).resolves.toBeUndefined()
+    expect(manager.state.status).toBe('idle')
+    expect(signaling.sent.some((m) => m.kind === 'end')).toBe(false)
+  })
+
   it('onCallAcceptedElsewhere while outgoing-ringing transitions to idle and stops local tracks', async () => {
     const { signaling, manager } = build()
     await manager.startCall('conv-1', 'peer-1', 'audio')
