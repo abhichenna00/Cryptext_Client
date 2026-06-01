@@ -434,6 +434,24 @@ pub async fn mark_conversation_read(
 
     let pool = get_pool();
 
+    // Explicit participant check so non-participants get a 401 instead of a
+    // misleading `{"success": true}` from a silently-zero-row UPDATE. The WHERE
+    // filter below is still the actual access gate, but the check makes the
+    // intent visible and survives future refactors of the UPDATE statement.
+    let participant: Option<(String,)> = sqlx::query_as(
+        "SELECT user_id FROM conversation_participants WHERE conversation_id = $1::uuid AND user_id = $2"
+    )
+    .bind(&conversation_id)
+    .bind(claims.user_id())
+    .fetch_optional(pool.as_ref())
+    .await?;
+
+    if participant.is_none() {
+        return Err(AppError::Unauthorized(
+            "You are not a participant in this conversation".to_string(),
+        ));
+    }
+
     sqlx::query(
         "UPDATE conversation_participants SET last_read_at = NOW() WHERE conversation_id = $1::uuid AND user_id = $2"
     )
