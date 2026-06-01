@@ -472,13 +472,14 @@ pub async fn send_message(
             );
         }
         if let (Some(ref msg_id), Some(ts)) = (&result.message_id, result.timestamp) {
+            let content_type = classify_decrypted(&plaintext);
             let msg = LocalMessage {
                 id: msg_id.clone(),
                 conversation_id: conversation_id.clone(),
                 sender_id: current_user_id,
                 content: plaintext,
                 timestamp: ts,
-                content_type: "plaintext".to_string(),
+                content_type,
             };
             local_db::store_message(&local_db, &msg)?;
         }
