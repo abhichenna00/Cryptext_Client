@@ -796,7 +796,7 @@ impl MlsState {
                     ).await;
                     count += 1;
                 }
-                Err(e) => eprintln!("Failed to process welcome: {}", e),
+                Err(e) => log::error!("Failed to process welcome: {}", e),
             }
         }
 
