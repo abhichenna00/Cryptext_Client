@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useSyncExternalStore } from 'react'
+import { useCallback, useSyncExternalStore } from 'react'
 
 type Theme = 'light' | 'dark'
 const STORAGE_KEY = 'nshroud-theme'
@@ -32,11 +32,29 @@ function getSnapshot(): Theme {
   return currentTheme
 }
 
+/**
+ * Write the `dark` class to `<html>` synchronously so the custom CSS
+ * variables in `App.css`'s `.dark { ... }` block flip immediately. Going
+ * through `useEffect` left a window where two `useTheme()` consumers could
+ * re-add `.dark` racily — Radix Themes flipped its own wrapper to `light` for
+ * Tabs/Dialogs, but `<html>` kept `.dark`, so all Tailwind utilities like
+ * `bg-bg`/`bg-surface` stayed at their dark values.
+ */
+function applyHtmlDarkClass(theme: Theme): void {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.toggle('dark', theme === 'dark')
+}
+
 function setStoreTheme(next: Theme): void {
   if (next === currentTheme) return
   currentTheme = next
+  applyHtmlDarkClass(next)
   for (const fn of listeners) fn()
 }
+
+// Apply once at module load so the first paint matches the stored / system
+// theme without waiting for React to mount.
+applyHtmlDarkClass(currentTheme)
 
 // Track the OS preference once at module level; only honor it while the user
 // has no explicit override set.
@@ -51,17 +69,13 @@ if (typeof window !== 'undefined') {
 
 /**
  * Theme controller. A user override (saved to localStorage) takes precedence
- * over the OS preference. The `.dark` class is written to <html> so Tailwind's
- * dark variant reaches portalled content (dialogs, dropdowns) too.
+ * over the OS preference. The `.dark` class on `<html>` drives the custom
+ * design-token cascade (`--bg`, `--surface`, etc.) used by Tailwind utilities
+ * across the app. Radix Themes drives its own light/dark wrapper class
+ * independently via the `<Theme appearance>` prop in `App.tsx`.
  */
 export function useTheme() {
   const theme = useSyncExternalStore(subscribe, getSnapshot, getSnapshot)
-
-  useEffect(() => {
-    const root = document.documentElement
-    if (theme === 'dark') root.classList.add('dark')
-    else root.classList.remove('dark')
-  }, [theme])
 
   const toggle = useCallback(() => {
     const next: Theme = currentTheme === 'dark' ? 'light' : 'dark'
