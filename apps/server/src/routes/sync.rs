@@ -126,10 +126,17 @@ pub async fn download_messages_db(claims: Claims) -> AppResult<impl IntoResponse
 
 pub async fn delete_all_sync_data(claims: Claims) -> AppResult<impl IntoResponse> {
     let user_id = claims.user_id();
+    let mut failed: Vec<String> = Vec::new();
     for file in &["vault", "mls_state", "messages.db"] {
-        let _ = delete_sync_file(user_id, file).await;
+        if let Err(e) = delete_sync_file(user_id, file).await {
+            tracing::warn!(file = %file, error = %e, "delete_sync_file failed");
+            failed.push((*file).to_string());
+        }
     }
-    Ok(axum::Json(serde_json::json!({ "success": true })))
+    Ok(axum::Json(serde_json::json!({
+        "success": failed.is_empty(),
+        "failed": failed,
+    })))
 }
 
 pub async fn check_sync_exists(claims: Claims) -> AppResult<impl IntoResponse> {
