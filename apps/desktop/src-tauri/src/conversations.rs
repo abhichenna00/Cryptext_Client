@@ -312,6 +312,10 @@ pub async fn get_messages(
                     // Commit / proposal / non-application content. Ratchet
                     // and group state have already been updated inside
                     // decrypt_message; nothing to persist locally.
+                    log::debug!(
+                        "get_messages: non-application MLS payload for msg_id={} conv={} sender={}",
+                        msg.id, conversation_id, msg.sender_id
+                    );
                 }
                 Err(e) => {
                     log::error!(
@@ -721,6 +725,10 @@ pub async fn fetch_new_messages(
                     // Commit / proposal / non-application content. Ratchet
                     // and group state have already been updated inside
                     // decrypt_message; nothing to persist or surface.
+                    log::debug!(
+                        "fetch_new_messages: non-application MLS payload for msg_id={} conv={} sender={}",
+                        msg.id, conversation_id, msg.sender_id
+                    );
                 }
                 Err(e) => {
                     log::error!(
