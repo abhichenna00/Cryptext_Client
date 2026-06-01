@@ -401,15 +401,18 @@ pub async fn welcome_ack(
     Json(req): Json<WelcomeAckRequest>,
 ) -> AppResult<impl IntoResponse> {
     let pool = get_pool();
+    // Confirm-epoch UPDATE, conversation lookup, and pending-message DELETE all
+    // run in one transaction so partial failure can't leave the member marked
+    // confirmed while their pending messages are still queued (or vice versa).
+    let mut tx = pool.begin().await?;
 
-    // Update the member's confirmed epoch
     let rows_affected = sqlx::query(
         "UPDATE mls_group_members SET confirmed_epoch = 1
          WHERE group_id = $1 AND user_id = $2 AND confirmed_epoch = 0"
     )
     .bind(&req.group_id)
     .bind(claims.user_id())
-    .execute(pool.as_ref())
+    .execute(&mut *tx)
     .await?
     .rows_affected();
 
@@ -419,15 +422,13 @@ pub async fn welcome_ack(
         ));
     }
 
-    // Get the conversation_id for this group
     let conv_row: Option<(String,)> = sqlx::query_as(
         "SELECT conversation_id::text FROM mls_groups WHERE group_id = $1"
     )
     .bind(&req.group_id)
-    .fetch_optional(pool.as_ref())
+    .fetch_optional(&mut *tx)
     .await?;
 
-    // Flush any pending messages for this user in this conversation
     let mut flushed = 0i64;
     if let Some((conversation_id,)) = conv_row {
         let pending: Vec<(String,)> = sqlx::query_as(
@@ -437,11 +438,13 @@ pub async fn welcome_ack(
         )
         .bind(claims.user_id())
         .bind(&conversation_id)
-        .fetch_all(pool.as_ref())
+        .fetch_all(&mut *tx)
         .await?;
 
         flushed = pending.len() as i64;
     }
+
+    tx.commit().await?;
 
     Ok(Json(serde_json::json!({
         "success": true,
