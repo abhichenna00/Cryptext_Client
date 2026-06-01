@@ -70,8 +70,8 @@
   --fg: oklch(0.14 0.010 260);
   --fg-muted: oklch(0.42 0.012 260);
   --fg-dim: oklch(0.60 0.012 260);
-  --chrome: oklch(0.15 0.010 260);
-  --chrome-fg: oklch(0.96 0.004 80);
+  --chrome: oklch(0.95 0.010 80);
+  --chrome-fg: oklch(0.14 0.010 260);
   --bubble-me: oklch(0.14 0.010 260);
   --bubble-me-fg: oklch(0.98 0.004 80);
   --bubble-them: oklch(1 0 0);
