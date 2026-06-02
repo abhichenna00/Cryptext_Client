@@ -34,8 +34,8 @@
   --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', monospace;
 
   /* Spacing scale (driven by density) */
-  --space-section: clamp(96px, 12vw, 160px);
-  --space-block: clamp(48px, 6vw, 72px);
+  --space-section: clamp(38px, 4vw, 56px);
+  --space-block: clamp(32px, 4vw, 48px);
   --container: 1200px;
   --container-narrow: 960px;
   --radius: 6px;
@@ -61,12 +61,12 @@
 }
 
 [data-density="compact"] {
-  --space-section: clamp(64px, 8vw, 96px);
-  --space-block: clamp(32px, 4vw, 48px);
+  --space-section: clamp(28px, 3vw, 40px);
+  --space-block: clamp(22px, 2.5vw, 32px);
 }
 [data-density="comfy"] {
-  --space-section: clamp(120px, 16vw, 200px);
-  --space-block: clamp(64px, 8vw, 96px);
+  --space-section: clamp(56px, 7vw, 88px);
+  --space-block: clamp(44px, 5.5vw, 64px);
 }
 
 * { box-sizing: border-box; }

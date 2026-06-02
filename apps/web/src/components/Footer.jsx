@@ -5,8 +5,7 @@ const GROUPS = [
     title: 'Product',
     links: [
       ['Features', '/#features'],
-      ['Security', '/#security'],
-      ['Architecture', '/#architecture'],
+      ['How it works', '/#how'],
       ['Pricing', '/#pricing'],
       ['Changelog', '/changelog'],
     ],
