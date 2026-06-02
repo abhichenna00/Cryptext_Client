@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-06-02
+
+### Added
+- The marketing site now deploys automatically. A self-hosted GitHub Actions workflow runs on push to `main` when `apps/web/**` changes, builds the static site, and ships it through `wrangler deploy` to Cloudflare Workers Static Assets.
+- The changelog page refetches `CHANGELOG.md` from `main` on mount. The build-time inline still drives the initial render and SSR, while the runtime fetch keeps the live site in sync with the source file without requiring a redeploy.
+
+### Changed
+- The marketing site landing was redesigned for tightness. Section padding tokens are roughly halved, repeated copy is condensed, the SecurityPosture and Architecture sections are dropped, the hero ticker is removed, the HowItWorks metadata panel is restructured into a single "honest part" view, and the Features grid is reduced from four columns of eight tiles to three columns of six tiles. The "Voice and video calls" tile replaces dropped duplicates of "Encrypted by default", "Forward secrecy", and "Managed on AWS".
+- `CHANGELOG.md` was rewritten for a formal, consistent tone. Every entry is a complete sentence, em-dashes are removed in favor of more precise punctuation, and internal-process citations (plan references, PR numbers, review notes) are stripped from the user-facing text.
+- `apps/web/wrangler.jsonc` was restored to a Workers Static Assets configuration with `name`, `compatibility_date`, and `assets.directory` after Cloudflare's Workers Git integration was disabled. The repository's own GitHub Actions workflow is now the sole deploy path for the marketing site.
+
+### Fixed
+- The theme toggle correctly flips both Tailwind utility consumers and Radix Themes components without requiring an app restart. The fix combines three underlying changes: `useTheme` state is shared across all hook instances through a module-level store, the `.dark` class is written to `<html>` synchronously inside the store setter rather than via a React effect, and the icon rail chrome design tokens now follow the theme in light mode.
+- The `WebSocketContext` value is memoized so subscriber identity stays stable across provider re-renders. Hooks like `useLiveConversationList` no longer resubscribe on every render of the provider, eliminating spurious WebSocket churn.
+- `fetch_welcomes` on the desktop client logs failures via `log::error` instead of `eprintln`, matching the rest of the receive path.
+- `welcome_ack` on the server now runs its confirmed-epoch update and pending-message delete inside a single transaction. A partial failure between the two writes can no longer leave a member marked confirmed while their pending messages remain queued.
+- `mark_conversation_read` on the server performs an explicit participant check before the update. Non-participants now receive an unauthorized response instead of a misleading success from a zero-row update.
+- `delete_all_sync_data` on the server surfaces per-file delete failures in the response instead of swallowing them silently. Each failed sync file is listed in the response body so the client can retry or report it.
+
 ## [0.6.0] - 2026-06-02
 
 ### Added
