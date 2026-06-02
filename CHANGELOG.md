@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-02
+
 ### Added
 - Voice and video calling between users via peer-to-peer WebRTC, including a call modal, an in-call overlay, and start-call buttons on the DM page. Call state is managed by an app-wide `CallProvider`, and signaling (offer, answer, ICE candidates, hangup) is carried over the existing WebSocket connection.
 - Audio and Video settings section in the profile dialog, providing device pickers for camera, microphone, and speaker, persisted user preferences, and an in-app media-permissions diagnostic.
