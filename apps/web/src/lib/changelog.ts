@@ -35,8 +35,8 @@ function summarize(sections: ChangelogSection[]): string {
   return (lastSpace > 80 ? cut.slice(0, lastSpace) : cut) + '…'
 }
 
-export function loadChangelog(): ChangelogRelease[] {
-  const lines = raw.split(/\r?\n/)
+export function parseChangelog(source: string): ChangelogRelease[] {
+  const lines = source.split(/\r?\n/)
 
   const releases: Omit<ChangelogRelease, 'tag' | 'summary'>[] = []
   let current: { version: string; date: string; sections: ChangelogSection[] } | null = null
@@ -92,4 +92,8 @@ export function loadChangelog(): ChangelogRelease[] {
       sections: r.sections,
     }
   })
+}
+
+export function loadChangelog(): ChangelogRelease[] {
+  return parseChangelog(raw)
 }
