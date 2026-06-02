@@ -9,14 +9,22 @@ export type CallStatus =
 
 export type CallMode = 'audio' | 'video'
 
+export type CallParticipantState = Readonly<{
+  userId: string
+  isSelf: boolean
+  micEnabled: boolean
+  cameraEnabled: boolean
+  joinedAt: number | null
+}>
+
 export type CallSnapshot = Readonly<{
   status: CallStatus
   mode: CallMode
   conversationId: string | null
-  peerUserId: string | null
+  conversationType: 'dm' | 'group'
   error: string | null
-  micEnabled: boolean
-  cameraEnabled: boolean
+  participants: ReadonlyArray<CallParticipantState>
+  callStartedAt: number | null
 }>
 
 export type CallConfig = Readonly<{

@@ -287,7 +287,7 @@ describe('CallManager state machine', () => {
     expect(audio.enabled).toBe(true)
     manager.toggleMic()
     expect(audio.enabled).toBe(false)
-    expect(manager.state.micEnabled).toBe(false)
+    expect(manager.state.participants.find((p) => p.isSelf)?.micEnabled).toBe(false)
   })
 
   it('toggleCamera flips video track enabled on a video call', async () => {
@@ -298,7 +298,7 @@ describe('CallManager state machine', () => {
     expect(video.enabled).toBe(true)
     manager.toggleCamera()
     expect(video.enabled).toBe(false)
-    expect(manager.state.cameraEnabled).toBe(false)
+    expect(manager.state.participants.find((p) => p.isSelf)?.cameraEnabled).toBe(false)
   })
 
   it('endCall from error state resets to idle without throwing or sending an End', async () => {

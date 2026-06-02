@@ -12,6 +12,7 @@ import { WebSocketProvider } from '@/contexts/WebSocketContext'
 import { CallProvider } from '@/contexts/CallContext'
 import IncomingCallModal from '@/components/calls/IncomingCallModal'
 import InCallView from '@/components/calls/InCallView'
+import FloatingCallWindow from '@/components/calls/FloatingCallWindow'
 
 import SplashPage from './pages/SplashPage'
 import AuthPage from './pages/AuthPage'
@@ -189,6 +190,7 @@ export default function App() {
         <WebSocketProvider enabled={!!session && hasProfile && !vaultError}>
         <CallProvider>
         <IncomingCallModal vaultReady={!!session && hasProfile && !vaultError} />
+        <FloatingCallWindow />
         <InCallView />
         <Routes>
           <Route path="/splash" element={<SplashPage />} />

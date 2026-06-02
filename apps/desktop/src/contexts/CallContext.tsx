@@ -5,6 +5,7 @@ import {
   useEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type ReactNode,
 } from 'react'
@@ -28,11 +29,13 @@ const IDLE_SNAPSHOT: CallSnapshot = Object.freeze({
   status: 'idle',
   mode: 'audio',
   conversationId: null,
-  peerUserId: null,
+  conversationType: 'dm',
   error: null,
-  micEnabled: true,
-  cameraEnabled: true,
+  participants: Object.freeze([]),
+  callStartedAt: null,
 })
+
+export type CallDisplayMode = 'floating' | 'expanded'
 
 interface CallContextValue {
   snapshot: CallSnapshot
@@ -44,6 +47,8 @@ interface CallContextValue {
   toggleCamera: () => void
   getLocalStream: () => MediaStream | null
   getRemoteStream: () => MediaStream | null
+  displayMode: CallDisplayMode
+  setDisplayMode: (mode: CallDisplayMode) => void
 }
 
 const CallContext = createContext<CallContextValue | null>(null)
@@ -57,6 +62,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const managerRef = useRef<CallManager | null>(null)
   const snapshotRef = useRef<CallSnapshot>(IDLE_SNAPSHOT)
   const reactSubscribersRef = useRef<Set<() => void>>(new Set())
+  const [displayMode, setDisplayMode] = useState<CallDisplayMode>('floating')
 
   useEffect(() => {
     const media = new MediaStreamManager()
@@ -95,6 +101,13 @@ export function CallProvider({ children }: { children: ReactNode }) {
 
   const snapshot = useSyncExternalStore(externalSubscribe, getSnapshot, getSnapshot)
 
+  // Reset display mode to 'floating' whenever a call ends or none is in flight.
+  useEffect(() => {
+    if (snapshot.status === 'idle' || snapshot.status === 'ended') {
+      setDisplayMode('floating')
+    }
+  }, [snapshot.status])
+
   const value = useMemo<CallContextValue>(
     () => ({
       snapshot,
@@ -106,8 +119,10 @@ export function CallProvider({ children }: { children: ReactNode }) {
       toggleCamera: () => managerRef.current?.toggleCamera(),
       getLocalStream: () => managerRef.current?.getLocalStream() ?? null,
       getRemoteStream: () => managerRef.current?.getRemoteStream() ?? null,
+      displayMode,
+      setDisplayMode,
     }),
-    [snapshot],
+    [snapshot, displayMode],
   )
 
   return <CallContext.Provider value={value}>{children}</CallContext.Provider>
