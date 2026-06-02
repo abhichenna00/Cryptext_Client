@@ -8,11 +8,27 @@ import type {
   IcePayload,
   CallAcceptedElsewherePayload,
 } from './CallSignalingChannel'
-import type { CallConfig, CallMode, CallSnapshot, CallStatus } from './types'
+import type {
+  CallConfig,
+  CallMode,
+  CallParticipantState,
+  CallSnapshot,
+  CallStatus,
+} from './types'
 import { CALL_TRANSITIONS } from './types'
 import type { MediaStreamManager } from './MediaStreamManager'
 
 type SnapshotHandler = (snapshot: CallSnapshot) => void
+
+const SELF_ID = 'self'
+
+type MutableParticipant = {
+  userId: string
+  isSelf: boolean
+  micEnabled: boolean
+  cameraEnabled: boolean
+  joinedAt: number | null
+}
 
 export class CallManager {
   #signaling: CallSignalingChannel
@@ -22,10 +38,10 @@ export class CallManager {
   #status: CallStatus = 'idle'
   #mode: CallMode = 'audio'
   #conversationId: string | null = null
-  #peerUserId: string | null = null
+  #conversationType: 'dm' | 'group' = 'dm'
   #errorMessage: string | null = null
-  #micEnabled = true
-  #cameraEnabled = true
+  #participants: MutableParticipant[] = []
+  #callStartedAt: number | null = null
 
   #peerConnection: RTCPeerConnection | null = null
   #localStream: MediaStream | null = null
@@ -69,13 +85,20 @@ export class CallManager {
     return this.#remoteStream
   }
 
-  async startCall(conversationId: string, peerUserId: string, mode: CallMode): Promise<void> {
+  async startCall(
+    conversationId: string,
+    peerUserId: string,
+    mode: CallMode,
+    conversationType: 'dm' | 'group' = 'dm',
+  ): Promise<void> {
     this.#transitionTo('outgoing-ringing')
     this.#mode = mode
     this.#conversationId = conversationId
-    this.#peerUserId = peerUserId
-    this.#micEnabled = true
-    this.#cameraEnabled = mode === 'video'
+    this.#conversationType = conversationType
+    this.#participants = [
+      this.#makeSelfParticipant(mode),
+      this.#makePeerParticipant(peerUserId, mode),
+    ]
     this.#emit()
 
     try {
@@ -163,18 +186,22 @@ export class CallManager {
 
   toggleMic(): void {
     if (!this.#localStream) return
-    this.#micEnabled = !this.#micEnabled
+    const self = this.#participants.find((p) => p.isSelf)
+    if (!self) return
+    self.micEnabled = !self.micEnabled
     for (const track of this.#localStream.getAudioTracks()) {
-      track.enabled = this.#micEnabled
+      track.enabled = self.micEnabled
     }
     this.#emit()
   }
 
   toggleCamera(): void {
     if (!this.#localStream) return
-    this.#cameraEnabled = !this.#cameraEnabled
+    const self = this.#participants.find((p) => p.isSelf)
+    if (!self) return
+    self.cameraEnabled = !self.cameraEnabled
     for (const track of this.#localStream.getVideoTracks()) {
-      track.enabled = this.#cameraEnabled
+      track.enabled = self.cameraEnabled
     }
     this.#emit()
   }
@@ -204,6 +231,11 @@ export class CallManager {
       console.info('[call] pc connectionState=', cs)
       if (cs === 'connected' && this.#status === 'connecting') {
         this.#transitionTo('in-call')
+        const now = Date.now()
+        this.#callStartedAt = now
+        for (const p of this.#participants) {
+          if (p.joinedAt === null) p.joinedAt = now
+        }
         this.#emit()
       } else if (cs === 'failed' || cs === 'disconnected' || cs === 'closed') {
         if (this.#status === 'in-call' || this.#status === 'connecting') {
@@ -223,10 +255,12 @@ export class CallManager {
     this.#transitionTo('incoming-ringing')
     this.#mode = this.#inferModeFromSdp(payload.sdp)
     this.#conversationId = payload.conversationId
-    this.#peerUserId = payload.fromUserId
+    this.#conversationType = 'dm'
     this.#pendingRemoteOffer = payload.sdp
-    this.#micEnabled = true
-    this.#cameraEnabled = this.#mode === 'video'
+    this.#participants = [
+      this.#makeSelfParticipant(this.#mode),
+      this.#makePeerParticipant(payload.fromUserId, this.#mode),
+    ]
     console.info('[call] inbound invite received')
     this.#emit()
   }
@@ -315,6 +349,7 @@ export class CallManager {
     if (this.#status !== 'error' && CALL_TRANSITIONS[this.#status].includes('error')) {
       this.#transitionTo('error')
     }
+    this.#callStartedAt = null
     this.#cleanup()
     this.#emit()
   }
@@ -322,12 +357,32 @@ export class CallManager {
   #resetToIdle(): void {
     this.#transitionTo('idle')
     this.#conversationId = null
-    this.#peerUserId = null
+    this.#conversationType = 'dm'
     this.#errorMessage = null
-    this.#micEnabled = true
-    this.#cameraEnabled = true
+    this.#participants = []
+    this.#callStartedAt = null
     this.#mode = 'audio'
     this.#emit()
+  }
+
+  #makeSelfParticipant(mode: CallMode): MutableParticipant {
+    return {
+      userId: SELF_ID,
+      isSelf: true,
+      micEnabled: true,
+      cameraEnabled: mode === 'video',
+      joinedAt: null,
+    }
+  }
+
+  #makePeerParticipant(userId: string, mode: CallMode): MutableParticipant {
+    return {
+      userId,
+      isSelf: false,
+      micEnabled: true,
+      cameraEnabled: mode === 'video',
+      joinedAt: null,
+    }
   }
 
   #inferModeFromSdp(sdp: RTCSessionDescriptionInit): CallMode {
@@ -335,14 +390,23 @@ export class CallManager {
   }
 
   #snapshot(): Readonly<CallSnapshot> {
+    const participants: ReadonlyArray<CallParticipantState> = this.#participants.map((p) =>
+      Object.freeze({
+        userId: p.userId,
+        isSelf: p.isSelf,
+        micEnabled: p.micEnabled,
+        cameraEnabled: p.cameraEnabled,
+        joinedAt: p.joinedAt,
+      }),
+    )
     return Object.freeze({
       status: this.#status,
       mode: this.#mode,
       conversationId: this.#conversationId,
-      peerUserId: this.#peerUserId,
+      conversationType: this.#conversationType,
       error: this.#errorMessage,
-      micEnabled: this.#micEnabled,
-      cameraEnabled: this.#cameraEnabled,
+      participants: Object.freeze(participants),
+      callStartedAt: this.#callStartedAt,
     })
   }
 

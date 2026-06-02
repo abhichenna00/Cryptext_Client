@@ -1,7 +1,9 @@
-import { Phone, PhoneOff, Video } from 'lucide-react'
+import { Phone, PhoneOff } from 'lucide-react'
 
+import Avatar from '@/components/Avatar'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { useCall } from '@/contexts/CallContext'
+import { useCallParticipants } from '@/hooks'
 
 interface IncomingCallModalProps {
   vaultReady: boolean
@@ -9,8 +11,11 @@ interface IncomingCallModalProps {
 
 export default function IncomingCallModal({ vaultReady }: IncomingCallModalProps) {
   const { snapshot, acceptCall, declineCall } = useCall()
+  const participants = useCallParticipants()
   const open = snapshot.status === 'incoming-ringing'
-  const Icon = snapshot.mode === 'video' ? Video : Phone
+
+  const peer = participants.find((p) => !p.isSelf)
+  const peerName = peer?.nickname ?? peer?.userId ?? 'someone'
 
   const handleAccept = () => {
     acceptCall().catch((err) => console.error('[call] acceptCall failed:', err))
@@ -26,9 +31,14 @@ export default function IncomingCallModal({ vaultReady }: IncomingCallModalProps
         showCloseButton={false}
         className="grid w-[360px] gap-4 p-6 text-center"
       >
-        <div className="grid place-items-center">
-          <div className="grid size-16 place-items-center rounded-full bg-surface-2 text-fg">
-            <Icon size={28} strokeWidth={1.75} />
+        <div className="grid place-items-center gap-3">
+          <Avatar
+            src={peer?.avatarUrl}
+            fallback={peer?.nickname ?? peer?.userId ?? '?'}
+            size="lg"
+          />
+          <div className="text-[14px] font-semibold tracking-[-0.005em] text-fg">
+            {peerName}
           </div>
         </div>
         <div>
@@ -37,7 +47,7 @@ export default function IncomingCallModal({ vaultReady }: IncomingCallModalProps
           </DialogTitle>
           <p className="mt-1 text-[12.5px] text-fg-muted">
             {vaultReady
-              ? `From ${snapshot.peerUserId || 'someone'}.`
+              ? `From ${peerName}.`
               : 'Local storage is locked — sign in to accept.'}
           </p>
         </div>
