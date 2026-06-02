@@ -28,7 +28,7 @@ jobs:
   build:
     runs-on: self-hosted
     permissions:
-      contents: read
+      contents: write
     outputs:
       version: ${{ steps.version.outputs.version }}
       changelog: ${{ steps.changelog.outputs.changelog }}
@@ -38,6 +38,7 @@ jobs:
         with:
           fetch-depth: 0
           clean: false
+          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Calculate version from latest tag
         id: version
@@ -103,6 +104,41 @@ jobs:
 
             console.log('Injected version: ${VERSION}');
           "
+
+      - name: Promote Unreleased section in CHANGELOG.md
+        run: |
+          export PATH="/usr/bin:$PATH"
+          VERSION="${{ steps.version.outputs.version }}"
+          DATE=$(date -u +"%Y-%m-%d")
+
+          node -e "
+            const fs = require('fs');
+            const path = 'CHANGELOG.md';
+            const version = '${VERSION}';
+            const date = '${DATE}';
+            const src = fs.readFileSync(path, 'utf8');
+            const marker = '## [Unreleased]';
+            const idx = src.indexOf(marker);
+            if (idx === -1) {
+              console.log('No [Unreleased] section found, skipping promotion.');
+              process.exit(0);
+            }
+            const before = src.slice(0, idx);
+            const after = src.slice(idx + marker.length);
+            const replacement = '## [Unreleased]\n\n## [' + version + '] - ' + date;
+            fs.writeFileSync(path, before + replacement + after);
+            console.log('Promoted Unreleased to ' + version + ' - ' + date);
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if git diff --cached --quiet; then
+            echo "No CHANGELOG changes to commit."
+          else
+            git commit -m "chore(changelog): promote Unreleased to ${VERSION}"
+            git push origin HEAD:main
+          fi
 
       - name: Extract changelog for current version
         id: changelog
