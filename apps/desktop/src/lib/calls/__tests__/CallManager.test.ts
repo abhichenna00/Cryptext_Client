@@ -217,7 +217,14 @@ beforeEach(() => {
 
   Object.defineProperty(globalThis, 'navigator', {
     value: {
-      mediaDevices: { getUserMedia, enumerateDevices: vi.fn(async () => []) },
+      mediaDevices: {
+        getUserMedia,
+        // Default to both input kinds present so acquisition is attempted;
+        // individual tests override to model a device-less machine.
+        enumerateDevices: vi.fn(
+          async () => [{ kind: 'audioinput' }, { kind: 'videoinput' }] as unknown as MediaDeviceInfo[],
+        ),
+      },
       // Default to a granted mic permission so the "join with mic if already
       // granted" rule acquires audio; individual tests override as needed.
       permissions: { query: vi.fn(async () => ({ state: 'granted' })) },
@@ -230,7 +237,10 @@ beforeEach(() => {
 // without reaching for `any`.
 type NavOverride = {
   permissions: { query: (descriptor: unknown) => Promise<{ state: string }> }
-  mediaDevices: { getUserMedia: (constraints: MediaStreamConstraints) => Promise<unknown> }
+  mediaDevices: {
+    getUserMedia: (constraints: MediaStreamConstraints) => Promise<unknown>
+    enumerateDevices: () => Promise<unknown[]>
+  }
 }
 function navOverride(): NavOverride {
   return navigator as unknown as NavOverride
@@ -326,8 +336,10 @@ describe('CallManager state machine', () => {
   })
 
   it('joins receive-only with recvonly transceivers when no mic or camera exists', async () => {
+    // No input devices on this machine — capture should not even be attempted.
+    navOverride().mediaDevices.enumerateDevices = vi.fn(async () => [])
     navOverride().mediaDevices.getUserMedia = vi.fn(async () => {
-      throw new Error('NotFoundError')
+      throw new Error('getUserMedia should not be called when no devices exist')
     })
     const { signaling, manager } = build()
     await manager.startCall('conv-1', 'peer-1', 'video')

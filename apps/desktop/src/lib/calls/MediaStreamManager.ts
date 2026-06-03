@@ -30,32 +30,53 @@ export class MediaStreamManager {
     return stream
   }
 
+  /** enumerateDevices, swallowing failures so "can't tell" degrades to "no
+   *  devices" (a receive-only join) rather than throwing. */
+  async #safeEnumerate(): Promise<MediaDeviceInfo[]> {
+    try {
+      return await navigator.mediaDevices.enumerateDevices()
+    } catch {
+      return []
+    }
+  }
+
+  /** getUserMedia that resolves to null instead of rejecting. */
+  async #tryGetUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream | null> {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch {
+      return null
+    }
+  }
+
   /**
-   * Acquire whatever of audio/video is actually available, requesting each
-   * kind separately so a missing camera can't sink the mic (a single
-   * getUserMedia call rejects wholesale if either device is absent). Returns a
-   * stream with zero, one, or both track kinds — the caller adds recvonly
-   * transceivers for whatever's missing so the peer's media still flows.
+   * Acquire whatever of audio/video is actually available. Each kind is only
+   * attempted when a device of that kind exists, so a device-less machine (a
+   * headless VM, say) never trips NotFoundError/OverconstrainedError. The saved
+   * preferred device is tried first, falling back to the default device — a
+   * preference pointing at an absent device otherwise overconstrains and throws
+   * "Invalid constraint". Returns a stream with zero, one, or both track kinds;
+   * the caller adds recvonly transceivers for whatever's missing so the peer's
+   * media still flows.
    */
   async acquireGraceful(want: { audio: boolean; video: boolean }): Promise<MediaStream> {
     const preferred = this.getPreferredConstraints('video')
+    const devices = await this.#safeEnumerate()
+    const hasMic = devices.some((d) => d.kind === 'audioinput')
+    const hasCam = devices.some((d) => d.kind === 'videoinput')
     const stream = new MediaStream()
 
-    if (want.audio) {
-      try {
-        const a = await navigator.mediaDevices.getUserMedia({ audio: preferred.audio, video: false })
-        for (const t of a.getAudioTracks()) stream.addTrack(t)
-      } catch {
-        // No mic, or permission not granted — join without audio.
-      }
+    if (want.audio && hasMic) {
+      const audio =
+        (await this.#tryGetUserMedia({ audio: preferred.audio, video: false })) ??
+        (await this.#tryGetUserMedia({ audio: true, video: false }))
+      if (audio) for (const t of audio.getAudioTracks()) stream.addTrack(t)
     }
-    if (want.video) {
-      try {
-        const v = await navigator.mediaDevices.getUserMedia({ audio: false, video: preferred.video })
-        for (const t of v.getVideoTracks()) stream.addTrack(t)
-      } catch {
-        // No camera, or permission not granted — join without video.
-      }
+    if (want.video && hasCam) {
+      const video =
+        (await this.#tryGetUserMedia({ audio: false, video: preferred.video })) ??
+        (await this.#tryGetUserMedia({ audio: false, video: true }))
+      if (video) for (const t of video.getVideoTracks()) stream.addTrack(t)
     }
 
     this.#activeStreams.add(stream)
