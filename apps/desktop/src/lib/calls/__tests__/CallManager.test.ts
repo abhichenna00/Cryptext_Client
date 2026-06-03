@@ -285,6 +285,47 @@ describe('CallManager state machine', () => {
     expect(signaling.sent.some((m) => m.kind === 'answer')).toBe(true)
   })
 
+  it('buffers ICE candidates that arrive before the remote description, then flushes them in order', async () => {
+    const { signaling, manager } = build()
+    signaling.triggerInvite({
+      conversationId: 'conv-1',
+      fromUserId: 'peer-1',
+      fromDeviceId: 'dev-1',
+      sdp: { type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' },
+    })
+
+    // Candidates arrive while still ringing (no peer connection / remote
+    // description yet) — they must be buffered, not dropped.
+    signaling.triggerIce({
+      conversationId: 'conv-1',
+      fromUserId: 'peer-1',
+      fromDeviceId: 'dev-1',
+      candidate: { candidate: 'cand-A' },
+    })
+    signaling.triggerIce({
+      conversationId: 'conv-1',
+      fromUserId: 'peer-1',
+      fromDeviceId: 'dev-1',
+      candidate: { candidate: 'cand-B' },
+    })
+
+    await manager.acceptCall()
+
+    const pc = FakePeerConnection.instances[0]
+    expect(pc.iceCandidatesAdded.map((c) => c.candidate)).toEqual(['cand-A', 'cand-B'])
+
+    // Candidates arriving after the remote description is set go straight through.
+    signaling.triggerIce({
+      conversationId: 'conv-1',
+      fromUserId: 'peer-1',
+      fromDeviceId: 'dev-1',
+      candidate: { candidate: 'cand-C' },
+    })
+    // Let the async addIceCandidate settle.
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(pc.iceCandidatesAdded.map((c) => c.candidate)).toContain('cand-C')
+  })
+
   it('endCall from in-call stops local tracks and closes the peer connection', async () => {
     const { signaling, manager } = build()
     signaling.triggerInvite({
