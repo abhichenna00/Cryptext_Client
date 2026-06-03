@@ -134,6 +134,7 @@ class FakePeerConnection {
   closed = false
   iceCandidatesAdded: RTCIceCandidateInit[] = []
   addedTracks: FakeTrack[] = []
+  transceivers: Array<{ kind: string; direction: string }> = []
   connectionState: RTCPeerConnectionState = 'new'
   #listeners: Record<string, Set<(ev: unknown) => void>> = {}
 
@@ -143,6 +144,12 @@ class FakePeerConnection {
 
   addTrack(track: FakeTrack, _stream: FakeStream) {
     this.addedTracks.push(track)
+  }
+
+  addTransceiver(kind: string, init?: { direction?: string }) {
+    const direction = init?.direction ?? 'sendrecv'
+    this.transceivers.push({ kind, direction })
+    return { direction }
   }
 
   async createOffer(): Promise<RTCSessionDescriptionInit> {
@@ -209,10 +216,25 @@ beforeEach(() => {
   })
 
   Object.defineProperty(globalThis, 'navigator', {
-    value: { mediaDevices: { getUserMedia, enumerateDevices: vi.fn(async () => []) } },
+    value: {
+      mediaDevices: { getUserMedia, enumerateDevices: vi.fn(async () => []) },
+      // Default to a granted mic permission so the "join with mic if already
+      // granted" rule acquires audio; individual tests override as needed.
+      permissions: { query: vi.fn(async () => ({ state: 'granted' })) },
+    },
     configurable: true,
   })
 })
+
+// Narrow handle for tests that need to override the stubbed navigator surface
+// without reaching for `any`.
+type NavOverride = {
+  permissions: { query: (descriptor: unknown) => Promise<{ state: string }> }
+  mediaDevices: { getUserMedia: (constraints: MediaStreamConstraints) => Promise<unknown> }
+}
+function navOverride(): NavOverride {
+  return navigator as unknown as NavOverride
+}
 
 function build() {
   const signaling = new FakeCallSignaling()
@@ -290,15 +312,52 @@ describe('CallManager state machine', () => {
     expect(manager.state.participants.find((p) => p.isSelf)?.micEnabled).toBe(false)
   })
 
-  it('toggleCamera flips video track enabled on a video call', async () => {
+  it('video call starts camera-off and toggleCamera enables it', async () => {
     const { manager } = build()
     await manager.startCall('conv-1', 'peer-1', 'video')
     const stream = FakeMediaStreamGlobal.lastStream!
     const video = stream.getVideoTracks()[0]
-    expect(video.enabled).toBe(true)
-    manager.toggleCamera()
+    // Camera off by default: the track is acquired but starts disabled.
     expect(video.enabled).toBe(false)
     expect(manager.state.participants.find((p) => p.isSelf)?.cameraEnabled).toBe(false)
+    manager.toggleCamera()
+    expect(video.enabled).toBe(true)
+    expect(manager.state.participants.find((p) => p.isSelf)?.cameraEnabled).toBe(true)
+  })
+
+  it('joins receive-only with recvonly transceivers when no mic or camera exists', async () => {
+    navOverride().mediaDevices.getUserMedia = vi.fn(async () => {
+      throw new Error('NotFoundError')
+    })
+    const { signaling, manager } = build()
+    await manager.startCall('conv-1', 'peer-1', 'video')
+
+    expect(manager.state.status).toBe('outgoing-ringing')
+    expect(manager.state.localAudioAvailable).toBe(false)
+    expect(manager.state.localVideoAvailable).toBe(false)
+    expect(signaling.sent.some((m) => m.kind === 'invite')).toBe(true)
+
+    const pc = FakePeerConnection.instances[0]
+    expect(pc.addedTracks).toHaveLength(0)
+    expect(pc.transceivers.map((t) => t.kind).sort()).toEqual(['audio', 'video'])
+    expect(pc.transceivers.every((t) => t.direction === 'recvonly')).toBe(true)
+
+    // Toggles are no-ops without any local track.
+    manager.toggleMic()
+    manager.toggleCamera()
+    expect(manager.state.participants.find((p) => p.isSelf)?.micEnabled).toBe(false)
+    expect(manager.state.participants.find((p) => p.isSelf)?.cameraEnabled).toBe(false)
+  })
+
+  it('joins muted when mic permission is not already granted', async () => {
+    navOverride().permissions.query = vi.fn(async () => ({ state: 'prompt' }))
+    const { manager } = build()
+    await manager.startCall('conv-1', 'peer-1', 'audio')
+
+    expect(manager.state.localAudioAvailable).toBe(false)
+    expect(manager.state.participants.find((p) => p.isSelf)?.micEnabled).toBe(false)
+    const pc = FakePeerConnection.instances[0]
+    expect(pc.transceivers).toEqual([{ kind: 'audio', direction: 'recvonly' }])
   })
 
   it('endCall from error state resets to idle without throwing or sending an End', async () => {

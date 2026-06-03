@@ -185,6 +185,8 @@ export default function InCallView() {
 
   const micOn = selfParticipant?.micEnabled ?? true
   const camOn = selfParticipant?.cameraEnabled ?? true
+  const micAvailable = snapshot.localAudioAvailable
+  const camAvailable = snapshot.localVideoAvailable
 
   const handleEnd = () => {
     endCall().catch((err) => console.error('[call] endCall failed:', err))
@@ -309,11 +311,13 @@ export default function InCallView() {
           <button
             type="button"
             onClick={toggleMic}
+            disabled={!micAvailable}
             className={cn(
               'relative grid size-11 place-items-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/15',
               !micOn && 'bg-[var(--danger)]/80 hover:bg-[var(--danger)]',
+              'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white/10',
             )}
-            title={micOn ? 'Mute mic' : 'Unmute mic'}
+            title={!micAvailable ? 'No microphone' : micOn ? 'Mute mic' : 'Unmute mic'}
           >
             {micOn ? <Mic size={18} /> : <MicOff size={18} />}
           </button>
@@ -322,11 +326,13 @@ export default function InCallView() {
           <button
             type="button"
             onClick={toggleCamera}
+            disabled={!camAvailable}
             className={cn(
               'grid size-11 place-items-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/15',
               !camOn && 'bg-[var(--danger)]/80 hover:bg-[var(--danger)]',
+              'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white/10',
             )}
-            title={camOn ? 'Turn off camera' : 'Turn on camera'}
+            title={!camAvailable ? 'No camera' : camOn ? 'Turn off camera' : 'Turn on camera'}
           >
             {camOn ? <Video size={18} /> : <VideoOff size={18} />}
           </button>

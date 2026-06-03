@@ -25,6 +25,10 @@ export type CallSnapshot = Readonly<{
   error: string | null
   participants: ReadonlyArray<CallParticipantState>
   callStartedAt: number | null
+  /** True when the local user has a usable mic track (can mute/unmute). */
+  localAudioAvailable: boolean
+  /** True when the local user has a usable camera track (can enable video). */
+  localVideoAvailable: boolean
 }>
 
 export type CallConfig = Readonly<{

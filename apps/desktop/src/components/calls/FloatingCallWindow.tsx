@@ -109,6 +109,39 @@ export default function FloatingCallWindow() {
   const selfStream = visible ? getLocalStream() : null
   const selfAudioLevel = useAudioLevel(selfParticipant?.micEnabled ? selfStream : null)
 
+  // A failed call lands in `error`, which no active-call view renders. Surface a
+  // dismissible card so the user gets feedback and `endCall()` can reset the
+  // machine to idle — otherwise the call buttons stay disabled indefinitely.
+  if (snapshot.status === 'error') {
+    const failedPeer = peerParticipant?.nickname ?? peerParticipant?.userId ?? 'the other person'
+    return (
+      <div
+        role="alert"
+        style={{ position: 'fixed', right: EDGE_MARGIN, bottom: EDGE_MARGIN, width: 280, zIndex: 50 }}
+        className="overflow-hidden rounded-lg border border-[var(--danger)]/40 bg-black text-white shadow-lg"
+      >
+        <div className="flex items-center gap-3 px-3 py-2.5">
+          <div className="grid size-8 shrink-0 place-items-center rounded-full bg-[var(--danger)]/20 text-[var(--danger)]">
+            <PhoneOff size={15} />
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-semibold">Call failed</div>
+            <div className="truncate text-[11px] text-white/60">
+              {snapshot.error ?? `Couldn’t connect to ${failedPeer}`}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => endCall().catch((err) => console.error('[call] endCall failed:', err))}
+            className="rounded-md px-2 py-1 text-[12px] font-medium text-white/80 hover:bg-white/10 hover:text-white"
+          >
+            Dismiss
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   if (!visible) return null
 
   const statusLabel =
@@ -121,6 +154,8 @@ export default function FloatingCallWindow() {
   const peerName = peerParticipant?.nickname ?? peerParticipant?.userId ?? 'Unknown'
   const micOn = selfParticipant?.micEnabled ?? true
   const camOn = selfParticipant?.cameraEnabled ?? true
+  const micAvailable = snapshot.localAudioAvailable
+  const camAvailable = snapshot.localVideoAvailable
 
   const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).closest('button')) return
@@ -192,22 +227,26 @@ export default function FloatingCallWindow() {
             <button
               type="button"
               onClick={toggleMic}
+              disabled={!micAvailable}
               className={cn(
                 'grid size-8 place-items-center rounded-full bg-white/10 hover:bg-white/20',
                 !micOn && 'bg-[var(--danger)]/80 hover:bg-[var(--danger)]',
+                'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white/10',
               )}
-              title={micOn ? 'Mute mic' : 'Unmute mic'}
+              title={!micAvailable ? 'No microphone' : micOn ? 'Mute mic' : 'Unmute mic'}
             >
               {micOn ? <Mic size={14} /> : <MicOff size={14} />}
             </button>
             <button
               type="button"
               onClick={toggleCamera}
+              disabled={!camAvailable}
               className={cn(
                 'grid size-8 place-items-center rounded-full bg-white/10 hover:bg-white/20',
                 !camOn && 'bg-[var(--danger)]/80 hover:bg-[var(--danger)]',
+                'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white/10',
               )}
-              title={camOn ? 'Turn off camera' : 'Turn on camera'}
+              title={!camAvailable ? 'No camera' : camOn ? 'Turn off camera' : 'Turn on camera'}
             >
               {camOn ? <Video size={14} /> : <VideoOff size={14} />}
             </button>
@@ -256,11 +295,13 @@ export default function FloatingCallWindow() {
             <button
               type="button"
               onClick={toggleMic}
+              disabled={!micAvailable}
               className={cn(
                 'relative grid size-8 place-items-center rounded-full bg-white/10 hover:bg-white/20',
                 !micOn && 'bg-[var(--danger)]/80 hover:bg-[var(--danger)]',
+                'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-white/10',
               )}
-              title={micOn ? 'Mute mic' : 'Unmute mic'}
+              title={!micAvailable ? 'No microphone' : micOn ? 'Mute mic' : 'Unmute mic'}
             >
               {micOn ? <Mic size={14} /> : <MicOff size={14} />}
             </button>

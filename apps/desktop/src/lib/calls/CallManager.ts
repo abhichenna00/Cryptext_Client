@@ -96,24 +96,25 @@ export class CallManager {
     this.#conversationId = conversationId
     this.#conversationType = conversationType
     this.#participants = [
-      this.#makeSelfParticipant(mode),
-      this.#makePeerParticipant(peerUserId, mode),
+      this.#makeSelfParticipant(),
+      this.#makePeerParticipant(peerUserId),
     ]
     this.#emit()
 
     try {
-      const constraints: MediaStreamConstraints = {
-        audio: true,
-        video: mode === 'video',
-      }
-      this.#localStream = await this.#media.acquireLocalStream(constraints)
+      const wantAudio = await this.#micPermissionGranted()
+      this.#localStream = await this.#media.acquireGraceful({ audio: wantAudio, video: mode === 'video' })
+      // Camera off by default: keep any acquired video track but disabled, so
+      // enabling it in-call is a track flip rather than a renegotiation (which
+      // the signaling channel doesn't support).
+      for (const track of this.#localStream.getVideoTracks()) track.enabled = false
+      this.#applyLocalTrackStateToSelf()
       const pc = this.#createPeerConnection()
-      for (const track of this.#localStream.getTracks()) {
-        pc.addTrack(track, this.#localStream)
-      }
+      this.#addLocalMedia(pc, mode)
       const offer = await pc.createOffer()
       await pc.setLocalDescription(offer)
       await this.#signaling.sendInvite(conversationId, offer)
+      this.#emit()
     } catch (err) {
       this.#failWith(err)
       throw err
@@ -127,25 +128,31 @@ export class CallManager {
     if (!this.#pendingRemoteOffer || !this.#conversationId) {
       throw new Error('acceptCall: no pending invite')
     }
+    // Capture before the awaits below — `this.#` field narrowing doesn't survive
+    // an await, and these are cleared/used asynchronously.
+    const pendingOffer = this.#pendingRemoteOffer
+    const convId = this.#conversationId
 
     this.#transitionTo('connecting')
     this.#emit()
 
     try {
-      const constraints: MediaStreamConstraints = {
-        audio: true,
-        video: this.#mode === 'video',
-      }
-      this.#localStream = await this.#media.acquireLocalStream(constraints)
+      const wantAudio = await this.#micPermissionGranted()
+      this.#localStream = await this.#media.acquireGraceful({ audio: wantAudio, video: this.#mode === 'video' })
+      for (const track of this.#localStream.getVideoTracks()) track.enabled = false
+      this.#applyLocalTrackStateToSelf()
       const pc = this.#createPeerConnection()
-      await pc.setRemoteDescription(this.#pendingRemoteOffer)
+      await pc.setRemoteDescription(pendingOffer)
       this.#pendingRemoteOffer = null
+      // Attach whatever we have. Kinds the offer included but we can't send stay
+      // recvonly in our answer, so we still receive the caller's media.
       for (const track of this.#localStream.getTracks()) {
         pc.addTrack(track, this.#localStream)
       }
       const answer = await pc.createAnswer()
       await pc.setLocalDescription(answer)
-      await this.#signaling.sendAnswer(this.#conversationId, answer)
+      await this.#signaling.sendAnswer(convId, answer)
+      this.#emit()
     } catch (err) {
       this.#failWith(err)
       throw err
@@ -185,25 +192,82 @@ export class CallManager {
   }
 
   toggleMic(): void {
-    if (!this.#localStream) return
+    const audioTracks = this.#localStream?.getAudioTracks() ?? []
+    if (audioTracks.length === 0) return // joined without a mic — nothing to toggle
     const self = this.#participants.find((p) => p.isSelf)
     if (!self) return
     self.micEnabled = !self.micEnabled
-    for (const track of this.#localStream.getAudioTracks()) {
+    for (const track of audioTracks) {
       track.enabled = self.micEnabled
     }
     this.#emit()
   }
 
   toggleCamera(): void {
-    if (!this.#localStream) return
+    const videoTracks = this.#localStream?.getVideoTracks() ?? []
+    if (videoTracks.length === 0) return // joined without a camera — nothing to toggle
     const self = this.#participants.find((p) => p.isSelf)
     if (!self) return
     self.cameraEnabled = !self.cameraEnabled
-    for (const track of this.#localStream.getVideoTracks()) {
+    for (const track of videoTracks) {
       track.enabled = self.cameraEnabled
     }
     this.#emit()
+  }
+
+  /**
+   * Honour the "join with mic live only if permission is already granted" rule:
+   * query — without prompting — whether mic permission is held. If the
+   * Permissions API can't answer (older WebKit, unsupported descriptor), default
+   * to not requesting audio, i.e. join muted rather than firing a prompt.
+   */
+  async #micPermissionGranted(): Promise<boolean> {
+    try {
+      const permissions = navigator.permissions
+      if (!permissions?.query) return false
+      const status = await permissions.query({
+        name: 'microphone',
+      } as unknown as PermissionDescriptor)
+      return status.state === 'granted'
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Attach available local tracks to the peer connection; for any kind we lack a
+   * track for, add a recvonly transceiver so the remote's media still reaches
+   * us. Audio is always negotiated; video only on a video call. Without this,
+   * a caller with no devices would send an offer carrying no media lines and
+   * nothing would flow in either direction.
+   */
+  #addLocalMedia(pc: RTCPeerConnection, mode: CallMode): void {
+    const stream = this.#localStream
+    const audioTracks = stream?.getAudioTracks() ?? []
+    const videoTracks = stream?.getVideoTracks() ?? []
+
+    if (stream && audioTracks.length > 0) {
+      for (const t of audioTracks) pc.addTrack(t, stream)
+    } else {
+      pc.addTransceiver('audio', { direction: 'recvonly' })
+    }
+
+    if (mode === 'video') {
+      if (stream && videoTracks.length > 0) {
+        for (const t of videoTracks) pc.addTrack(t, stream)
+      } else {
+        pc.addTransceiver('video', { direction: 'recvonly' })
+      }
+    }
+  }
+
+  /** Reflect the actually-acquired tracks onto the self participant: mic on iff
+   *  an audio track was acquired; camera always starts off (camera-off default). */
+  #applyLocalTrackStateToSelf(): void {
+    const self = this.#participants.find((p) => p.isSelf)
+    if (!self) return
+    self.micEnabled = (this.#localStream?.getAudioTracks().length ?? 0) > 0
+    self.cameraEnabled = false
   }
 
   #createPeerConnection(): RTCPeerConnection {
@@ -258,8 +322,8 @@ export class CallManager {
     this.#conversationType = 'dm'
     this.#pendingRemoteOffer = payload.sdp
     this.#participants = [
-      this.#makeSelfParticipant(this.#mode),
-      this.#makePeerParticipant(payload.fromUserId, this.#mode),
+      this.#makeSelfParticipant(),
+      this.#makePeerParticipant(payload.fromUserId),
     ]
     console.info('[call] inbound invite received')
     this.#emit()
@@ -290,7 +354,11 @@ export class CallManager {
 
   #handleRemoteEnd(payload: EndPayload): void {
     if (payload.conversationId !== this.#conversationId) return
-    if (this.#status === 'idle' || this.#status === 'ended') return
+    // Already terminal — including after a local failure left us in `error`,
+    // which `#failWith` does not clear `#conversationId` on. `error -> ended`
+    // is an illegal transition that would throw inside the WS subscriber and
+    // wedge the manager, so an inbound end is a no-op here.
+    if (this.#status === 'idle' || this.#status === 'ended' || this.#status === 'error') return
     this.#transitionTo('ended')
     this.#cleanup()
     this.#emit()
@@ -365,22 +433,22 @@ export class CallManager {
     this.#emit()
   }
 
-  #makeSelfParticipant(mode: CallMode): MutableParticipant {
+  #makeSelfParticipant(): MutableParticipant {
     return {
       userId: SELF_ID,
       isSelf: true,
       micEnabled: true,
-      cameraEnabled: mode === 'video',
+      cameraEnabled: false,
       joinedAt: null,
     }
   }
 
-  #makePeerParticipant(userId: string, mode: CallMode): MutableParticipant {
+  #makePeerParticipant(userId: string): MutableParticipant {
     return {
       userId,
       isSelf: false,
       micEnabled: true,
-      cameraEnabled: mode === 'video',
+      cameraEnabled: false,
       joinedAt: null,
     }
   }
@@ -407,6 +475,8 @@ export class CallManager {
       error: this.#errorMessage,
       participants: Object.freeze(participants),
       callStartedAt: this.#callStartedAt,
+      localAudioAvailable: (this.#localStream?.getAudioTracks().length ?? 0) > 0,
+      localVideoAvailable: (this.#localStream?.getVideoTracks().length ?? 0) > 0,
     })
   }
 
