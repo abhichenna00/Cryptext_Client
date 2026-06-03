@@ -1,6 +1,7 @@
 import { Phone, Video } from 'lucide-react'
 
 import { useCall } from '@/contexts/CallContext'
+import { isCallingSupported } from '@/lib/calls/support'
 import type { CallMode } from '@/lib/calls/types'
 import { cn } from '@/lib/utils'
 
@@ -18,11 +19,13 @@ export default function CallButton({
   title,
 }: CallButtonProps) {
   const { snapshot, startCall } = useCall()
+  const supported = isCallingSupported()
   const busy = snapshot.status !== 'idle'
+  const disabled = busy || !supported
   const Icon = mode === 'video' ? Video : Phone
 
   const handleClick = () => {
-    if (busy) return
+    if (disabled) return
     startCall(conversationId, peerUserId, mode).catch((err) => {
       console.error('[call] startCall failed:', err)
     })
@@ -32,8 +35,12 @@ export default function CallButton({
     <button
       type="button"
       onClick={handleClick}
-      disabled={busy}
-      title={title ?? (mode === 'video' ? 'Start video call' : 'Start audio call')}
+      disabled={disabled}
+      title={
+        !supported
+          ? "Calls aren't supported on this device"
+          : (title ?? (mode === 'video' ? 'Start video call' : 'Start audio call'))
+      }
       className={cn(
         'grid size-7 place-items-center rounded-md text-fg-muted transition-colors',
         'hover:bg-surface-2 hover:text-fg',

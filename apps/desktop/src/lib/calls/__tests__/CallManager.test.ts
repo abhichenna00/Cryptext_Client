@@ -266,6 +266,15 @@ describe('CallManager state machine', () => {
     expect(signaling.sent.some((m) => m.kind === 'invite')).toBe(true)
   })
 
+  it('startCall fails cleanly with no RTCPeerConnection (WebRTC-less webview)', async () => {
+    delete (globalThis as { RTCPeerConnection?: unknown }).RTCPeerConnection
+    const { signaling, manager } = build()
+    await expect(manager.startCall('conv-1', 'peer-1', 'audio')).rejects.toThrow(/not supported/i)
+    // Never left idle, and nothing went out over the wire.
+    expect(manager.state.status).toBe('idle')
+    expect(signaling.sent).toHaveLength(0)
+  })
+
   it('illegal acceptCall from idle throws', async () => {
     const { manager } = build()
     await expect(manager.acceptCall()).rejects.toThrow()

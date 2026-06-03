@@ -17,6 +17,9 @@ import type {
 } from './types'
 import { CALL_TRANSITIONS } from './types'
 import type { MediaStreamManager } from './MediaStreamManager'
+import { isCallingSupported } from './support'
+
+const UNSUPPORTED_MESSAGE = 'Voice and video calls are not supported on this device'
 
 type SnapshotHandler = (snapshot: CallSnapshot) => void
 
@@ -91,6 +94,9 @@ export class CallManager {
     mode: CallMode,
     conversationType: 'dm' | 'group' = 'dm',
   ): Promise<void> {
+    if (!isCallingSupported()) {
+      throw new Error(UNSUPPORTED_MESSAGE)
+    }
     this.#transitionTo('outgoing-ringing')
     this.#mode = mode
     this.#conversationId = conversationId
@@ -127,6 +133,12 @@ export class CallManager {
     }
     if (!this.#pendingRemoteOffer || !this.#conversationId) {
       throw new Error('acceptCall: no pending invite')
+    }
+    if (!isCallingSupported()) {
+      // This webview has no RTCPeerConnection — surface a clean error (and let
+      // the user dismiss) instead of throwing a raw ReferenceError on accept.
+      this.#failWith(new Error(UNSUPPORTED_MESSAGE))
+      return
     }
     // Capture before the awaits below — `this.#` field narrowing doesn't survive
     // an await, and these are cleared/used asynchronously.
