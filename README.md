@@ -28,7 +28,7 @@ A few things this means in plain terms:
 
 - **Your messages live on your devices, not on a server.** The server only stores the locked, unreadable version.
 - **If the server is ever hacked or subpoenaed, attackers get scrambled data** — not your conversations.
-- **The keys that unlock your messages never leave your device.** They're protected by a PIN only you know; we never see that PIN either.
+- **The keys that unlock your messages never leave your device.** They're held in your operating system's secure keystore (Windows Credential Manager, macOS Keychain, Linux Secret Service) and are never sent to any server.
 - **Every new message uses a fresh key.** Even if one key were somehow exposed, older and newer messages stay safe.
 
 The underlying cryptography is [MLS (RFC 9420)](https://datatracker.ietf.org/doc/rfc9420/), the same modern standard being adopted by major secure messengers. See the [architecture section](#architecture) below for the technical view.
@@ -47,9 +47,9 @@ The underlying cryptography is [MLS (RFC 9420)](https://datatracker.ietf.org/doc
 - **Incremental message fetch** — WebSocket notifications trigger a targeted "messages since timestamp" fetch rather than a full history reload.
 
 ### Local storage
-- **Per-user SQLCipher database** — decrypted plaintext lives only on the user's device in `messages_{user_id}.db`.
-- **MLS state persisted as JSON** via OpenMLS's serializable `MemoryStorage` provider (`mls_{user_id}.json`).
-- **Vault with PIN-derived key hierarchy** — Argon2id PIN → KEK → wraps a random DEK → DEK encrypts the local DB. The PIN never leaves the device. Vault unlocks at login; a vault file stores the salt, encrypted DEK, and nonce.
+- **Per-user SQLCipher database** — decrypted plaintext lives only on the user's device in `messages_{user_id}.db`, keyed directly by the DEK (raw hex key, bypassing SQLCipher's own KDF).
+- **MLS state encrypted at rest** — OpenMLS's serializable `MemoryStorage`, sealed with AES-256-GCM under the DEK before it touches disk (`mls_{user_id}.json` + `.meta.json`, `MLS1` format).
+- **Device-bound vault** — a random 256-bit DEK is generated on first setup and stored in the OS keyring (Windows Credential Manager / macOS Keychain / Linux Secret Service). The DEK encrypts the local DB, MLS state, and the Cognito refresh token (`session.enc`). The `.vault` file holds only a SHA-256 fingerprint of the DEK — not a secret — so an unlock can reject a keyring key that doesn't match this vault. Sessions restore automatically from the keyring at launch; sign-out clears only the refresh token, leaving the DEK and history intact for the next sign-in on the same device.
 
 ### Identity & auth
 - **AWS Cognito** — email/password and Google OAuth (confidential client with HMAC-SHA256 SECRET_HASH).
@@ -90,7 +90,7 @@ The underlying cryptography is [MLS (RFC 9420)](https://datatracker.ietf.org/doc
 flowchart TB
     subgraph Client["📱 Tauri Desktop Client"]
         UI["React Frontend<br/>(TypeScript + Tailwind)"]
-        Core["Rust Backend<br/>• OpenMLS encryption<br/>• SQLCipher local DB<br/>• Vault (Argon2id PIN)<br/>• Cognito auth"]
+        Core["Rust Backend<br/>• OpenMLS encryption<br/>• SQLCipher local DB<br/>• Vault (OS-keyring DEK)<br/>• Cognito auth"]
         UI -- "invoke()" --> Core
     end
 
@@ -117,9 +117,10 @@ flowchart TB
   - `conversations.rs` — DM + message commands. Orchestrates MLS encrypt → send → local store.
   - `friends.rs` — friend requests and friend list.
   - `profile.rs` — profile CRUD, avatar upload, status updates.
-  - `mls.rs` — OpenMLS engine: groups, KeyPackages, encrypt/decrypt, Welcome processing, state persistence.
+  - `mls.rs` — OpenMLS engine: groups, KeyPackages, encrypt/decrypt, Welcome processing, encrypted state persistence.
   - `local_db.rs` — SQLCipher-encrypted SQLite for decrypted message plaintext per user.
-  - `vault.rs` — DEK/KEK hierarchy, Argon2id PIN derivation, `.vault` file management.
+  - `vault.rs` — DEK lifecycle and the `.vault` fingerprint file.
+  - `session.rs` — OS-keyring session persistence: stores the DEK + identity, and the DEK-encrypted refresh token (`session.enc`).
   - `http_client.rs` — shared reqwest client (30s request / 10s connect timeouts, bearer token).
   - `config.rs` — server URL config; defaults to `https://api.nshroud.com`, override with `SERVER_URL` env var.
   - `updates.rs` — auto-update via `tauri-plugin-updater`.
