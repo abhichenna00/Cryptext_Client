@@ -47,6 +47,13 @@ export class CallManager {
   #localStream: MediaStream | null = null
   #remoteStream: MediaStream | null = null
   #pendingRemoteOffer: RTCSessionDescriptionInit | null = null
+  // Remote ICE candidates can arrive before the remote description is set (a
+  // burst lands during the async setRemoteDescription, or while an incoming
+  // call is still ringing). Adding them then fails with OperationError and the
+  // candidate is lost, starving ICE. Buffer until the remote description is in
+  // place, then flush.
+  #remoteDescriptionSet = false
+  #pendingIceCandidates: RTCIceCandidateInit[] = []
 
   #subscribers: Set<SnapshotHandler> = new Set()
   #signalingUnsubscribers: Unsubscribe[] = []
@@ -92,6 +99,7 @@ export class CallManager {
     conversationType: 'dm' | 'group' = 'dm',
   ): Promise<void> {
     this.#transitionTo('outgoing-ringing')
+    this.#resetIceBuffer()
     this.#mode = mode
     this.#conversationId = conversationId
     this.#conversationType = conversationType
@@ -144,6 +152,7 @@ export class CallManager {
       const pc = this.#createPeerConnection()
       await pc.setRemoteDescription(pendingOffer)
       this.#pendingRemoteOffer = null
+      await this.#markRemoteDescriptionSet()
       // Attach whatever we have. Kinds the offer included but we can't send stay
       // recvonly in our answer, so we still receive the caller's media.
       for (const track of this.#localStream.getTracks()) {
@@ -317,6 +326,7 @@ export class CallManager {
       return
     }
     this.#transitionTo('incoming-ringing')
+    this.#resetIceBuffer()
     this.#mode = this.#inferModeFromSdp(payload.sdp)
     this.#conversationId = payload.conversationId
     this.#conversationType = 'dm'
@@ -338,6 +348,7 @@ export class CallManager {
       this.#transitionTo('connecting')
       this.#emit()
       await this.#peerConnection.setRemoteDescription(payload.sdp)
+      await this.#markRemoteDescriptionSet()
     } catch (err) {
       this.#failWith(err)
     }
@@ -367,11 +378,39 @@ export class CallManager {
 
   async #handleRemoteIce(payload: IcePayload): Promise<void> {
     if (payload.conversationId !== this.#conversationId) return
-    if (!this.#peerConnection) return
+    // Hold candidates until the peer connection exists and its remote
+    // description is set; otherwise addIceCandidate throws OperationError and the
+    // candidate is lost. They're flushed in order by #markRemoteDescriptionSet.
+    if (!this.#peerConnection || !this.#remoteDescriptionSet) {
+      this.#pendingIceCandidates.push(payload.candidate)
+      return
+    }
     try {
       await this.#peerConnection.addIceCandidate(payload.candidate)
     } catch (err) {
       console.warn('[call] addIceCandidate failed:', err instanceof Error ? err.name : 'unknown')
+    }
+  }
+
+  #resetIceBuffer(): void {
+    this.#remoteDescriptionSet = false
+    this.#pendingIceCandidates = []
+  }
+
+  /// Called once the remote description is in place. Flips the gate and drains
+  /// any candidates buffered while it was being set, in arrival order.
+  async #markRemoteDescriptionSet(): Promise<void> {
+    this.#remoteDescriptionSet = true
+    const pc = this.#peerConnection
+    if (!pc) return
+    const buffered = this.#pendingIceCandidates
+    this.#pendingIceCandidates = []
+    for (const candidate of buffered) {
+      try {
+        await pc.addIceCandidate(candidate)
+      } catch (err) {
+        console.warn('[call] addIceCandidate (flush) failed:', err instanceof Error ? err.name : 'unknown')
+      }
     }
   }
 
@@ -408,6 +447,7 @@ export class CallManager {
     }
     this.#remoteStream = null
     this.#pendingRemoteOffer = null
+    this.#resetIceBuffer()
   }
 
   #failWith(err: unknown): void {
