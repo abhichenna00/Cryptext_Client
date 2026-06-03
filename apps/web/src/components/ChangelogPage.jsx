@@ -1,8 +1,4 @@
-import { useEffect, useState } from 'react'
-import { parseChangelog } from '../lib/changelog.ts'
-
-const CHANGELOG_URL =
-  'https://raw.githubusercontent.com/abhichenna00/Cryptext_Client/main/CHANGELOG.md'
+import { useState } from 'react'
 
 const KIND_META = {
   Added: { dot: '+', tint: 'rgba(34, 197, 94, 0.16)' },
@@ -171,33 +167,8 @@ function ReleaseEntry({ release, first }) {
   )
 }
 
-export default function ChangelogPage({ releases: initial = [] }) {
-  const [releases, setReleases] = useState(initial)
+export default function ChangelogPage({ releases = [] }) {
   const [filter, setFilter] = useState('all')
-
-  useEffect(() => {
-    let cancelled = false
-    fetch(CHANGELOG_URL, { cache: 'no-store' })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        return res.text()
-      })
-      .then((text) => {
-        if (cancelled) return
-        const next = parseChangelog(text)
-        if (next.length === 0) return
-        setReleases((prev) =>
-          JSON.stringify(prev) === JSON.stringify(next) ? prev : next,
-        )
-      })
-      .catch((err) => {
-        // Keep the SSR'd inline content visible; just log.
-        console.error('Changelog refetch failed:', err)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [])
 
   const filtered = releases.filter((r) => {
     if (filter === 'all') return true
