@@ -30,6 +30,64 @@ export class MediaStreamManager {
     return stream
   }
 
+  /** enumerateDevices, swallowing failures so "can't tell" degrades to "no
+   *  devices" (a receive-only join) rather than throwing. */
+  async #safeEnumerate(): Promise<MediaDeviceInfo[]> {
+    try {
+      return await navigator.mediaDevices.enumerateDevices()
+    } catch {
+      return []
+    }
+  }
+
+  /** getUserMedia that resolves to null instead of rejecting. */
+  async #tryGetUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream | null> {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch {
+      return null
+    }
+  }
+
+  /**
+   * Acquire whatever of audio/video is actually available. Each kind is only
+   * attempted when a device of that kind exists, so a device-less machine (a
+   * headless VM, say) never trips NotFoundError/OverconstrainedError. The saved
+   * preferred device is tried first, falling back to the default device — a
+   * preference pointing at an absent device otherwise overconstrains and throws
+   * "Invalid constraint". Returns a stream with zero, one, or both track kinds;
+   * the caller adds recvonly transceivers for whatever's missing so the peer's
+   * media still flows.
+   */
+  async acquireGraceful(want: { audio: boolean; video: boolean }): Promise<MediaStream> {
+    const preferred = this.getPreferredConstraints('video')
+    const devices = await this.#safeEnumerate()
+    const hasMic = devices.some((d) => d.kind === 'audioinput')
+    const hasCam = devices.some((d) => d.kind === 'videoinput')
+    const stream = new MediaStream()
+
+    if (want.audio && hasMic) {
+      const audio =
+        (await this.#tryGetUserMedia({ audio: preferred.audio, video: false })) ??
+        (await this.#tryGetUserMedia({ audio: true, video: false }))
+      if (audio) for (const t of audio.getAudioTracks()) stream.addTrack(t)
+    }
+    if (want.video && hasCam) {
+      const video =
+        (await this.#tryGetUserMedia({ audio: false, video: preferred.video })) ??
+        (await this.#tryGetUserMedia({ audio: false, video: true }))
+      if (video) for (const t of video.getVideoTracks()) stream.addTrack(t)
+    }
+
+    this.#activeStreams.add(stream)
+    for (const track of stream.getTracks()) {
+      track.addEventListener('ended', () => {
+        this.#activeStreams.delete(stream)
+      })
+    }
+    return stream
+  }
+
   stop(stream: MediaStream): void {
     for (const track of stream.getTracks()) {
       track.stop()

@@ -27,6 +27,15 @@ class FakeStream {
   getTracks() {
     return this.tracks
   }
+  getAudioTracks() {
+    return this.tracks.filter((t) => t.kind === 'audio')
+  }
+  getVideoTracks() {
+    return this.tracks.filter((t) => t.kind === 'video')
+  }
+  addTrack(t: FakeTrack) {
+    this.tracks.push(t)
+  }
 }
 
 beforeEach(() => {
@@ -36,11 +45,14 @@ beforeEach(() => {
     if (constraints.video) tracks.push(new FakeTrack('video'))
     return new FakeStream(tracks) as unknown as MediaStream
   })
-  const enumerateDevices = vi.fn(async () => [])
+  const enumerateDevices = vi.fn(async () => [] as MediaDeviceInfo[])
   Object.defineProperty(globalThis, 'navigator', {
     value: { mediaDevices: { getUserMedia, enumerateDevices } },
     configurable: true,
   })
+  ;(globalThis as unknown as { MediaStream: new () => FakeStream }).MediaStream = function () {
+    return new FakeStream([])
+  } as unknown as new () => FakeStream
 })
 
 describe('MediaStreamManager', () => {
@@ -51,6 +63,35 @@ describe('MediaStreamManager', () => {
     m.dispose()
     expect(a.getTracks().every((t) => t.stopped)).toBe(true)
     expect(b.getTracks().every((t) => t.stopped)).toBe(true)
+  })
+
+  it('acquireGraceful makes no capture attempt when no input devices exist', async () => {
+    const m = new MediaStreamManager()
+    const stream = (await m.acquireGraceful({ audio: true, video: true })) as unknown as FakeStream
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled()
+    expect(stream.getTracks()).toHaveLength(0)
+  })
+
+  it('acquireGraceful falls back to the default device when the preferred one overconstrains', async () => {
+    vi.mocked(navigator.mediaDevices.enumerateDevices).mockResolvedValue([
+      { kind: 'audioinput' },
+    ] as unknown as MediaDeviceInfo[])
+    let calls = 0
+    vi.mocked(navigator.mediaDevices.getUserMedia).mockImplementation(
+      async (c?: MediaStreamConstraints) => {
+        calls += 1
+        // First attempt uses the saved (absent) device and overconstrains;
+        // the fallback to the default device succeeds.
+        if (calls === 1) throw new Error('OverconstrainedError')
+        const tracks: FakeTrack[] = []
+        if (c?.audio) tracks.push(new FakeTrack('audio'))
+        return new FakeStream(tracks) as unknown as MediaStream
+      },
+    )
+    const m = new MediaStreamManager()
+    const stream = (await m.acquireGraceful({ audio: true, video: false })) as unknown as FakeStream
+    expect(calls).toBe(2)
+    expect(stream.getAudioTracks()).toHaveLength(1)
   })
 
   it('stop() removes a stream so dispose() leaves untouched survivors alone', async () => {

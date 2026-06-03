@@ -33,6 +33,8 @@ const IDLE_SNAPSHOT: CallSnapshot = Object.freeze({
   error: null,
   participants: Object.freeze([]),
   callStartedAt: null,
+  localAudioAvailable: false,
+  localVideoAvailable: false,
 })
 
 export type CallDisplayMode = 'floating' | 'expanded'
