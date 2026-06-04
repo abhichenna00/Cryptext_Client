@@ -388,7 +388,7 @@ export class CallManager {
     try {
       await this.#peerConnection.addIceCandidate(payload.candidate)
     } catch (err) {
-      console.warn('[call] addIceCandidate failed:', err instanceof Error ? err.name : 'unknown')
+      this.#logIceFailure('direct', err, payload.candidate)
     }
   }
 
@@ -409,14 +409,38 @@ export class CallManager {
       try {
         await pc.addIceCandidate(candidate)
       } catch (err) {
-        console.warn('[call] addIceCandidate (flush) failed:', err instanceof Error ? err.name : 'unknown')
+        this.#logIceFailure('flush', err, candidate)
       }
     }
   }
 
+  /// Surface enough to diagnose addIceCandidate OperationErrors: the real error
+  /// message plus the candidate's identity and the remote description's m-line
+  /// mids, so a mid / m-line / ufrag mismatch is visible at a glance.
+  #logIceFailure(context: string, err: unknown, candidate: RTCIceCandidateInit): void {
+    const remoteMids = this.#peerConnection?.remoteDescription?.sdp
+      ?.split('\n')
+      .filter((line) => line.startsWith('a=mid:'))
+      .map((line) => line.trim().slice('a=mid:'.length))
+    console.warn(`[call] addIceCandidate (${context}) failed:`, {
+      error: err instanceof Error ? err.message : String(err),
+      sdpMid: candidate.sdpMid,
+      sdpMLineIndex: candidate.sdpMLineIndex,
+      usernameFragment: candidate.usernameFragment,
+      remoteMids,
+      candidate: candidate.candidate,
+    })
+  }
+
   #handleAcceptedElsewhere(payload: CallAcceptedElsewherePayload): void {
     if (payload.conversationId !== this.#conversationId) return
-    if (this.#status !== 'outgoing-ringing' && this.#status !== 'incoming-ringing') return
+    // Only a sibling device that is *receiving* the call should stop ringing
+    // once the call is answered on another of the user's devices. The caller
+    // (outgoing-ringing) is the one being answered — it must NOT self-terminate
+    // here; it proceeds to `connecting` via the incoming answer. The server
+    // currently broadcasts this to every member, so without this guard the
+    // caller would kill its own call the instant the callee picks up.
+    if (this.#status !== 'incoming-ringing') return
     this.#transitionTo('ended')
     this.#cleanup()
     this.#emit()
