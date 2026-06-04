@@ -19,8 +19,11 @@ import { useWebSocketContext } from './WebSocketContext'
 
 const DEFAULT_CONFIG: CallConfig = Object.freeze({
   iceServers: [
+    // Two *different-provider* STUN servers (different IPs) so we can detect
+    // symmetric NAT: if the public port differs between them, the NAT maps
+    // per-destination (symmetric) and direct P2P is impossible.
     { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun.cloudflare.com:3478' },
   ],
   ringTimeoutMs: 30_000,
 })

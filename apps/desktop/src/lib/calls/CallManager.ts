@@ -294,13 +294,15 @@ export class CallManager {
 
     pc.addEventListener('icecandidate', (event) => {
       if (event.candidate) {
-        // Candidate type tells us how this peer can be reached: `host` (LAN),
-        // `srflx` (public address discovered via STUN — proof STUN works), or
-        // `relay` (TURN). No srflx gathered => STUN isn't producing a public
-        // address; srflx gathered but the connection still fails => symmetric
-        // NAT, which can't be traversed without a relay.
+        // `addr:port` is the public mapping; `base` is the local socket it came
+        // from. Symmetric-NAT proof: two srflx candidates sharing the same base
+        // but with DIFFERENT public ports (one per STUN server) ⇒ the NAT maps
+        // per-destination ⇒ symmetric ⇒ direct P2P impossible, TURN required.
+        // Same public port from both STUN servers ⇒ cone NAT (not symmetric).
+        const c = event.candidate
         console.info(
-          `[call][ice] local candidate: typ=${event.candidate.type} proto=${event.candidate.protocol}`,
+          `[call][ice] local candidate: typ=${c.type} proto=${c.protocol} ` +
+            `addr=${c.address ?? '?'}:${c.port ?? '?'} base=${c.relatedAddress ?? '-'}:${c.relatedPort ?? '-'}`,
         )
       } else {
         console.info('[call][ice] local candidate gathering complete')
