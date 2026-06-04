@@ -13,6 +13,7 @@ import { CallProvider } from '@/contexts/CallContext'
 import IncomingCallModal from '@/components/calls/IncomingCallModal'
 import InCallView from '@/components/calls/InCallView'
 import FloatingCallWindow from '@/components/calls/FloatingCallWindow'
+import RemoteCallAudio from '@/components/calls/RemoteCallAudio'
 
 import SplashPage from './pages/SplashPage'
 import AuthPage from './pages/AuthPage'
@@ -192,6 +193,7 @@ export default function App() {
         <IncomingCallModal vaultReady={!!session && hasProfile && !vaultError} />
         <FloatingCallWindow />
         <InCallView />
+        <RemoteCallAudio />
         <Routes>
           <Route path="/splash" element={<SplashPage />} />
 
