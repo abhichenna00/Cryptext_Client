@@ -90,6 +90,11 @@ export function WebSocketProvider({
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const intentionalCloseRef = useRef(false)
   const subscribersRef = useRef<Set<Subscriber>>(new Set())
+  // Monotonic token for connect() attempts. Bumped on every attempt and on
+  // teardown so a stale async attempt (or a superseded socket's handlers) can
+  // detect it's no longer current and bail — prevents a duplicate, untracked
+  // WebSocket from leaking and dispatching every message twice.
+  const connectGenRef = useRef(0)
 
   const subscribe = useCallback<WebSocketContextValue['subscribe']>((callback) => {
     subscribersRef.current.add(callback)
@@ -130,6 +135,12 @@ export function WebSocketProvider({
   }, [])
 
   const connect = useCallback(async () => {
+    // Claim a generation for this attempt. If a newer attempt starts (StrictMode
+    // remount, reconnect) or the provider is torn down while we await the URL /
+    // ticket below, this attempt is stale and must not open a socket — otherwise
+    // the async gap leaks a second, untracked WebSocket and every inbound message
+    // gets dispatched twice (which scrambled call-signaling ordering).
+    const gen = ++connectGenRef.current
     if (wsRef.current) {
       wsRef.current.close()
       wsRef.current = null
@@ -147,9 +158,13 @@ export function WebSocketProvider({
         console.error('[WebSocket] Failed to obtain ticket:', err)
       }
 
+      // Superseded or torn down while awaiting above — don't open a second socket.
+      if (gen !== connectGenRef.current) return
+
       const ws = new WebSocket(wsUrl)
 
       ws.onopen = () => {
+        if (gen !== connectGenRef.current) return
         console.log('[WebSocket] Connected, authenticating...')
         if (ticket) {
           ws.send(JSON.stringify({ action: 'authenticate', token: ticket }))
@@ -160,6 +175,7 @@ export function WebSocketProvider({
       }
 
       ws.onmessage = (event) => {
+        if (gen !== connectGenRef.current) return
         let raw: unknown
         try {
           raw = JSON.parse(event.data)
@@ -206,6 +222,7 @@ export function WebSocketProvider({
       }
 
       ws.onclose = (event) => {
+        if (gen !== connectGenRef.current) return
         console.log('[WebSocket] Disconnected:', event.code, event.reason)
         setIsConnected(false)
         wsRef.current = null
@@ -213,11 +230,13 @@ export function WebSocketProvider({
       }
 
       ws.onerror = (event) => {
+        if (gen !== connectGenRef.current) return
         console.error('[WebSocket] Error:', event)
       }
 
       wsRef.current = ws
     } catch (err) {
+      if (gen !== connectGenRef.current) return
       console.error('[WebSocket] Failed to connect:', err)
       scheduleReconnect(connect)
     }
@@ -244,6 +263,9 @@ export function WebSocketProvider({
 
     return () => {
       intentionalCloseRef.current = true
+      // Invalidate any in-flight connect() so a socket opened after teardown
+      // (StrictMode unmount during the async connect) is abandoned, not leaked.
+      connectGenRef.current += 1
       if (reconnectTimerRef.current) {
         clearTimeout(reconnectTimerRef.current)
         reconnectTimerRef.current = null
