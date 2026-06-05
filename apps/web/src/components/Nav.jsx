@@ -82,7 +82,7 @@ export default function Nav({ active = 'home', changelogVersion = 'v0.5.1' }) {
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           <a
-            href="https://github.com/abhichenna00/Cryptext_Client"
+            href="https://github.com/abhichenna00/NShroud"
             className="btn btn-ghost btn-sm"
             target="_blank"
             rel="noopener"

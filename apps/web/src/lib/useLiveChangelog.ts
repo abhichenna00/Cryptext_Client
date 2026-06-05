@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { parseChangelog, type ChangelogRelease } from './changelog'
 
 const CHANGELOG_URL =
-  'https://raw.githubusercontent.com/abhichenna00/Cryptext_Client/main/CHANGELOG.md'
+  'https://raw.githubusercontent.com/abhichenna00/NShroud/main/CHANGELOG.md'
 
 /**
  * Seeds release state with the SSR-inlined build-time data, then refetches

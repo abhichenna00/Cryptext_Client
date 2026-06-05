@@ -266,7 +266,7 @@ jobs:
             "platforms": {
               "windows-x86_64": {
                 "signature": "${SIGNATURE}",
-                "url": "https://github.com/abhichenna00/Cryptext_Client/releases/download/${TAG}/${FILENAME}"
+                "url": "https://github.com/abhichenna00/NShroud/releases/download/${TAG}/${FILENAME}"
               }
             }
           }
