@@ -6,6 +6,7 @@ mod config;
 mod conversations;
 mod friends;
 mod http_client;
+mod ice;
 mod local_db;
 mod media;
 mod mls;
@@ -75,6 +76,7 @@ pub fn run() {
             auth::refresh_session,
             auth::confirm_sign_up,
             auth::get_websocket_url,
+            ice::get_ice_servers,
             auth::sign_in_with_google,
             auth::sign_in_with_entra,
             // Friends

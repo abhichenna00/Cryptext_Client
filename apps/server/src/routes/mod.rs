@@ -81,6 +81,7 @@ pub fn build_router() -> Router {
         // WebSocket
         .route("/ws", get(crate::ws::handler::ws_handler))
         .route("/config/ws", get(get_ws_config))
+        .route("/config/ice-servers", get(get_ice_servers))
         .route("/auth/ws-ticket", post(cognito::issue_ws_ticket))
 
         // Auth routes (no JWT required)
@@ -175,4 +176,73 @@ async fn get_ws_config() -> axum::Json<serde_json::Value> {
         format!("{}/ws", ws_url)
     };
     axum::Json(serde_json::json!({ "ws_url": ws_url }))
+}
+
+// ── ICE servers (STUN + short-lived Cloudflare TURN credentials) ─────────────
+//
+// Calls need a TURN relay to traverse symmetric NAT when peers are on different
+// networks. We mint short-lived credentials server-side by calling Cloudflare's
+// `generate-ice-servers` API with our TURN Key ID + API token — so the secret
+// token never reaches the client. Requires auth (Claims) so only signed-in
+// users get relay credentials, and falls back to public STUN when TURN isn't
+// configured, so it's always safe to ship.
+
+/// TTL for minted TURN credentials. Short, since the client fetches fresh
+/// servers before every call.
+const TURN_TTL_SECS: u64 = 3600;
+
+async fn get_ice_servers(_claims: crate::auth::Claims) -> axum::Json<serde_json::Value> {
+    let config = crate::config::get_config();
+
+    if !config.turn_key_id.is_empty() && !config.turn_api_token.is_empty() {
+        match fetch_cloudflare_ice_servers(&config.turn_key_id, &config.turn_api_token).await {
+            Ok(servers) => return axum::Json(serde_json::json!({ "ice_servers": servers })),
+            Err(e) => tracing::warn!("Cloudflare TURN fetch failed, falling back to STUN: {}", e),
+        }
+    }
+
+    // STUN-only fallback (no relay) — keeps same-network and cone-NAT calls working.
+    axum::Json(serde_json::json!({
+        "ice_servers": [
+            { "urls": ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302"] }
+        ]
+    }))
+}
+
+/// POST Cloudflare's `generate-ice-servers` and return the `iceServers` payload
+/// normalized to an array (RTCPeerConnection requires an array; Cloudflare may
+/// return a single object).
+async fn fetch_cloudflare_ice_servers(
+    key_id: &str,
+    api_token: &str,
+) -> Result<serde_json::Value, String> {
+    let url = format!(
+        "https://rtc.live.cloudflare.com/v1/turn/keys/{}/credentials/generate-ice-servers",
+        key_id
+    );
+    let resp = reqwest::Client::new()
+        .post(&url)
+        .bearer_auth(api_token)
+        .json(&serde_json::json!({ "ttl": TURN_TTL_SECS }))
+        .send()
+        .await
+        .map_err(|e| format!("request failed: {}", e))?;
+
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(format!("Cloudflare returned {}", status));
+    }
+
+    let body: serde_json::Value = resp
+        .json()
+        .await
+        .map_err(|e| format!("response parse failed: {}", e))?;
+    let ice = body
+        .get("iceServers")
+        .ok_or("missing iceServers in Cloudflare response")?;
+
+    Ok(match ice {
+        serde_json::Value::Array(_) => ice.clone(),
+        single => serde_json::Value::Array(vec![single.clone()]),
+    })
 }

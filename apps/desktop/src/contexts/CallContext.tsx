@@ -9,6 +9,7 @@ import {
   useSyncExternalStore,
   type ReactNode,
 } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 
 import { CallManager } from '@/lib/calls/CallManager'
 import { MediaStreamManager } from '@/lib/calls/MediaStreamManager'
@@ -17,11 +18,12 @@ import type { CallConfig, CallMode, CallSnapshot } from '@/lib/calls/types'
 
 import { useWebSocketContext } from './WebSocketContext'
 
+// STUN-only fallback, used when the server's /config/ice-servers endpoint
+// (which mints short-lived TURN credentials) is unreachable. Keeps same-network
+// and cone-NAT calls working; symmetric-NAT calls need the server-fetched TURN
+// relay. Two different-provider STUN servers are kept for resilience.
 const DEFAULT_CONFIG: CallConfig = Object.freeze({
   iceServers: [
-    // Two *different-provider* STUN servers (different IPs) so we can detect
-    // symmetric NAT: if the public port differs between them, the NAT maps
-    // per-destination (symmetric) and direct P2P is impossible.
     { urls: 'stun:stun.l.google.com:19302' },
     { urls: 'stun:stun.cloudflare.com:3478' },
   ],
@@ -60,6 +62,19 @@ const CallContext = createContext<CallContextValue | null>(null)
 
 function noManager(): Promise<never> {
   return Promise.reject(new Error('Call manager not ready'))
+}
+
+/** Fetch fresh ICE servers (STUN + short-lived TURN credentials) from the
+ *  backend. Falls back to the bundled STUN servers if the request fails, so
+ *  same-network calls still work. */
+async function fetchIceServers(): Promise<RTCIceServer[]> {
+  try {
+    const servers = await invoke<RTCIceServer[]>('get_ice_servers')
+    if (Array.isArray(servers) && servers.length > 0) return servers
+  } catch (err) {
+    console.warn('[call] get_ice_servers failed; using STUN fallback:', err)
+  }
+  return [...DEFAULT_CONFIG.iceServers]
 }
 
 export function CallProvider({ children }: { children: ReactNode }) {
@@ -116,8 +131,18 @@ export function CallProvider({ children }: { children: ReactNode }) {
   const value = useMemo<CallContextValue>(
     () => ({
       snapshot,
-      startCall: (cid, pid, m) => managerRef.current?.startCall(cid, pid, m) ?? noManager(),
-      acceptCall: () => managerRef.current?.acceptCall() ?? noManager(),
+      startCall: async (cid, pid, m) => {
+        const mgr = managerRef.current
+        if (!mgr) return noManager()
+        mgr.setIceServers(await fetchIceServers())
+        return mgr.startCall(cid, pid, m)
+      },
+      acceptCall: async () => {
+        const mgr = managerRef.current
+        if (!mgr) return noManager()
+        mgr.setIceServers(await fetchIceServers())
+        return mgr.acceptCall()
+      },
       declineCall: () => managerRef.current?.declineCall() ?? noManager(),
       endCall: () => managerRef.current?.endCall() ?? noManager(),
       toggleMic: () => managerRef.current?.toggleMic(),

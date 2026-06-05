@@ -33,7 +33,9 @@ type MutableParticipant = {
 export class CallManager {
   #signaling: CallSignalingChannel
   #media: MediaStreamManager
-  #config: CallConfig
+  /** ICE servers (STUN + TURN) used for new peer connections. Replaced per call
+   *  via setIceServers so short-lived TURN credentials are fresh each time. */
+  #iceServers: RTCIceServer[]
 
   #status: CallStatus = 'idle'
   #mode: CallMode = 'audio'
@@ -61,7 +63,7 @@ export class CallManager {
   constructor(signaling: CallSignalingChannel, media: MediaStreamManager, config: CallConfig) {
     this.#signaling = signaling
     this.#media = media
-    this.#config = config
+    this.#iceServers = [...config.iceServers]
 
     this.#signalingUnsubscribers.push(
       this.#signaling.onInvite((payload) => this.#handleRemoteInvite(payload)),
@@ -90,6 +92,14 @@ export class CallManager {
 
   getRemoteStream(): MediaStream | null {
     return this.#remoteStream
+  }
+
+  /** Replace the ICE servers used for the *next* peer connection. Called before
+   *  each call with freshly-fetched TURN credentials (they're short-lived). */
+  setIceServers(servers: RTCIceServer[]): void {
+    if (Array.isArray(servers) && servers.length > 0) {
+      this.#iceServers = servers
+    }
   }
 
   async startCall(
@@ -280,7 +290,7 @@ export class CallManager {
   }
 
   #createPeerConnection(): RTCPeerConnection {
-    const pc = new RTCPeerConnection({ iceServers: [...this.#config.iceServers] })
+    const pc = new RTCPeerConnection({ iceServers: [...this.#iceServers] })
     this.#peerConnection = pc
     this.#remoteStream = new MediaStream()
 
@@ -293,36 +303,10 @@ export class CallManager {
     })
 
     pc.addEventListener('icecandidate', (event) => {
-      if (event.candidate) {
-        // `addr:port` is the public mapping; `base` is the local socket it came
-        // from. Symmetric-NAT proof: two srflx candidates sharing the same base
-        // but with DIFFERENT public ports (one per STUN server) ⇒ the NAT maps
-        // per-destination ⇒ symmetric ⇒ direct P2P impossible, TURN required.
-        // Same public port from both STUN servers ⇒ cone NAT (not symmetric).
-        const c = event.candidate
-        console.info(
-          `[call][ice] local candidate: typ=${c.type} proto=${c.protocol} ` +
-            `addr=${c.address ?? '?'}:${c.port ?? '?'} base=${c.relatedAddress ?? '-'}:${c.relatedPort ?? '-'}`,
-        )
-      } else {
-        console.info('[call][ice] local candidate gathering complete')
-      }
       if (!event.candidate || !this.#conversationId) return
       this.#signaling.sendIceCandidate(this.#conversationId, event.candidate.toJSON()).catch((err) => {
         console.warn('[call] ice send failed:', err instanceof Error ? err.name : 'unknown')
       })
-    })
-
-    pc.addEventListener('icegatheringstatechange', () => {
-      console.info('[call][ice] gathering state:', pc.iceGatheringState)
-    })
-
-    pc.addEventListener('iceconnectionstatechange', () => {
-      const state = pc.iceConnectionState
-      console.info('[call][ice] connection state:', state)
-      if (state === 'connected' || state === 'completed' || state === 'failed') {
-        void this.#logSelectedCandidatePair(pc)
-      }
     })
 
     pc.addEventListener('connectionstatechange', () => {
@@ -344,38 +328,6 @@ export class CallManager {
     })
 
     return pc
-  }
-
-  /// On ICE success/failure, dump the negotiated candidate pair so we can see
-  /// whether the call connected directly (host/srflx) or via a relay — and on
-  /// failure, what candidate types were even available to pair.
-  async #logSelectedCandidatePair(pc: RTCPeerConnection): Promise<void> {
-    try {
-      const stats = await pc.getStats()
-      const byId = new Map<string, RTCStats>()
-      let selected: RTCIceCandidatePairStats | undefined
-      stats.forEach((report: RTCStats) => {
-        byId.set(report.id, report)
-        if (report.type === 'candidate-pair') {
-          const pair = report as RTCIceCandidatePairStats
-          if (pair.nominated && pair.state === 'succeeded') selected = pair
-        }
-      })
-      if (!selected) {
-        console.info('[call][ice] no succeeded candidate pair — no direct or relay path established')
-        return
-      }
-      const local = selected.localCandidateId ? byId.get(selected.localCandidateId) : undefined
-      const remote = selected.remoteCandidateId ? byId.get(selected.remoteCandidateId) : undefined
-      const localType = (local as { candidateType?: string } | undefined)?.candidateType
-      const remoteType = (remote as { candidateType?: string } | undefined)?.candidateType
-      const relayed = localType === 'relay' || remoteType === 'relay'
-      console.info(
-        `[call][ice] selected pair: local=${localType ?? '?'} remote=${remoteType ?? '?'} (relayed: ${relayed})`,
-      )
-    } catch (err) {
-      console.warn('[call][ice] getStats failed:', err instanceof Error ? err.message : 'unknown')
-    }
   }
 
   #handleRemoteInvite(payload: InvitePayload): void {
@@ -446,7 +398,7 @@ export class CallManager {
     try {
       await this.#peerConnection.addIceCandidate(payload.candidate)
     } catch (err) {
-      this.#logIceFailure('direct', err, payload.candidate)
+      console.warn('[call] addIceCandidate failed:', err instanceof Error ? err.name : 'unknown')
     }
   }
 
@@ -467,27 +419,9 @@ export class CallManager {
       try {
         await pc.addIceCandidate(candidate)
       } catch (err) {
-        this.#logIceFailure('flush', err, candidate)
+        console.warn('[call] addIceCandidate (flush) failed:', err instanceof Error ? err.name : 'unknown')
       }
     }
-  }
-
-  /// Surface enough to diagnose addIceCandidate OperationErrors: the real error
-  /// message plus the candidate's identity and the remote description's m-line
-  /// mids, so a mid / m-line / ufrag mismatch is visible at a glance.
-  #logIceFailure(context: string, err: unknown, candidate: RTCIceCandidateInit): void {
-    const remoteMids = this.#peerConnection?.remoteDescription?.sdp
-      ?.split('\n')
-      .filter((line) => line.startsWith('a=mid:'))
-      .map((line) => line.trim().slice('a=mid:'.length))
-    console.warn(`[call] addIceCandidate (${context}) failed:`, {
-      error: err instanceof Error ? err.message : String(err),
-      sdpMid: candidate.sdpMid,
-      sdpMLineIndex: candidate.sdpMLineIndex,
-      usernameFragment: candidate.usernameFragment,
-      remoteMids,
-      candidate: candidate.candidate,
-    })
   }
 
   #handleAcceptedElsewhere(payload: CallAcceptedElsewherePayload): void {
