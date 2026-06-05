@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Voice and video calls now connect across restrictive networks. Before each call the desktop client fetches STUN servers and short-lived TURN relay credentials from a new authenticated server endpoint, so a call still completes when both peers are behind symmetric NAT and no direct peer-to-peer path exists. The relay credentials are minted server-side and are never embedded in the client.
+
+### Fixed
+- The caller no longer terminates its own call when the recipient answers. A "call accepted elsewhere" notification, broadcast to every device on the conversation, is now ignored by the caller instead of ending the call the moment the callee picks up.
+- Audio-only calls are no longer silent. The remote participant's audio stream is now attached to a playback element, which previously happened only for video calls.
+- Remote ICE candidates that arrive before the peer connection's remote description is in place are buffered and applied in order once it is set, instead of being discarded. Calls no longer stall and fail during connection setup.
+- A duplicate WebSocket connection caused by a race between overlapping asynchronous connect attempts is prevented.
+
 ## [0.6.1] - 2026-06-02
 
 ### Added
