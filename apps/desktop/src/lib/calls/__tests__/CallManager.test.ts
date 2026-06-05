@@ -431,13 +431,26 @@ describe('CallManager state machine', () => {
     expect(signaling.sent.some((m) => m.kind === 'end')).toBe(false)
   })
 
-  it('onCallAcceptedElsewhere while outgoing-ringing transitions to idle and stops local tracks', async () => {
+  it('onCallAcceptedElsewhere is ignored by the caller (outgoing-ringing) — it is the one being answered', async () => {
     const { signaling, manager } = build()
     await manager.startCall('conv-1', 'peer-1', 'audio')
-    const stream = FakeMediaStreamGlobal.lastStream!
     expect(manager.state.status).toBe('outgoing-ringing')
+    // The server broadcasts CallAcceptedElsewhere to every member when the
+    // callee answers; the caller must NOT self-terminate on it.
+    signaling.triggerAcceptedElsewhere({ conversationId: 'conv-1' })
+    expect(manager.state.status).toBe('outgoing-ringing')
+  })
+
+  it('onCallAcceptedElsewhere ends a sibling device that is incoming-ringing', async () => {
+    const { signaling, manager } = build()
+    signaling.triggerInvite({
+      conversationId: 'conv-1',
+      fromUserId: 'peer-1',
+      fromDeviceId: 'dev-1',
+      sdp: { type: 'offer', sdp: 'v=0\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n' },
+    })
+    expect(manager.state.status).toBe('incoming-ringing')
     signaling.triggerAcceptedElsewhere({ conversationId: 'conv-1' })
     expect(manager.state.status).toBe('idle')
-    expect(stream.getTracks().every((t) => t.stopped)).toBe(true)
   })
 })

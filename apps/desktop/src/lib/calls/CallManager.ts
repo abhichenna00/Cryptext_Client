@@ -33,7 +33,9 @@ type MutableParticipant = {
 export class CallManager {
   #signaling: CallSignalingChannel
   #media: MediaStreamManager
-  #config: CallConfig
+  /** ICE servers (STUN + TURN) used for new peer connections. Replaced per call
+   *  via setIceServers so short-lived TURN credentials are fresh each time. */
+  #iceServers: RTCIceServer[]
 
   #status: CallStatus = 'idle'
   #mode: CallMode = 'audio'
@@ -61,7 +63,7 @@ export class CallManager {
   constructor(signaling: CallSignalingChannel, media: MediaStreamManager, config: CallConfig) {
     this.#signaling = signaling
     this.#media = media
-    this.#config = config
+    this.#iceServers = [...config.iceServers]
 
     this.#signalingUnsubscribers.push(
       this.#signaling.onInvite((payload) => this.#handleRemoteInvite(payload)),
@@ -90,6 +92,14 @@ export class CallManager {
 
   getRemoteStream(): MediaStream | null {
     return this.#remoteStream
+  }
+
+  /** Replace the ICE servers used for the *next* peer connection. Called before
+   *  each call with freshly-fetched TURN credentials (they're short-lived). */
+  setIceServers(servers: RTCIceServer[]): void {
+    if (Array.isArray(servers) && servers.length > 0) {
+      this.#iceServers = servers
+    }
   }
 
   async startCall(
@@ -280,7 +290,7 @@ export class CallManager {
   }
 
   #createPeerConnection(): RTCPeerConnection {
-    const pc = new RTCPeerConnection({ iceServers: [...this.#config.iceServers] })
+    const pc = new RTCPeerConnection({ iceServers: [...this.#iceServers] })
     this.#peerConnection = pc
     this.#remoteStream = new MediaStream()
 
@@ -416,7 +426,13 @@ export class CallManager {
 
   #handleAcceptedElsewhere(payload: CallAcceptedElsewherePayload): void {
     if (payload.conversationId !== this.#conversationId) return
-    if (this.#status !== 'outgoing-ringing' && this.#status !== 'incoming-ringing') return
+    // Only a sibling device that is *receiving* the call should stop ringing
+    // once the call is answered on another of the user's devices. The caller
+    // (outgoing-ringing) is the one being answered — it must NOT self-terminate
+    // here; it proceeds to `connecting` via the incoming answer. The server
+    // currently broadcasts this to every member, so without this guard the
+    // caller would kill its own call the instant the callee picks up.
+    if (this.#status !== 'incoming-ringing') return
     this.#transitionTo('ended')
     this.#cleanup()
     this.#emit()

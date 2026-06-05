@@ -30,6 +30,16 @@ pub struct AppConfig {
     #[serde(default = "default_entra_provider_name")]
     pub entra_provider_name: String,
 
+    // ── Cloudflare TURN — optional. Calls fall back to STUN-only when absent. ──
+    /// Cloudflare Realtime TURN Key ID (the public key identifier). Used in the
+    /// `generate-ice-servers` URL path.
+    #[serde(default)]
+    pub turn_key_id: String,
+    /// Cloudflare API token paired with the TURN key. Mints short-lived ICE
+    /// credentials server-side — never sent to clients.
+    #[serde(default)]
+    pub turn_api_token: String,
+
     // These are not in Secrets Manager but read from environment
     #[serde(skip)]
     pub aws_region: String,
