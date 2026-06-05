@@ -13,7 +13,7 @@ const GROUPS = [
   {
     title: 'Developers',
     links: [
-      ['GitHub', 'https://github.com/abhichenna00/Cryptext_Client'],
+      ['GitHub', 'https://github.com/abhichenna00/NShroud'],
       ['Documentation', 'https://datatracker.ietf.org/doc/rfc9420/'],
       ['API reference', '#'],
       ['MLS protocol (RFC 9420)', 'https://datatracker.ietf.org/doc/rfc9420/'],

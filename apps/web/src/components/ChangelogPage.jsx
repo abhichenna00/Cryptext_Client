@@ -56,7 +56,7 @@ function ReleaseEntry({ release, first }) {
           </span>
         </div>
         <a
-          href={`https://github.com/abhichenna00/Cryptext_Client/releases/tag/v${release.version}`}
+          href={`https://github.com/abhichenna00/NShroud/releases/tag/v${release.version}`}
           target="_blank"
           rel="noopener"
           style={{
@@ -189,7 +189,7 @@ export default function ChangelogPage({ releases = [] }) {
               <p className="lede" style={{ marginTop: 24 }}>
                 Sourced live from <code className="kbd">CHANGELOG.md</code> on{' '}
                 <a
-                  href="https://github.com/abhichenna00/Cryptext_Client/blob/main/CHANGELOG.md"
+                  href="https://github.com/abhichenna00/NShroud/blob/main/CHANGELOG.md"
                   target="_blank"
                   rel="noopener"
                   style={{ borderBottom: '1px solid var(--border-strong)', paddingBottom: 1 }}
