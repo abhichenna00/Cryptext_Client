@@ -47,7 +47,7 @@ export default function IconRail({
 }: IconRailProps) {
   return (
     <aside className="flex w-[52px] flex-col items-center gap-2 border-r border-border bg-chrome px-2 py-3 text-chrome-fg">
-      <NshroudMark title="NShroud" className="size-7 text-fg" />
+      <NshroudMark title="NShroud" gradient className="size-7" />
 
       <div className="mt-2 flex flex-col gap-1">
         <RailButton active title="Messages" onClick={onSelectDM}>
