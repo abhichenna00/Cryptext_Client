@@ -90,12 +90,31 @@ async fn handle_connection(
     let _ = pubsub::publish_to_users(&friend_ids, &online_msg).await;
 
     // ── Phase 2: Message loop ──
+    // Tolerate a small number of malformed frames (transient client bug, racy
+    // disconnect, etc.) but close the connection if the count exceeds the
+    // threshold so a misbehaving client can't tie up the loop indefinitely.
+    const MAX_MALFORMED_FRAMES: u32 = 16;
+    let mut malformed_count: u32 = 0;
     while let Some(Ok(frame)) = stream.next().await {
         match frame {
             Message::Text(text) => {
                 let client_msg: ClientMessage = match serde_json::from_str(&text) {
                     Ok(m) => m,
-                    Err(_) => continue, // Ignore malformed messages
+                    Err(e) => {
+                        malformed_count += 1;
+                        tracing::debug!(
+                            "WS malformed frame from user={} (count={}): {}",
+                            user_id, malformed_count, e
+                        );
+                        if malformed_count >= MAX_MALFORMED_FRAMES {
+                            tracing::warn!(
+                                "WS closing connection: user={} exceeded malformed-frame threshold ({})",
+                                user_id, MAX_MALFORMED_FRAMES
+                            );
+                            break;
+                        }
+                        continue;
+                    }
                 };
                 handle_client_message(&user_id, client_msg, &registry, &tx).await;
             }
