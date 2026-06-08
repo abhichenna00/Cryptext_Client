@@ -364,6 +364,25 @@ pub async fn store_welcome(
         ));
     }
 
+    // The recipient must be a participant of the conversation this group backs.
+    // Otherwise any confirmed member could queue Welcome rows to arbitrary
+    // users, polluting their fetch_welcomes and forcing client decrypt attempts.
+    let recipient_is_participant: Option<(String,)> = sqlx::query_as(
+        "SELECT cp.user_id FROM conversation_participants cp
+         JOIN mls_groups g ON g.conversation_id = cp.conversation_id
+         WHERE g.group_id = $1 AND cp.user_id = $2"
+    )
+    .bind(&req.group_id)
+    .bind(&req.recipient_id)
+    .fetch_optional(pool.as_ref())
+    .await?;
+
+    if recipient_is_participant.is_none() {
+        return Err(AppError::BadRequest(
+            "Recipient is not a participant of this group's conversation".to_string(),
+        ));
+    }
+
     sqlx::query(
         "INSERT INTO mls_welcome_messages (recipient_id, group_id, welcome_data) VALUES ($1, $2, $3)"
     )
