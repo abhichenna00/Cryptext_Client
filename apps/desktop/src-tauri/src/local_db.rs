@@ -293,7 +293,21 @@ pub fn setup_vault(
         let _ = std::fs::remove_file(app_data.join(format!("messages_{}.db-shm", user_id)));
     }
 
-    let dek = vault::create_vault(&app_data, &user_id)?;
+    // Resolve a DEK before minting a new one: prefer an existing keyring
+    // credential (current service, then migrated legacy via load_dek_for_user's
+    // fallback) and adopt its DEK so we never orphan an existing key. Only when
+    // no credential exists for this user do we create a fresh random DEK.
+    let dek = match session::load_dek_for_user(&user_id)? {
+        Some(existing) => {
+            log::info!("setup_vault: adopting existing keyring DEK for user_id={}", user_id);
+            vault::adopt_vault(&app_data, &user_id, &existing)?;
+            existing
+        }
+        None => {
+            log::info!("setup_vault: no existing credential; minting fresh DEK for user_id={}", user_id);
+            vault::create_vault(&app_data, &user_id)?
+        }
+    };
     let conn = open_encrypted_db(&db_path, &dek)?;
     init_schema(&conn)?;
 

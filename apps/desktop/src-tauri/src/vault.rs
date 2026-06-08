@@ -109,3 +109,12 @@ pub fn create_vault(
     write_vault_file(&path, &dek)?;
     Ok(dek)
 }
+
+/// Write a vault fingerprint marker for an *existing* DEK. Used when a keyring
+/// credential already exists (current service or migrated legacy) so the vault
+/// adopts that DEK instead of minting a fresh one — keeping the keyring DEK and
+/// the on-disk vault in agreement rather than orphaning the existing key.
+pub fn adopt_vault(app_data_dir: &Path, user_id: &str, dek: &[u8; DEK_LEN]) -> Result<(), String> {
+    let path = vault_path(app_data_dir, user_id);
+    write_vault_file(&path, dek)
+}
