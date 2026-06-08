@@ -338,6 +338,14 @@ pub async fn send_message(
     let timestamp = chrono::Utc::now().timestamp_millis();
     let content_type = req.content_type.as_deref().unwrap_or("plaintext");
 
+    // Allowlist the transport content_type. Clients send "mls" for all encrypted
+    // messages (text and media alike) and "plaintext" is the default; anything
+    // else is junk that would persist and surface to other clients as
+    // last_message_content_type.
+    if !matches!(content_type, "plaintext" | "mls") {
+        return Err(AppError::BadRequest("Invalid content_type".to_string()));
+    }
+
     let insert_result: Result<(String, i64), sqlx::Error> = sqlx::query_as(
         "INSERT INTO messages (conversation_id, sender_id, content, timestamp, content_type, content_bytes, welcome_data, client_message_id)
          VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8)
