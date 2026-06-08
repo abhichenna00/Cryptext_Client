@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 
+/** Tracks the current window inner width/height, updating on resize. */
 export function useWindowSize() {
   const [windowSize, setWindowSize] = useState({
     width: window.innerWidth,

@@ -1,3 +1,11 @@
+// src/contexts/CallContext.tsx
+//
+// React bridge for voice/video calls. Owns the CallManager lifecycle and wires
+// it to the shared WebSocket (for signaling) and a MediaStreamManager (for
+// mic/camera). The manager's call state is exposed to React as an immutable
+// snapshot via useSyncExternalStore, and call actions (start/accept/end,
+// toggle mic/camera) are surfaced through the useCall() hook.
+
 import {
   createContext,
   useCallback,
@@ -77,6 +85,12 @@ async function fetchIceServers(): Promise<RTCIceServer[]> {
   return [...DEFAULT_CONFIG.iceServers]
 }
 
+/**
+ * Constructs the CallManager (plus its signaling + media managers) once the
+ * WebSocket is available, tears them down on unmount, and provides call state
+ * and actions to the tree. ICE servers (STUN + short-lived TURN) are fetched
+ * fresh on each start/accept so TURN credentials never go stale mid-session.
+ */
 export function CallProvider({ children }: { children: ReactNode }) {
   const ws = useWebSocketContext()
   const managerRef = useRef<CallManager | null>(null)
