@@ -39,6 +39,9 @@ pub struct LocalDb {
     // replaced or the process drops the struct. Prevents the DEK from
     // lingering in freed memory after sign-out or app exit.
     pub dek: Mutex<Option<Zeroizing<[u8; 32]>>>,
+    // Set whenever a message is written; read+cleared by the throttled server
+    // backup so we only re-upload the DB when there's something new to save.
+    pub dirty: std::sync::atomic::AtomicBool,
 }
 
 impl Default for LocalDb {
@@ -46,7 +49,21 @@ impl Default for LocalDb {
         Self {
             conn: Mutex::new(None),
             dek: Mutex::new(None),
+            dirty: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+}
+
+impl LocalDb {
+    /// Flag the local DB as having unsaved-to-server changes.
+    pub fn mark_dirty(&self) {
+        self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Atomically read and clear the dirty flag. Returns whether a backup is
+    /// warranted. On a failed upload the caller re-sets it via `mark_dirty`.
+    pub fn take_dirty(&self) -> bool {
+        self.dirty.swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -61,9 +78,24 @@ pub(crate) fn clear_vault_state(local_db: &State<'_, LocalDb>) -> Result<(), Str
 }
 
 /// Open a SQLCipher database with the given DEK.
-fn open_encrypted_db(db_path: &Path, dek: &[u8; 32]) -> Result<Connection, String> {
-    let conn = Connection::open(db_path)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
+///
+/// `create` controls whether a missing DB file is created. Fresh setup passes
+/// `true`; mounting an *existing* vault passes `false` so that a vanished DB
+/// file fails loudly instead of being silently re-created as an empty DB — the
+/// latter would mask data loss and defeat server-backup recovery (recovery
+/// keys off "no local DB present").
+fn open_encrypted_db(db_path: &Path, dek: &[u8; 32], create: bool) -> Result<Connection, String> {
+    let conn = if create {
+        Connection::open(db_path)
+            .map_err(|e| format!("Failed to open database: {}", e))?
+    } else {
+        use rusqlite::OpenFlags;
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        Connection::open_with_flags(db_path, flags)
+            .map_err(|e| format!("Failed to open database: {}", e))?
+    };
 
     // Pass raw hex key to SQLCipher — skips its internal PBKDF2
     let hex_key = format!("x'{}'", hex::encode(dek));
@@ -211,7 +243,9 @@ fn mount_dek_inner(
     dek: Zeroizing<[u8; 32]>,
 ) -> Result<(), String> {
     let db_path = app_data.join(format!("messages_{}.db", user_id));
-    let conn = open_encrypted_db(&db_path, &dek)?;
+    // Mounting an existing vault — do not create a stray empty DB if the file
+    // has vanished; let it fail so recovery can step in.
+    let conn = open_encrypted_db(&db_path, &dek, false)?;
     init_schema(&conn)?;
 
     let mut guard = local_db.conn.lock_or_err()?;
@@ -323,7 +357,7 @@ pub fn setup_vault(
     }
 
     let dek = vault::create_vault(&app_data, &user_id)?;
-    let conn = open_encrypted_db(&db_path, &dek)?;
+    let conn = open_encrypted_db(&db_path, &dek, true)?;
     init_schema(&conn)?;
 
     // Persist the DEK to the keyring NOW — before we migrate-and-delete the old
@@ -428,6 +462,13 @@ pub fn is_vault_unlocked(local_db: State<'_, LocalDb>) -> Result<bool, String> {
 /// written first via the atomic helper; only if that succeeds do we delete
 /// the old DB / MLS state. A write failure aborts cleanly with the user's
 /// previous state intact.
+///
+/// NOTE: this mints a NEW DEK. If/when this is wired to a UI button, it must
+/// also clear the server backup slot (server `DELETE /sync/all`, i.e.
+/// `delete_all_sync_data`) — otherwise the stale backup, keyed to the old DEK,
+/// keeps squatting the slot and `sync_flush_backup`'s ownership check will
+/// (correctly) refuse to back up the new vault forever. Currently this command
+/// has no frontend caller, so that failure mode isn't reachable yet.
 #[command]
 pub fn discard_and_reset_vault(
     app: AppHandle,
@@ -489,7 +530,9 @@ fn insert_message(conn: &rusqlite::Connection, msg: &LocalMessage) -> Result<(),
 pub fn store_message(db: &LocalDb, msg: &LocalMessage) -> Result<(), String> {
     let guard = db.conn.lock_or_err()?;
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
-    insert_message(conn, msg)
+    insert_message(conn, msg)?;
+    db.mark_dirty();
+    Ok(())
 }
 
 pub fn store_messages(db: &LocalDb, msgs: &[LocalMessage]) -> Result<(), String> {
@@ -497,6 +540,9 @@ pub fn store_messages(db: &LocalDb, msgs: &[LocalMessage]) -> Result<(), String>
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
     for msg in msgs {
         insert_message(conn, msg)?;
+    }
+    if !msgs.is_empty() {
+        db.mark_dirty();
     }
     Ok(())
 }

@@ -96,12 +96,35 @@ export default function App() {
                 await invoke('session_save')
                 vaultReady = true
                 break
-              case 'None':
+              case 'None': {
+                // No local vault. Before creating a fresh (empty) one, try to
+                // recover from the server backup — this only succeeds when the
+                // keyring still holds this user's DEK and a backup exists, and
+                // it never overwrites local data. If it can't recover, fall
+                // through to a clean setup.
+                let recovered = false
+                try {
+                  recovered = await invoke<boolean>('sync_recover_local_state', {
+                    userId: currentSession.user_id,
+                  })
+                } catch (recoverErr) {
+                  console.error('Vault recovery attempt failed:', recoverErr)
+                }
+                if (recovered) {
+                  await invoke('session_save')
+                  vaultReady = true
+                  break
+                }
                 await invoke('setup_vault', { userId: currentSession.user_id })
                 await invoke('session_save')
-                invoke('sync_upload_vault').catch(console.error)
+                // Seed the server backup so a future file loss is recoverable.
+                // sync_flush_backup uploads vault + DB + MLS, but only if the
+                // server slot is empty or already ours — it won't clobber a
+                // backup keyed to a DEK this device no longer holds.
+                invoke('sync_flush_backup', { force: true }).catch(console.error)
                 vaultReady = true
                 break
+              }
             }
           } catch (dbErr) {
             console.error('Vault initialization failed:', dbErr)
@@ -141,6 +164,33 @@ export default function App() {
 
     initialize()
   }, [])
+
+  // Throttled background backup of the encrypted message DB + MLS state. The
+  // Rust side tracks a dirty flag and no-ops when nothing changed, so an idle
+  // app makes no requests. Also flushes when the window is hidden so recent
+  // messages aren't stranded only on this device.
+  useEffect(() => {
+    if (!isTauri()) return
+    if (!session?.user_id || !hasProfile || vaultError) return
+
+    const BACKUP_INTERVAL_MS = 3 * 60 * 1000
+    const flush = () =>
+      invoke('sync_flush_backup', { force: false }).catch((e) =>
+        console.error('sync_flush_backup failed:', e),
+      )
+
+    const interval = setInterval(flush, BACKUP_INTERVAL_MS)
+    const onVisibility = () => {
+      if (document.visibilityState === 'hidden') flush()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', onVisibility)
+      flush()
+    }
+  }, [session?.user_id, hasProfile, vaultError])
 
   const handleSignOut = async () => {
     try {

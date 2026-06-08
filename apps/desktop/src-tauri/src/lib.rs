@@ -138,10 +138,12 @@ pub fn run() {
             sync::sync_upload_vault,
             sync::sync_upload_mls_state,
             sync::sync_upload_messages_db,
+            sync::sync_flush_backup,
             sync::sync_check_exists,
             sync::sync_download_vault,
             sync::sync_restore_mls_state,
             sync::sync_download_messages_db,
+            sync::sync_recover_local_state,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
