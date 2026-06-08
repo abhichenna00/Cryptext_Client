@@ -36,6 +36,11 @@ use tauri::{command, AppHandle, State};
 use zeroize::Zeroizing;
 
 const KEYRING_SERVICE: &str = "com.nshroud.app";
+/// Pre-rebrand keyring service names. Existing installs stored the session DEK
+/// under the old name, so reads fall back to these to avoid locking legacy users
+/// out after the NShroud rebrand; a recovered entry is migrated forward to
+/// `KEYRING_SERVICE`. New installs and all writes use `KEYRING_SERVICE`.
+const LEGACY_KEYRING_SERVICES: &[&str] = &["cryptex.app.com"];
 const KEYRING_ACCOUNT: &str = "active_session";
 const NONCE_LEN: usize = 12;
 
@@ -175,8 +180,8 @@ impl SessionPersistence {
     /// Inspect the keyring without restoring. Returns `Ok(None)` if no entry
     /// exists; never reveals the DEK or refresh token.
     pub fn peek_stored_user(&self) -> Result<Option<PublicStoredSession>, String> {
-        match Self::entry()?.get_password() {
-            Ok(json) => {
+        match read_keyring_json()? {
+            Some(json) => {
                 let payload: KeyringPayload = serde_json::from_str(&json)
                     .map_err(|e| format!("Deserialize failed: {}", e))?;
                 Ok(Some(PublicStoredSession {
@@ -184,8 +189,7 @@ impl SessionPersistence {
                     email: payload.email,
                 }))
             }
-            Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(format!("Keyring read failed: {}", e)),
+            None => Ok(None),
         }
     }
 
@@ -206,11 +210,10 @@ impl SessionPersistence {
         local_db: &State<'_, LocalDb>,
         session_store: &State<'_, SessionStore>,
     ) -> Result<RestoreOutcome, String> {
-        let payload = match Self::entry()?.get_password() {
-            Ok(json) => serde_json::from_str::<KeyringPayload>(&json)
+        let payload = match read_keyring_json()? {
+            Some(json) => serde_json::from_str::<KeyringPayload>(&json)
                 .map_err(|e| format!("Deserialize failed: {}", e))?,
-            Err(keyring::Error::NoEntry) => return Ok(RestoreOutcome::NotAuthenticated),
-            Err(e) => return Err(format!("Keyring read failed: {}", e)),
+            None => return Ok(RestoreOutcome::NotAuthenticated),
         };
 
         let dek_bytes = general_purpose::STANDARD
@@ -405,6 +408,43 @@ pub(crate) fn load_dek_for_user(
     load_dek_for_user_inner(user_id)
 }
 
+/// Read the raw keyring payload JSON, trying the current service first, then any
+/// legacy service names. On a legacy hit the entry is copied forward to the
+/// current service (best-effort) so subsequent reads find it under the new name.
+/// Returns `Ok(None)` only when no entry exists under any name.
+fn read_keyring_json() -> Result<Option<String>, String> {
+    let current = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+        .map_err(|e| format!("Keyring entry creation failed: {}", e))?;
+    match current.get_password() {
+        Ok(json) => return Ok(Some(json)),
+        Err(keyring::Error::NoEntry) => {}
+        Err(e) => return Err(format!("Keyring read failed: {}", e)),
+    }
+
+    for legacy in LEGACY_KEYRING_SERVICES {
+        let entry = match Entry::new(legacy, KEYRING_ACCOUNT) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        match entry.get_password() {
+            Ok(json) => {
+                // Migrate forward so future reads hit the current service name.
+                // Best-effort: a failed copy still returns the recovered payload,
+                // so a legacy user is never locked out.
+                if let Ok(current) = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT) {
+                    let _ = current.set_password(&json);
+                }
+                log::info!("keyring: recovered session from legacy service '{}'", legacy);
+                return Ok(Some(json));
+            }
+            Err(keyring::Error::NoEntry) => continue,
+            Err(e) => return Err(format!("Keyring read failed: {}", e)),
+        }
+    }
+
+    Ok(None)
+}
+
 fn load_dek_for_user_inner(
     user_id: &str,
 ) -> Result<Option<Zeroizing<[u8; 32]>>, String> {
@@ -414,20 +454,14 @@ fn load_dek_for_user_inner(
         KEYRING_SERVICE,
         KEYRING_ACCOUNT
     );
-    let entry = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
-        .map_err(|e| format!("Keyring entry creation failed: {}", e))?;
-    let json = match entry.get_password() {
-        Ok(json) => json,
-        Err(keyring::Error::NoEntry) => {
+    let json = match read_keyring_json()? {
+        Some(json) => json,
+        None => {
             log::warn!(
                 "load_dek_for_user: NoEntry — keyring has no entry for user_id={}",
                 user_id
             );
             return Ok(None);
-        }
-        Err(e) => {
-            log::error!("load_dek_for_user: keyring read FAILED: {}", e);
-            return Err(format!("Keyring read failed: {}", e));
         }
     };
     let payload: KeyringPayload =
