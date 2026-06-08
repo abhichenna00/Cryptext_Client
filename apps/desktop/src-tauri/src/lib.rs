@@ -8,6 +8,7 @@ mod friends;
 mod http_client;
 mod ice;
 mod local_db;
+mod migration;
 mod media;
 mod mls;
 mod profile;
@@ -62,6 +63,13 @@ pub fn run() {
         .manage(SessionStore::default())
         .manage(MlsState::default())
         .manage(LocalDb::default())
+        .setup(|app| {
+            // Port a pre-rebrand install's app-data (vault, message DB, MLS
+            // state) onto the current bundle identifier before the frontend
+            // boots and decides whether a vault exists.
+            migration::migrate_legacy_app_data(app.handle());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             // Updates
             updates::check_for_updates,
