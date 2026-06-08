@@ -167,6 +167,23 @@ pub async fn get_or_create_dm_conversation(
     }
 
     let pool = get_pool();
+
+    // Require the target user to actually have a profile. Otherwise any
+    // well-formed UUID could be used to create a phantom DM, mirroring the
+    // profile-existence check create_group_conversation already performs.
+    let target_exists: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM profiles WHERE user_id = $1"
+    )
+    .bind(&req.other_user_id)
+    .fetch_one(pool.as_ref())
+    .await?;
+
+    if target_exists.0 == 0 {
+        return Err(AppError::BadRequest(
+            "Target user does not have a profile".to_string(),
+        ));
+    }
+
     let mut tx = pool.begin().await?;
 
     let dm_key = if user_id < req.other_user_id {
