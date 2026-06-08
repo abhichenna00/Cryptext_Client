@@ -2,7 +2,7 @@
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "NShroud",
   "version": "0.1.4",
-  "identifier": "com.nshroud.app",
+  "identifier": "cryptex.app.com",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:1420",
