@@ -336,7 +336,14 @@ pub fn setup_vault(
         let store = session_store.session.lock_or_err()?;
         store.as_ref().map(|s| s.email.clone()).unwrap_or_default()
     };
-    session::persist_dek_for_user(&user_id, &email, &dek)?;
+    if let Err(e) = session::persist_dek_for_user(&user_id, &email, &dek) {
+        // The vault file is already on disk but its DEK never landed in the
+        // keyring. Roll the vault file back so this isn't a permanent "vault
+        // exists but can't be unlocked" lockout — the next attempt re-runs
+        // setup cleanly instead of erroring on the orphaned file.
+        let _ = std::fs::remove_file(vault::vault_path(&app_data, &user_id));
+        return Err(e);
+    }
 
     if unencrypted_path.exists() {
         let msgs = {
