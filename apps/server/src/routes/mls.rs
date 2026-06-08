@@ -457,6 +457,13 @@ pub async fn fan_out_commit(
     claims: Claims,
     Json(req): Json<FanOutCommitRequest>,
 ) -> AppResult<impl IntoResponse> {
+    // Cap commit_data the same as store_welcome caps welcome_data. Without this
+    // a member could post a large blob that gets duplicated into one row per
+    // other member (~256x), amplifying storage as a DoS.
+    if req.commit_data.len() > 32_000 {
+        return Err(AppError::BadRequest("Commit data too large (max 32KB)".to_string()));
+    }
+
     let pool = get_pool();
 
     // Verify sender is a *confirmed* member of the group. A pending member
