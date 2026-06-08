@@ -9,12 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Voice and video calls now connect across restrictive networks. Before each call the desktop client fetches STUN servers and short-lived TURN relay credentials from a new authenticated server endpoint, so a call still completes when both peers are behind symmetric NAT and no direct peer-to-peer path exists. The relay credentials are minted server-side and are never embedded in the client.
+- The desktop client now backs up its encrypted message database and MLS state to the server on a throttled schedule, and can restore them after local data loss. When the local vault files are missing but the device's encryption key is still present in the OS keyring, the client re-downloads and remounts the backup instead of starting with an empty history. A backup is only written to a server slot that is empty or already belongs to the current key, so setting up a fresh vault on a new device cannot overwrite a backup that another device might still recover.
 
 ### Fixed
 - The caller no longer terminates its own call when the recipient answers. A "call accepted elsewhere" notification, broadcast to every device on the conversation, is now ignored by the caller instead of ending the call the moment the callee picks up.
 - Audio-only calls are no longer silent. The remote participant's audio stream is now attached to a playback element, which previously happened only for video calls.
 - Remote ICE candidates that arrive before the peer connection's remote description is in place are buffered and applied in order once it is set, instead of being discarded. Calls no longer stall and fail during connection setup.
 - A duplicate WebSocket connection caused by a race between overlapping asynchronous connect attempts is prevented.
+- Signing into a second account on the same device no longer overwrites the first account's encryption key. Each account's key is stored under its own keyring entry, so every account keeps access to its existing message history.
+- First-time vault setup is now crash-safe. The encryption key is written to the OS keyring before the new database is used, and the vault file is rolled back if that write fails, so an interruption can no longer leave a database that cannot be unlocked.
+- Local message history is no longer deleted in response to transient failures at startup. A momentarily locked database (for example, while antivirus or a backup tool holds the file) is retried rather than treated as corruption, the database busy timeout is applied before the encryption key is verified, and a missing database file is reported instead of being silently recreated as an empty one.
+- A corrupt or partially written session file is now discarded on its own and no longer triggers deletion of the encrypted message database. The session file is written atomically, so an interrupted write cannot leave it truncated.
+
+### Security
+- Group commit fan-out now requires the sender to be a confirmed group member and limits the commit payload to 32KB. A member who has not yet completed their join can no longer distribute commits, and the previously unbounded payload can no longer be used for a storage-amplification denial of service.
+- Welcome messages can only be queued for users who are participants of the group's conversation. A member can no longer deliver unsolicited Welcome messages to arbitrary users.
+- Creating a direct-message conversation now requires the target user to have a profile, preventing conversations from being created against arbitrary identifiers.
+- The server validates an incoming message's content type against a known set and rejects unrecognized values instead of storing them.
 
 ## [0.6.1] - 2026-06-02
 
