@@ -74,6 +74,12 @@ function parseCandidateString(raw: string): RTCIceCandidateInit | null {
   }
 }
 
+/**
+ * CallSignalingChannel implemented over the app's shared WebSocket. Outbound:
+ * serializes SDP/ICE to JSON and wraps them in `call_*` / `ice_candidate`
+ * frames. Inbound: validates and normalizes those frames into typed payloads
+ * (dropping anything malformed) and fans them out to registered handlers.
+ */
 export class WebSocketCallSignaling implements CallSignalingChannel {
   #ws: WsHost
   #unsubscribers: Array<() => void> = []

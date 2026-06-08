@@ -1,3 +1,11 @@
+// src/lib/calls/CallSignalingChannel.ts
+//
+// Transport-agnostic signaling contract for calls. CallManager depends only on
+// this interface (send invite/answer/decline/end/ICE, and subscribe to the
+// matching inbound events), so the actual transport — currently
+// WebSocketCallSignaling — can be swapped without touching call logic. The
+// payload types below are the normalized shapes handlers receive.
+
 export type Unsubscribe = () => void
 
 export type InvitePayload = Readonly<{

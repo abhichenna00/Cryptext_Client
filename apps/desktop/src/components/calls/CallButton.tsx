@@ -11,6 +11,8 @@ interface CallButtonProps {
   title?: string
 }
 
+/** Toolbar button that starts an audio or video call. Disabled while any call
+ *  is already in progress. */
 export default function CallButton({
   conversationId,
   peerUserId,

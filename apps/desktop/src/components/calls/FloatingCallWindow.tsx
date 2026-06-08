@@ -1,3 +1,10 @@
+// src/components/calls/FloatingCallWindow.tsx
+//
+// Compact, draggable call widget shown in the "floating" display mode. Snaps to
+// the nearest screen corner (persisted) on drop, shows the peer, call duration,
+// and mic/camera/hang-up controls, plus a maximize button to switch to the
+// full-screen InCallView. Driven entirely by CallContext.
+
 import { useEffect, useRef, useState } from 'react'
 import { Maximize2, Mic, MicOff, PhoneOff, Video, VideoOff } from 'lucide-react'
 

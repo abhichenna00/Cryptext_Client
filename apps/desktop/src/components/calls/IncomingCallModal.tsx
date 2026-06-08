@@ -9,6 +9,7 @@ interface IncomingCallModalProps {
   vaultReady: boolean
 }
 
+/** Modal shown while a call is ringing in, with accept / decline actions. */
 export default function IncomingCallModal({ vaultReady }: IncomingCallModalProps) {
   const { snapshot, acceptCall, declineCall } = useCall()
   const participants = useCallParticipants()

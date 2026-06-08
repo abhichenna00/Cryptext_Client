@@ -1,3 +1,10 @@
+// src/components/calls/InCallView.tsx
+//
+// Full-screen ("expanded") call UI: the remote participant grid, a draggable
+// self picture-in-picture tile, call duration, and mic/camera/hang-up/minimize
+// controls. Reads everything from CallContext and renders only while a call is
+// in the expanded display mode; the compact floating view is FloatingCallWindow.
+
 import { useEffect, useRef, useState } from 'react'
 import { Mic, MicOff, Minimize2, PhoneOff, Video, VideoOff } from 'lucide-react'
 

@@ -30,6 +30,16 @@ type MutableParticipant = {
   joinedAt: number | null
 }
 
+/**
+ * The WebRTC call state machine. Owns the RTCPeerConnection and drives a call
+ * through its lifecycle (idle → ringing → connecting → in-call → ended), with
+ * transitions guarded by CALL_TRANSITIONS. It translates signaling events
+ * (invite/answer/decline/end/ICE, delivered via a CallSignalingChannel) into
+ * peer-connection actions, manages local/remote media through a
+ * MediaStreamManager, and publishes an immutable CallSnapshot to subscribers
+ * after every state change. Transport-agnostic: the signaling channel is
+ * injected, so the same logic works over any backend.
+ */
 export class CallManager {
   #signaling: CallSignalingChannel
   #media: MediaStreamManager
