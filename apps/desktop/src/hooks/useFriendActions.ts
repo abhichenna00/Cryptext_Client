@@ -6,6 +6,12 @@ interface FriendActionResult {
   error?: string
 }
 
+/**
+ * Shared accept / decline / cancel handlers for friend requests. Each handler
+ * invokes the matching Tauri command, tracks loading/error/success state, and
+ * calls `onSuccess` (e.g. to refresh the request list) when the command
+ * succeeds.
+ */
 export function useFriendActions(onSuccess: () => void) {
   const [actionLoading, setActionLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)

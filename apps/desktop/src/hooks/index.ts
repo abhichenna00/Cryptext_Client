@@ -1,3 +1,4 @@
+// Barrel re-export for the shared hooks, so call sites can `import { ... } from '@/hooks'`.
 export { useIsMobile } from './use-mobile'
 export { useFriendActions } from './useFriendActions'
 export { useWebSocket } from './useWebSocket'

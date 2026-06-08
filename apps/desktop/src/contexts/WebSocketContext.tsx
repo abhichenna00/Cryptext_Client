@@ -1,3 +1,11 @@
+// src/contexts/WebSocketContext.tsx
+//
+// Owns the single app-wide WebSocket connection. Handles ticket-based auth
+// (the bearer token never reaches JS), auto-reconnect with exponential backoff
+// + jitter, and a subscribe/send API that components consume via
+// useWebSocketContext (or the thin useWebSocket wrapper). The connection is
+// gated by the `enabled` prop so it only runs once the user is signed in.
+
 import {
   createContext,
   useCallback,
@@ -52,6 +60,8 @@ const DEFAULT_RECONNECT_INTERVAL = 3000
 const MAX_RECONNECT_ATTEMPTS = 10
 const BACKOFF_CAP_MS = 30000
 
+// Runtime guard: accept only objects carrying a string `action`, rejecting
+// arrays/primitives/malformed frames before they reach subscribers.
 function parseWebSocketMessage(raw: unknown): WebSocketMessage | null {
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return null
   const action = (raw as Record<string, unknown>).action
@@ -59,6 +69,8 @@ function parseWebSocketMessage(raw: unknown): WebSocketMessage | null {
   return raw as WebSocketMessage
 }
 
+// Exponential backoff (base × 2^(attempt-1)), capped, with ±25% jitter so
+// reconnecting clients don't stampede the server in lockstep.
 function getBackoffDelay(attempt: number, baseInterval: number): number {
   const exponential = baseInterval * Math.pow(2, attempt - 1)
   const capped = Math.min(exponential, BACKOFF_CAP_MS)
