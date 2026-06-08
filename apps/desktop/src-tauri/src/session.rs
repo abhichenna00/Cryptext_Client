@@ -35,7 +35,11 @@ use std::path::PathBuf;
 use tauri::{command, AppHandle, State};
 use zeroize::Zeroizing;
 
-const KEYRING_SERVICE: &str = "com.nshroud.app";
+// Keyring service name. Kept as the original pre-rebrand identifier so existing
+// installs' credentials (and the matching app-data directory, which derives from
+// the bundle identifier below) resolve without migration. The NShroud rebrand is
+// display-only (productName); identity strings stay stable.
+const KEYRING_SERVICE: &str = "cryptex.app.com";
 const KEYRING_ACCOUNT: &str = "active_session";
 const NONCE_LEN: usize = 12;
 
