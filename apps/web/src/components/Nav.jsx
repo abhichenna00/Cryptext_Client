@@ -92,9 +92,6 @@ export default function Nav({ active = 'home', changelogVersion = 'v0.5.1' }) {
             </svg>
             GitHub
           </a>
-          <a href="#" className="btn btn-ghost btn-sm">
-            Sign in
-          </a>
           <a
             href="https://github.com/abhichenna00/NShroud/releases"
             className="btn btn-primary btn-sm"
