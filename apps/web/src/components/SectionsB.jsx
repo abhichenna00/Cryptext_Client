@@ -1,4 +1,5 @@
 // Landing sections: Architecture, Pricing, ChangelogTeaser, FinalCTA.
+import { useState, useEffect, useRef } from 'react'
 
 // ─── ARCHITECTURE ─────────────────────────────────────────────────────────
 const ARCH_META = [
@@ -194,7 +195,203 @@ const TIERS = [
   },
 ]
 
+// ─── CONTACT SALES MODAL ──────────────────────────────────────────────────
+function ContactSalesModal({ open, onClose }) {
+  const [sent, setSent] = useState(false)
+  const firstFieldRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', onKey)
+    document.body.style.overflow = 'hidden'
+    const t = setTimeout(() => firstFieldRef.current && firstFieldRef.current.focus(), 60)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      document.body.style.overflow = ''
+      clearTimeout(t)
+    }
+  }, [open, onClose])
+
+  // Reset the form a moment after it closes so it's fresh next open.
+  useEffect(() => {
+    if (open) return
+    const t = setTimeout(() => setSent(false), 250)
+    return () => clearTimeout(t)
+  }, [open])
+
+  if (!open) return null
+
+  return (
+    <div
+      className="modal-scrim"
+      onMouseDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div className="modal" role="dialog" aria-modal="true" aria-label="Contact sales">
+        <button className="modal-close" onClick={onClose} aria-label="Close">
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+          >
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+
+        {sent ? (
+          <div style={{ padding: '48px 36px', textAlign: 'center' }}>
+            <div
+              style={{
+                width: 46,
+                height: 46,
+                margin: '0 auto 20px',
+                borderRadius: 10,
+                display: 'inline-flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                background: 'var(--hl-soft)',
+                border: '1px solid var(--border-strong)',
+                color: 'var(--hl)',
+              }}
+            >
+              <svg
+                width="22"
+                height="22"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <polyline points="20 6 9 17 4 12" />
+              </svg>
+            </div>
+            <h3 className="h-2" style={{ marginBottom: 10 }}>
+              Thanks. We'll be in touch.
+            </h3>
+            <p className="small" style={{ maxWidth: 360, margin: '0 auto' }}>
+              A member of our team will reach out within one business day to scope your
+              deployment. Check your inbox for a confirmation.
+            </p>
+            <button className="btn btn-secondary" style={{ marginTop: 28 }} onClick={onClose}>
+              Close
+            </button>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              setSent(true)
+            }}
+            style={{ padding: '34px 36px 32px' }}
+          >
+            <span className="eyebrow">Enterprise</span>
+            <h3 className="h-2" style={{ marginTop: 12, marginBottom: 8 }}>
+              Talk to sales
+            </h3>
+            <p className="small" style={{ marginBottom: 26, maxWidth: 400 }}>
+              Tell us about your team and how you want to deploy. We'll follow up to
+              scope hosting, SSO, and terms.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div className="field">
+                  <label className="field-label" htmlFor="cs-name">
+                    Name<span className="req">*</span>
+                  </label>
+                  <input
+                    ref={firstFieldRef}
+                    id="cs-name"
+                    name="name"
+                    className="input"
+                    required
+                    placeholder="Jordan Reyes"
+                  />
+                </div>
+                <div className="field">
+                  <label className="field-label" htmlFor="cs-email">
+                    Work email<span className="req">*</span>
+                  </label>
+                  <input
+                    id="cs-email"
+                    name="email"
+                    type="email"
+                    className="input"
+                    required
+                    placeholder="jordan@yourco.com"
+                  />
+                </div>
+              </div>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+                <div className="field">
+                  <label className="field-label" htmlFor="cs-company">
+                    Company<span className="req">*</span>
+                  </label>
+                  <input id="cs-company" name="company" className="input" required placeholder="Acme Inc." />
+                </div>
+                <div className="field">
+                  <label className="field-label" htmlFor="cs-size">
+                    Team size
+                  </label>
+                  <select id="cs-size" name="size" className="select" defaultValue="">
+                    <option value="" disabled>
+                      Select…
+                    </option>
+                    <option>1–50</option>
+                    <option>51–250</option>
+                    <option>251–1,000</option>
+                    <option>1,000+</option>
+                  </select>
+                </div>
+              </div>
+              <div className="field">
+                <label className="field-label" htmlFor="cs-msg">
+                  What do you need?
+                </label>
+                <textarea
+                  id="cs-msg"
+                  name="message"
+                  className="textarea"
+                  placeholder="Self-hosting, single sign-on, data residency, timelines…"
+                />
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 16,
+                marginTop: 26,
+              }}
+            >
+              <span className="small" style={{ fontSize: 12, color: 'var(--fg-3)' }}>
+                We reply within one business day.
+              </span>
+              <button type="submit" className="btn btn-primary btn-arrow">
+                Send message
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  )
+}
+
 export function Pricing() {
+  const [contactOpen, setContactOpen] = useState(false)
   return (
     <section id="pricing" className="section">
       <div className="container section-inner">
@@ -288,23 +485,46 @@ export function Pricing() {
                   </li>
                 ))}
               </ul>
-              <a href="#" className={t.ctaSecondary ? 'btn btn-secondary btn-arrow' : 'btn btn-primary btn-arrow'}>
-                {t.cta}
-              </a>
+              {t.cta === 'Contact sales' ? (
+                <button
+                  type="button"
+                  onClick={() => setContactOpen(true)}
+                  className={t.ctaSecondary ? 'btn btn-secondary btn-arrow' : 'btn btn-primary btn-arrow'}
+                  style={{ width: '100%', justifyContent: 'center' }}
+                >
+                  {t.cta}
+                </button>
+              ) : (
+                <a href="#" className={t.ctaSecondary ? 'btn btn-secondary btn-arrow' : 'btn btn-primary btn-arrow'}>
+                  {t.cta}
+                </a>
+              )}
             </div>
           ))}
         </div>
         <div className="small" style={{ textAlign: 'center', marginTop: 28, color: 'var(--fg-3)' }}>
           Enterprise pricing is scoped to your deployment.{' '}
-          <a
-            href="mailto:hello@nshroud.com"
-            style={{ color: 'var(--fg)', textDecoration: 'underline', textUnderlineOffset: 3 }}
+          <button
+            type="button"
+            onClick={() => setContactOpen(true)}
+            style={{
+              appearance: 'none',
+              background: 'none',
+              border: 'none',
+              padding: 0,
+              font: 'inherit',
+              cursor: 'pointer',
+              color: 'var(--fg)',
+              textDecoration: 'underline',
+              textUnderlineOffset: 3,
+            }}
           >
             Contact us
-          </a>
+          </button>
           .
         </div>
       </div>
+      <ContactSalesModal open={contactOpen} onClose={() => setContactOpen(false)} />
     </section>
   )
 }

@@ -364,24 +364,6 @@ function MessageLifecycle() {
   )
 }
 
-const STEPS = [
-  {
-    n: '01',
-    t: 'Sealed on your device',
-    d: 'When you hit send, your message is encrypted on your device with keys that only your conversation holds. The readable version never leaves your device.',
-  },
-  {
-    n: '02',
-    t: 'Sent through our servers',
-    d: 'Our servers deliver the encrypted message to the right people and hold it until their devices come online. We can see that a message was sent, but not what it says.',
-  },
-  {
-    n: '03',
-    t: 'Opened by the recipient',
-    d: 'Only your teammates’ devices hold the keys to open it. The message is decrypted inside their app and appears in the conversation. It arrives in an instant, and no server, network, or observer in between can read it.',
-  },
-]
-
 export function HowItWorks() {
   return (
     <section id="how" className="section">
@@ -400,38 +382,12 @@ export function HowItWorks() {
             Follow one message, end to end.
           </h2>
           <p className="lede" style={{ marginTop: 18, maxWidth: 640 }}>
-            Encryption is easy to claim and hard to picture. Here is the full path
-            of a single message, from the moment you send it to the moment
-            it's read, and exactly what we can see along the way.
+            You and the people you message can read it. Everywhere in between,
+            on the network and on our servers, it stays encrypted.
           </p>
         </div>
 
         <MessageLifecycle />
-
-        <div
-          style={{
-            display: 'grid',
-            gridTemplateColumns: 'repeat(3, 1fr)',
-            gap: 1,
-            background: 'var(--border)',
-            border: '1px solid var(--border)',
-            borderRadius: 12,
-            overflow: 'hidden',
-            marginTop: 40,
-          }}
-        >
-          {STEPS.map((s) => (
-            <div key={s.n} style={{ background: 'var(--bg)', padding: 28, minHeight: 188 }}>
-              <div className="mono" style={{ fontSize: 11, color: 'var(--hl)', marginBottom: 16 }}>
-                {s.n}
-              </div>
-              <h3 className="h-3" style={{ marginBottom: 10 }}>
-                {s.t}
-              </h3>
-              <p className="small">{s.d}</p>
-            </div>
-          ))}
-        </div>
 
         <details style={{ marginTop: 40 }}>
           <summary
@@ -447,7 +403,7 @@ export function HowItWorks() {
           >
             <span style={{ color: 'var(--fg)' }}>Read more</span>
             <span className="mono" style={{ fontSize: 11, color: 'var(--fg-3)' }}>
-              forward secrecy, post-compromise, and the deeper crypto
+              the protocol: MLS, forward secrecy, post-compromise security
             </span>
           </summary>
           <div className="surface" style={{ padding: 28, marginTop: 16 }}>
