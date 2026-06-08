@@ -383,7 +383,10 @@ export default function Hero({ grid = true }) {
               </em>
             </h1>
             <p className="lede" style={{ marginTop: 28 }}>
-              NShroud is private team chat for companies that handle things they can't afford to leak. It feels like the messenger your team already knows, but every conversation is locked to your own devices, leaving the people who run the service, us included, with nothing but ciphertext.
+              NShroud is private team chat for organizations that handle sensitive
+              information. It works like the team messenger you already use, but every
+              conversation is locked to your own devices. No one who runs the service,
+              including us, can read your messages.
             </p>
             <HeroCTAs />
           </div>

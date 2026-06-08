@@ -165,7 +165,7 @@ const TIERS = [
     price: 'Free',
     sub: 'for public use, forever',
     blurb:
-      'The full end-to-end encrypted core, hosted by us, for individuals and teams that just want to message privately. Every conversation is sealed the same way.',
+      'The full end-to-end encrypted core, hosted by us, for individuals and teams that want to message privately. Every conversation is locked the same way.',
     features: [
       '1:1 & group chats, encrypted media & files',
       'Forward secrecy on every message (MLS)',
@@ -181,7 +181,7 @@ const TIERS = [
     price: 'Custom',
     sub: 'annual contract',
     blurb:
-      'For organizations that need control. Self-host the container on your own infrastructure, set your data residency, and get the SSO and operational guarantees IT signs off on.',
+      'For organizations that need control. Run the container on your own infrastructure, set where your data lives, and get the SSO and operational guarantees IT needs to sign off.',
     features: [
       'Self-host the container on your infra, or have us run it',
       'Microsoft Entra & Google Workspace SSO',
@@ -212,7 +212,9 @@ export function Pricing() {
             Free for everyone. Enterprise when you need control.
           </h2>
           <p className="lede" style={{ marginTop: 18 }}>
-            Every plan ships the same end-to-end encrypted core. Use it free on our hosting, or run the container on your own infrastructure with the controls enterprises require.
+            Every plan includes the same end-to-end encrypted core. Use it free on our
+            hosting, or run the container on your own infrastructure with the controls
+            larger organizations need.
           </p>
         </div>
         <div
@@ -239,11 +241,6 @@ export function Pricing() {
                 position: 'relative',
               }}
             >
-              {t.featured && (
-                <span className="pill" style={{ position: 'absolute', top: 20, right: 20 }}>
-                  <span className="pill-dot" /> Recommended
-                </span>
-              )}
               <div className="eyebrow">{t.name}</div>
               <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 18 }}>
                 <span style={{ fontSize: 44, fontWeight: 500, letterSpacing: '-0.03em' }}>{t.price}</span>
@@ -298,7 +295,14 @@ export function Pricing() {
           ))}
         </div>
         <div className="small" style={{ textAlign: 'center', marginTop: 28, color: 'var(--fg-3)' }}>
-          Enterprise pricing is scoped to your deployment. Talk to us.
+          Enterprise pricing is scoped to your deployment.{' '}
+          <a
+            href="mailto:hello@nshroud.com"
+            style={{ color: 'var(--fg)', textDecoration: 'underline', textUnderlineOffset: 3 }}
+          >
+            Contact us
+          </a>
+          .
         </div>
       </div>
     </section>
@@ -402,7 +406,7 @@ export function FinalCTA() {
           </em>
         </h2>
         <p className="lede" style={{ marginTop: 24, marginLeft: 'auto', marginRight: 'auto', textAlign: 'center' }}>
-          Free for public use, or self-hosted on your own infrastructure. Your team is messaging privately by the end of the afternoon.
+          Free for public use, or self-hosted on your own infrastructure.
         </p>
         <div
           style={{
