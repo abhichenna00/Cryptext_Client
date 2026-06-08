@@ -92,11 +92,30 @@ export default function Nav({ active = 'home', changelogVersion = 'v0.5.1' }) {
             </svg>
             GitHub
           </a>
-          <a href="#" className="btn btn-secondary btn-sm">
+          <a href="#" className="btn btn-ghost btn-sm">
             Sign in
           </a>
-          <a href="/#pricing" className="btn btn-primary btn-sm btn-arrow">
-            Get hosted
+          <a
+            href="https://github.com/abhichenna00/NShroud/releases"
+            className="btn btn-primary btn-sm"
+            target="_blank"
+            rel="noopener"
+          >
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.7"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M12 3v11m0 0-4-4m4 4 4-4" />
+              <path d="M5 19h14" />
+            </svg>
+            Download
           </a>
         </div>
       </div>
