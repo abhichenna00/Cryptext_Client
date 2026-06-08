@@ -459,9 +459,11 @@ pub async fn fan_out_commit(
 ) -> AppResult<impl IntoResponse> {
     let pool = get_pool();
 
-    // Verify sender is a member of the group
+    // Verify sender is a *confirmed* member of the group. A pending member
+    // (confirmed_epoch = 0) hasn't completed their join and must not be able to
+    // fan out commit bytes to the rest of the group, matching store_welcome.
     let member: Option<(String,)> = sqlx::query_as(
-        "SELECT user_id FROM mls_group_members WHERE group_id = $1 AND user_id = $2"
+        "SELECT user_id FROM mls_group_members WHERE group_id = $1 AND user_id = $2 AND confirmed_epoch >= 1"
     )
     .bind(&req.group_id)
     .bind(claims.user_id())
@@ -470,7 +472,7 @@ pub async fn fan_out_commit(
 
     if member.is_none() {
         return Err(AppError::Unauthorized(
-            "You are not a member of this group".to_string(),
+            "You are not a confirmed member of this group".to_string(),
         ));
     }
 
