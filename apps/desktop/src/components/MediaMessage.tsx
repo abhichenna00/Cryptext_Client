@@ -1,3 +1,10 @@
+// src/components/MediaMessage.tsx
+//
+// Renders an image/video/file message from its decrypted MLS metadata. Shows a
+// blurhash placeholder while the (encrypted) blob downloads and decrypts via
+// the Rust backend, then swaps in the real media. The metadata JSON carries the
+// S3 keys and per-blob AES key/nonce; actual fetch + decrypt happen in Rust.
+
 import { useState, useEffect, useRef, useMemo } from 'react'
 import { invoke, convertFileSrc } from '@tauri-apps/api/core'
 import { decode as decodeBlurhash } from 'blurhash'

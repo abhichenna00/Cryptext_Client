@@ -1,6 +1,13 @@
 import { loadMediaPreferences } from './mediaPreferences'
 import type { CallMode } from './types'
 
+/**
+ * Wraps getUserMedia and device enumeration for calls. Applies saved device /
+ * audio-processing preferences, tracks every acquired stream so they can all be
+ * stopped on dispose (no leaked camera/mic), and offers `acquireGraceful` which
+ * returns whatever audio/video is actually present instead of throwing on a
+ * device-less or partially-equipped machine.
+ */
 export class MediaStreamManager {
   #activeStreams: Set<MediaStream> = new Set()
 
