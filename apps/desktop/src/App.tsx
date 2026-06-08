@@ -109,8 +109,8 @@ export default function App() {
               dbErr instanceof Error ? dbErr.message : typeof dbErr === 'string' ? dbErr : ''
             setVaultError(
               detail
-                ? `Local storage could not be unlocked: ${detail}. Sign out and sign back in to recover.`
-                : 'Local storage could not be unlocked on this device. Sign out and sign back in to recover.',
+                ? `Local storage could not be opened: ${detail}. This is often temporary — restart the app, or sign out and sign back in, to retry. Your messages are not deleted by this error.`
+                : 'Local storage could not be opened on this device. This is often temporary — restart the app, or sign out and sign back in, to retry. Your messages are not deleted by this error.',
             )
           }
 

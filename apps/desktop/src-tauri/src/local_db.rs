@@ -70,18 +70,47 @@ fn open_encrypted_db(db_path: &Path, dek: &[u8; 32]) -> Result<Connection, Strin
     conn.pragma_update(None, "key", &hex_key)
         .map_err(|e| format!("Failed to set encryption key: {}", e))?;
 
-    // Verify the key works by reading a page
-    conn.execute_batch("SELECT count(*) FROM sqlite_master;")
-        .map_err(|_| "Could not unlock database — DEK does not match".to_string())?;
+    // Set the busy timeout BEFORE the validation read. Otherwise a database
+    // that's momentarily locked (antivirus, backup tool, another process)
+    // makes the validation query fail immediately and gets misclassified as a
+    // wrong key — which upstream could treat as corruption and wipe history.
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| format!("Failed to set busy timeout: {}", e))?;
+
+    // Verify the key works by reading a page. Distinguish a genuine key
+    // mismatch from a transient lock/IO error so callers don't destroy data
+    // over something retryable.
+    if let Err(e) = conn.execute_batch("SELECT count(*) FROM sqlite_master;") {
+        return Err(classify_db_open_error(e));
+    }
 
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA busy_timeout=5000;",
+         PRAGMA synchronous=NORMAL;",
     )
     .map_err(|e| format!("Failed to set pragmas: {}", e))?;
 
     Ok(conn)
+}
+
+/// Map a failure of the key-validation read to a message that signals whether
+/// the failure is a genuine key mismatch (DB unrecoverable with this DEK) or a
+/// transient/retryable condition. Callers must NOT treat the transient case as
+/// corruption — see `session::restore`, which never wipes on a mount failure.
+fn classify_db_open_error(err: rusqlite::Error) -> String {
+    use rusqlite::ffi::ErrorCode;
+    if let rusqlite::Error::SqliteFailure(e, _) = &err {
+        match e.code {
+            ErrorCode::DatabaseBusy
+            | ErrorCode::DatabaseLocked
+            | ErrorCode::SystemIoFailure
+            | ErrorCode::CannotOpen => {
+                return format!("Database temporarily unavailable (locked or busy): {}", err);
+            }
+            _ => {}
+        }
+    }
+    "Could not unlock database — DEK does not match".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -296,6 +325,18 @@ pub fn setup_vault(
     let dek = vault::create_vault(&app_data, &user_id)?;
     let conn = open_encrypted_db(&db_path, &dek)?;
     init_schema(&conn)?;
+
+    // Persist the DEK to the keyring NOW — before we migrate-and-delete the old
+    // unencrypted DB and before the separate `session_save` IPC runs. Otherwise
+    // a crash between this command and `session_save` would leave a vault file
+    // and an encrypted DB keyed to a DEK that exists only in process memory:
+    // permanent lockout, with `setup_vault` refusing to re-run. Persisting here
+    // makes the key durable before anything depends on it.
+    let email = {
+        let store = session_store.session.lock_or_err()?;
+        store.as_ref().map(|s| s.email.clone()).unwrap_or_default()
+    };
+    session::persist_dek_for_user(&user_id, &email, &dek)?;
 
     if unencrypted_path.exists() {
         let msgs = {
