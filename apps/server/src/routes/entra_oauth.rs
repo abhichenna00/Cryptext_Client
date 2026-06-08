@@ -173,11 +173,7 @@ pub async fn entra_callback(
     match existing {
         Some(AuthStatus::Pending) => {}
         _ => {
-            return Html(
-                "<html><body><h1>Invalid or expired session</h1>\
-                <p>Please try signing in again from Cryptext.</p></body></html>"
-                    .to_string(),
-            );
+            return failure_page();
         }
     }
 
@@ -207,13 +203,7 @@ pub async fn entra_callback(
             )
             .await;
 
-            Html(
-                "<html><body style=\"font-family: sans-serif; text-align: center; padding-top: 80px;\">\
-                    <h1>Signed in successfully</h1>\
-                    <p>You can close this tab and return to Cryptext.</p>\
-                </body></html>"
-                    .to_string(),
-            )
+            signed_in_page()
         }
         Err(e) => {
             tracing::error!("Entra OAuth token exchange failed: {}", e);
@@ -231,14 +221,12 @@ pub async fn entra_callback(
     }
 }
 
+fn signed_in_page() -> Html<String> {
+    Html(include_str!("../../templates/signed-in.html").replace("{{provider}}", "Microsoft"))
+}
+
 fn failure_page() -> Html<String> {
-    Html(
-        "<html><body style=\"font-family: sans-serif; text-align: center; padding-top: 80px;\">\
-            <h1>Sign-in failed</h1>\
-            <p>Something went wrong. Please try again from Cryptext.</p>\
-        </body></html>"
-            .to_string(),
-    )
+    Html(include_str!("../../templates/signin-failed.html").replace("{{provider}}", "Microsoft"))
 }
 
 /// GET /auth/entra/status?state=xxx
