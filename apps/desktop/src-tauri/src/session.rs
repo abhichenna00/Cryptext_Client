@@ -6,8 +6,16 @@
 // access/id tokens.
 //
 // Storage split:
-//   - Keyring entry (user_id, email, DEK) — small payload, fits Windows
+//   - Per-user keyring entry (account `active_session_dek_<user_id>`) holding
+//     that user's DEK. Keying the account by user_id means a second account
+//     signing in on the same device can't overwrite the first user's DEK —
+//     each user's key survives independently. Small payload, fits Windows
 //     Credential Manager's ~2560-char blob limit.
+//   - "Last active" pointer entry (account `active_session`) holding the
+//     user_id/email/DEK of whoever signed in most recently. Used at launch to
+//     decide which user to auto-restore and to render "continue as <email>".
+//     This one is intentionally overwritten on each sign-in; it's just a
+//     pointer, never the sole copy of any user's DEK.
 //   - session.enc file in app data — DEK-wrapped Cognito refresh token.
 //     The refresh token alone can exceed the keyring size cap, so it lives
 //     on disk encrypted. The DEK is still keyring-gated, so the file is
@@ -31,7 +39,9 @@ use base64::{engine::general_purpose, Engine};
 use keyring::Entry;
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use tauri::{command, AppHandle, State};
 use zeroize::Zeroizing;
 
@@ -40,8 +50,86 @@ use zeroize::Zeroizing;
 // the bundle identifier below) resolve without migration. The NShroud rebrand is
 // display-only (productName); identity strings stay stable.
 const KEYRING_SERVICE: &str = "cryptex.app.com";
+// "Last active" pointer account — overwritten on every sign-in. Never the sole
+// copy of a DEK; per-user entries below hold the durable keys.
 const KEYRING_ACCOUNT: &str = "active_session";
 const NONCE_LEN: usize = 12;
+
+/// Keyring account holding a specific user's DEK. Keyed by user_id so accounts
+/// don't clobber each other's keys on a shared device.
+fn dek_account(user_id: &str) -> String {
+    format!("{}_dek_{}", KEYRING_ACCOUNT, user_id)
+}
+
+fn dek_entry(user_id: &str) -> Result<Entry, String> {
+    Entry::new(KEYRING_SERVICE, &dek_account(user_id))
+        .map_err(|e| format!("Keyring entry creation failed: {}", e))
+}
+
+/// Atomic write: stage to a sibling .tmp file, fsync, then rename over the
+/// target so a crash mid-write can never leave a truncated file. A torn
+/// session.enc would otherwise fail to decrypt on next launch and (previously)
+/// trigger a destructive wipe of the message DB.
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), String> {
+    let tmp_path = path.with_extension("tmp");
+    {
+        let mut f = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&tmp_path)
+            .map_err(|e| format!("Failed to create temp session file: {}", e))?;
+        f.write_all(bytes)
+            .map_err(|e| format!("Failed to write temp session file: {}", e))?;
+        f.sync_all()
+            .map_err(|e| format!("Failed to fsync temp session file: {}", e))?;
+    }
+    std::fs::rename(&tmp_path, path).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp_path);
+        format!("Failed to swap session file into place: {}", e)
+    })
+}
+
+/// Decode + validate a keyring payload, returning the DEK only if the stored
+/// user_id matches `want_user_id`. `Ok(None)` means "not this user".
+fn dek_from_payload_json(
+    json: &str,
+    want_user_id: &str,
+) -> Result<Option<Zeroizing<[u8; 32]>>, String> {
+    let payload: KeyringPayload =
+        serde_json::from_str(json).map_err(|e| format!("Deserialize failed: {}", e))?;
+    if payload.user_id != want_user_id {
+        return Ok(None);
+    }
+    let dek_bytes = general_purpose::STANDARD
+        .decode(&payload.dek_b64)
+        .map_err(|e| format!("Invalid stored DEK: {}", e))?;
+    if dek_bytes.len() != 32 {
+        return Err("Stored DEK has wrong length".to_string());
+    }
+    let mut dek_array = [0u8; 32];
+    dek_array.copy_from_slice(&dek_bytes);
+    Ok(Some(Zeroizing::new(dek_array)))
+}
+
+/// Write a user's DEK to its per-user keyring entry. Idempotent. Called both
+/// by `save_session` and by `setup_vault` (so the DEK is durable before the
+/// freshly-keyed DB is used and the old unencrypted DB is deleted).
+pub(crate) fn persist_dek_for_user(
+    user_id: &str,
+    email: &str,
+    dek: &[u8; 32],
+) -> Result<(), String> {
+    let payload = KeyringPayload {
+        user_id: user_id.to_string(),
+        email: email.to_string(),
+        dek_b64: general_purpose::STANDARD.encode(dek),
+    };
+    let json = serde_json::to_string(&payload).map_err(|e| format!("Serialize failed: {}", e))?;
+    dek_entry(user_id)?
+        .set_password(&json)
+        .map_err(|e| format!("Keyring write failed: {}", e))
+}
 
 #[derive(Serialize, Deserialize)]
 struct KeyringPayload {
@@ -137,9 +225,12 @@ impl SessionPersistence {
 
         let enc_refresh = Self::encrypt_with_dek(dek, refresh_token.as_bytes())?;
         let session_path = self.session_file();
-        std::fs::write(&session_path, enc_refresh)
-            .map_err(|e| format!("Failed to write session file: {}", e))?;
+        atomic_write(&session_path, &enc_refresh)?;
         log::info!("save_session: wrote session.enc at {:?}", session_path);
+
+        // Durable per-user DEK entry first — this is the copy that survives a
+        // second account signing in on the same device.
+        persist_dek_for_user(user_id, email, dek)?;
 
         let payload = KeyringPayload {
             user_id: user_id.to_string(),
@@ -200,11 +291,13 @@ impl SessionPersistence {
     ///   3. Mount DEK, open encrypted DB, populate LocalDb.
     ///   4. Refresh Cognito tokens, populate SessionStore.
     ///
-    /// Sign-out is not destructive in this design: only genuinely-corrupt
-    /// local state (wrong DEK length, undecryptable session.enc, DB mount
-    /// failure) wipes the keyring + vault. Transient failures (network,
-    /// missing session.enc, identity mismatch) leave credentials intact so
-    /// the next attempt can recover.
+    /// Restore is **non-destructive**: it never deletes the vault or message
+    /// DB on its own. A torn session.enc, a transiently-locked DB, or a
+    /// keyring/vault mismatch all leave the encrypted history on disk and
+    /// surface an error so the user can retry or make an explicit choice
+    /// (re-login, or the deliberate "discard local history" action). Silently
+    /// wiping message history from launch-time code is never correct — a
+    /// transient I/O hiccup must not look like permanent data loss.
     pub async fn restore(
         &self,
         local_db: &State<'_, LocalDb>,
@@ -216,19 +309,19 @@ impl SessionPersistence {
             Err(keyring::Error::NoEntry) => return Ok(RestoreOutcome::NotAuthenticated),
             Err(e) => return Err(format!("Keyring read failed: {}", e)),
         };
+        let stored_user_id = payload.user_id.clone();
 
-        let dek_bytes = general_purpose::STANDARD
-            .decode(&payload.dek_b64)
-            .map_err(|e| format!("Invalid stored DEK: {}", e))?;
-        if dek_bytes.len() != 32 {
-            // Corrupt local state — keyring entry is unusable. Wipe so the
-            // next sign-in writes a clean entry.
-            self.wipe_local_artifacts(&payload.user_id);
-            return Err("Stored DEK has wrong length".to_string());
-        }
-        let mut dek_array = [0u8; 32];
-        dek_array.copy_from_slice(&dek_bytes);
-        let dek = Zeroizing::new(dek_array);
+        // Resolve the DEK via the durable per-user entry (with legacy-pointer
+        // fallback + migration). The pointer's own embedded DEK is only a hint;
+        // the per-user entry is the source of truth.
+        let dek = match load_dek_for_user_inner(&stored_user_id)? {
+            Some(dek) => dek,
+            None => {
+                // No usable DEK on this device. Nothing to wipe — leave the
+                // encrypted DB in place in case the keyring is restored later.
+                return Err("Stored DEK unavailable for this user".to_string());
+            }
+        };
 
         // session.enc missing means the user signed out (or the file was
         // removed externally). Don't wipe — the keyring DEK + vault file are
@@ -246,20 +339,24 @@ impl SessionPersistence {
         let refresh_bytes = match Self::decrypt_with_dek(&dek, &enc_refresh) {
             Ok(bytes) => bytes,
             Err(e) => {
-                // Undecryptable session.enc means it doesn't match the
-                // keyring DEK — local state is genuinely corrupt.
-                self.wipe_local_artifacts(&payload.user_id);
+                // Undecryptable session.enc: the file is corrupt (e.g. a torn
+                // write) or stale relative to the DEK. Discard ONLY the bad
+                // refresh-token file — the DEK-encrypted message DB is
+                // untouched. A fresh sign-in rewrites session.enc and unlocks
+                // the existing history.
+                let _ = std::fs::remove_file(self.session_file());
+                log::warn!("restore: discarded undecryptable session.enc; DB left intact");
                 return Err(e);
             }
         };
         let refresh_token = String::from_utf8(refresh_bytes)
             .map_err(|e| format!("Refresh token not valid UTF-8: {}", e))?;
 
-        let stored_user_id = payload.user_id.clone();
         if let Err(e) = local_db::mount_dek(&self.app_data, local_db, &stored_user_id, dek) {
-            // DB mount failure with a fingerprint-matching DEK is corrupt
-            // local state — wipe so next launch does fresh setup.
-            self.wipe_local_artifacts(&payload.user_id);
+            // Mount failure here is NOT proof of corruption — the DB may be
+            // momentarily locked (antivirus, backup tool, another process) or
+            // hitting transient I/O. Never wipe; surface the error and let the
+            // next launch retry against the still-intact DB.
             return Err(format!("Local DB mount failed: {}", e));
         }
 
@@ -322,9 +419,22 @@ impl SessionPersistence {
     }
 
     fn wipe_local_artifacts(&self, user_id: &str) {
-        let _ = Self::entry().and_then(|e| {
+        // Delete this user's durable DEK entry.
+        let _ = dek_entry(user_id).and_then(|e| {
             e.delete_credential().map_err(|err| format!("{}", err))
         });
+        // Only clear the shared "last active" pointer if it currently points at
+        // this user — otherwise we'd strand a different account whose key still
+        // lives in its own per-user entry.
+        if let Ok(entry) = Self::entry() {
+            if let Ok(json) = entry.get_password() {
+                if let Ok(payload) = serde_json::from_str::<KeyringPayload>(&json) {
+                    if payload.user_id == user_id {
+                        let _ = entry.delete_credential();
+                    }
+                }
+            }
+        }
         let _ = std::fs::remove_file(self.session_file());
 
         if let Ok(paths) = AppPaths::new(&self.app, user_id) {
@@ -413,45 +523,63 @@ fn load_dek_for_user_inner(
     user_id: &str,
 ) -> Result<Option<Zeroizing<[u8; 32]>>, String> {
     log::info!(
-        "load_dek_for_user: requesting DEK for user_id={} service={} account={}",
+        "load_dek_for_user: requesting DEK for user_id={} account={}",
         user_id,
-        KEYRING_SERVICE,
-        KEYRING_ACCOUNT
+        dek_account(user_id)
     );
-    let entry = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
+
+    // 1. Durable per-user entry — the source of truth.
+    match dek_entry(user_id)?.get_password() {
+        Ok(json) => {
+            if let Some(dek) = dek_from_payload_json(&json, user_id)? {
+                log::info!("load_dek_for_user: per-user entry HIT for user_id={}", user_id);
+                return Ok(Some(dek));
+            }
+            // Entry exists but the embedded user_id doesn't match the account
+            // it's filed under — treat as absent and fall through to legacy.
+            log::warn!(
+                "load_dek_for_user: per-user entry payload mismatch for user_id={}",
+                user_id
+            );
+        }
+        Err(keyring::Error::NoEntry) => {}
+        Err(e) => {
+            log::error!("load_dek_for_user: per-user keyring read FAILED: {}", e);
+            return Err(format!("Keyring read failed: {}", e));
+        }
+    }
+
+    // 2. Legacy fallback: older installs stored the DEK only in the shared
+    //    "active_session" pointer. If it belongs to this user, adopt it and
+    //    migrate into the per-user entry so the next sign-in can't clobber it.
+    let legacy = Entry::new(KEYRING_SERVICE, KEYRING_ACCOUNT)
         .map_err(|e| format!("Keyring entry creation failed: {}", e))?;
-    let json = match entry.get_password() {
+    let json = match legacy.get_password() {
         Ok(json) => json,
         Err(keyring::Error::NoEntry) => {
+            log::warn!("load_dek_for_user: no per-user or legacy entry for user_id={}", user_id);
+            return Ok(None);
+        }
+        Err(e) => {
+            log::error!("load_dek_for_user: legacy keyring read FAILED: {}", e);
+            return Err(format!("Keyring read failed: {}", e));
+        }
+    };
+    let dek = match dek_from_payload_json(&json, user_id)? {
+        Some(dek) => dek,
+        None => {
             log::warn!(
-                "load_dek_for_user: NoEntry — keyring has no entry for user_id={}",
+                "load_dek_for_user: legacy pointer holds a different user; no DEK for user_id={}",
                 user_id
             );
             return Ok(None);
         }
-        Err(e) => {
-            log::error!("load_dek_for_user: keyring read FAILED: {}", e);
-            return Err(format!("Keyring read failed: {}", e));
-        }
     };
-    let payload: KeyringPayload =
-        serde_json::from_str(&json).map_err(|e| format!("Deserialize failed: {}", e))?;
-    if payload.user_id != user_id {
-        log::warn!(
-            "load_dek_for_user: user_id MISMATCH — keyring has {} but caller asked for {}",
-            payload.user_id,
-            user_id
-        );
-        return Ok(None);
+    // Best-effort migration; a failure here just means we retry next time.
+    if let Err(e) = persist_dek_for_user(user_id, "", &dek) {
+        log::warn!("load_dek_for_user: migration to per-user entry failed: {}", e);
+    } else {
+        log::info!("load_dek_for_user: migrated legacy DEK to per-user entry for user_id={}", user_id);
     }
-    let dek_bytes = general_purpose::STANDARD
-        .decode(&payload.dek_b64)
-        .map_err(|e| format!("Invalid stored DEK: {}", e))?;
-    if dek_bytes.len() != 32 {
-        return Err("Stored DEK has wrong length".to_string());
-    }
-    let mut dek_array = [0u8; 32];
-    dek_array.copy_from_slice(&dek_bytes);
-    log::info!("load_dek_for_user: keyring read SUCCESS for user_id={}", user_id);
-    Ok(Some(Zeroizing::new(dek_array)))
+    Ok(Some(dek))
 }

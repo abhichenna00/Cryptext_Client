@@ -89,9 +89,21 @@ export default function AuthPage() {
       case 'Locked':
         await invoke('unlock_vault', { userId })
         return
-      case 'None':
-        await invoke('setup_vault', { userId })
+      case 'None': {
+        // Try to recover a prior vault from the server backup before creating
+        // a fresh one. Succeeds only when the keyring still holds this user's
+        // DEK and a backup exists; never overwrites local data.
+        let recovered = false
+        try {
+          recovered = await invoke<boolean>('sync_recover_local_state', { userId })
+        } catch (recoverErr) {
+          console.error('Vault recovery attempt failed:', recoverErr)
+        }
+        if (!recovered) {
+          await invoke('setup_vault', { userId })
+        }
         return
+      }
     }
   }
 
@@ -107,8 +119,9 @@ export default function AuthPage() {
       return
     }
 
-    invoke('sync_upload_vault').catch(console.error)
-    invoke('sync_upload_mls_state').catch(console.error)
+    // Backs up vault + DB + MLS, but only to an empty or already-owned server
+    // slot — never clobbers a backup keyed to a DEK this device lacks.
+    invoke('sync_flush_backup', { force: true }).catch(console.error)
 
     await invoke('session_save').catch((e) => console.error('session_save failed:', e))
     window.location.href = '/'
@@ -199,8 +212,7 @@ export default function AuthPage() {
         setLoading(false)
         return
       }
-      invoke('sync_upload_vault').catch(console.error)
-      invoke('sync_upload_mls_state').catch(console.error)
+      invoke('sync_flush_backup', { force: true }).catch(console.error)
       await invoke('session_save').catch((e) => console.error('session_save failed:', e))
       navigate('/profile')
     } catch (err) {

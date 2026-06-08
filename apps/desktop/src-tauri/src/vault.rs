@@ -95,6 +95,16 @@ pub fn verify_fingerprint(
     Ok(())
 }
 
+/// Whether a serialized vault file (e.g. one downloaded from the server)
+/// fingerprints to the supplied DEK. Used to decide whether a server backup
+/// slot belongs to the key we hold before uploading over it, so we never
+/// clobber a backup keyed to a different DEK. Keeps `VaultFile` encapsulated.
+pub fn dek_matches_vault_bytes(vault_bytes: &[u8], dek: &[u8; 32]) -> Result<bool, String> {
+    let file = serde_json::from_slice::<VaultFile>(vault_bytes)
+        .map_err(|e| format!("Failed to parse vault bytes: {}", e))?;
+    Ok(file.dek_fp == fingerprint_dek(dek))
+}
+
 /// Create a fresh vault: random DEK + on-disk fingerprint marker. The DEK is
 /// returned to the caller, which is responsible for stashing it in the
 /// keyring (via session_save) and mounting the encrypted DB.

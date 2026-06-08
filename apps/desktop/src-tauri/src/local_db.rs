@@ -39,6 +39,9 @@ pub struct LocalDb {
     // replaced or the process drops the struct. Prevents the DEK from
     // lingering in freed memory after sign-out or app exit.
     pub dek: Mutex<Option<Zeroizing<[u8; 32]>>>,
+    // Set whenever a message is written; read+cleared by the throttled server
+    // backup so we only re-upload the DB when there's something new to save.
+    pub dirty: std::sync::atomic::AtomicBool,
 }
 
 impl Default for LocalDb {
@@ -46,7 +49,21 @@ impl Default for LocalDb {
         Self {
             conn: Mutex::new(None),
             dek: Mutex::new(None),
+            dirty: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+}
+
+impl LocalDb {
+    /// Flag the local DB as having unsaved-to-server changes.
+    pub fn mark_dirty(&self) {
+        self.dirty.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Atomically read and clear the dirty flag. Returns whether a backup is
+    /// warranted. On a failed upload the caller re-sets it via `mark_dirty`.
+    pub fn take_dirty(&self) -> bool {
+        self.dirty.swap(false, std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -61,27 +78,71 @@ pub(crate) fn clear_vault_state(local_db: &State<'_, LocalDb>) -> Result<(), Str
 }
 
 /// Open a SQLCipher database with the given DEK.
-fn open_encrypted_db(db_path: &Path, dek: &[u8; 32]) -> Result<Connection, String> {
-    let conn = Connection::open(db_path)
-        .map_err(|e| format!("Failed to open database: {}", e))?;
+///
+/// `create` controls whether a missing DB file is created. Fresh setup passes
+/// `true`; mounting an *existing* vault passes `false` so that a vanished DB
+/// file fails loudly instead of being silently re-created as an empty DB — the
+/// latter would mask data loss and defeat server-backup recovery (recovery
+/// keys off "no local DB present").
+fn open_encrypted_db(db_path: &Path, dek: &[u8; 32], create: bool) -> Result<Connection, String> {
+    let conn = if create {
+        Connection::open(db_path)
+            .map_err(|e| format!("Failed to open database: {}", e))?
+    } else {
+        use rusqlite::OpenFlags;
+        let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
+            | OpenFlags::SQLITE_OPEN_URI
+            | OpenFlags::SQLITE_OPEN_NO_MUTEX;
+        Connection::open_with_flags(db_path, flags)
+            .map_err(|e| format!("Failed to open database: {}", e))?
+    };
 
     // Pass raw hex key to SQLCipher — skips its internal PBKDF2
     let hex_key = format!("x'{}'", hex::encode(dek));
     conn.pragma_update(None, "key", &hex_key)
         .map_err(|e| format!("Failed to set encryption key: {}", e))?;
 
-    // Verify the key works by reading a page
-    conn.execute_batch("SELECT count(*) FROM sqlite_master;")
-        .map_err(|_| "Could not unlock database — DEK does not match".to_string())?;
+    // Set the busy timeout BEFORE the validation read. Otherwise a database
+    // that's momentarily locked (antivirus, backup tool, another process)
+    // makes the validation query fail immediately and gets misclassified as a
+    // wrong key — which upstream could treat as corruption and wipe history.
+    conn.busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|e| format!("Failed to set busy timeout: {}", e))?;
+
+    // Verify the key works by reading a page. Distinguish a genuine key
+    // mismatch from a transient lock/IO error so callers don't destroy data
+    // over something retryable.
+    if let Err(e) = conn.execute_batch("SELECT count(*) FROM sqlite_master;") {
+        return Err(classify_db_open_error(e));
+    }
 
     conn.execute_batch(
         "PRAGMA journal_mode=WAL;
-         PRAGMA synchronous=NORMAL;
-         PRAGMA busy_timeout=5000;",
+         PRAGMA synchronous=NORMAL;",
     )
     .map_err(|e| format!("Failed to set pragmas: {}", e))?;
 
     Ok(conn)
+}
+
+/// Map a failure of the key-validation read to a message that signals whether
+/// the failure is a genuine key mismatch (DB unrecoverable with this DEK) or a
+/// transient/retryable condition. Callers must NOT treat the transient case as
+/// corruption — see `session::restore`, which never wipes on a mount failure.
+fn classify_db_open_error(err: rusqlite::Error) -> String {
+    use rusqlite::ffi::ErrorCode;
+    if let rusqlite::Error::SqliteFailure(e, _) = &err {
+        match e.code {
+            ErrorCode::DatabaseBusy
+            | ErrorCode::DatabaseLocked
+            | ErrorCode::SystemIoFailure
+            | ErrorCode::CannotOpen => {
+                return format!("Database temporarily unavailable (locked or busy): {}", err);
+            }
+            _ => {}
+        }
+    }
+    "Could not unlock database — DEK does not match".to_string()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -182,7 +243,9 @@ fn mount_dek_inner(
     dek: Zeroizing<[u8; 32]>,
 ) -> Result<(), String> {
     let db_path = app_data.join(format!("messages_{}.db", user_id));
-    let conn = open_encrypted_db(&db_path, &dek)?;
+    // Mounting an existing vault — do not create a stray empty DB if the file
+    // has vanished; let it fail so recovery can step in.
+    let conn = open_encrypted_db(&db_path, &dek, false)?;
     init_schema(&conn)?;
 
     let mut guard = local_db.conn.lock_or_err()?;
@@ -294,8 +357,27 @@ pub fn setup_vault(
     }
 
     let dek = vault::create_vault(&app_data, &user_id)?;
-    let conn = open_encrypted_db(&db_path, &dek)?;
+    let conn = open_encrypted_db(&db_path, &dek, true)?;
     init_schema(&conn)?;
+
+    // Persist the DEK to the keyring NOW — before we migrate-and-delete the old
+    // unencrypted DB and before the separate `session_save` IPC runs. Otherwise
+    // a crash between this command and `session_save` would leave a vault file
+    // and an encrypted DB keyed to a DEK that exists only in process memory:
+    // permanent lockout, with `setup_vault` refusing to re-run. Persisting here
+    // makes the key durable before anything depends on it.
+    let email = {
+        let store = session_store.session.lock_or_err()?;
+        store.as_ref().map(|s| s.email.clone()).unwrap_or_default()
+    };
+    if let Err(e) = session::persist_dek_for_user(&user_id, &email, &dek) {
+        // The vault file is already on disk but its DEK never landed in the
+        // keyring. Roll the vault file back so this isn't a permanent "vault
+        // exists but can't be unlocked" lockout — the next attempt re-runs
+        // setup cleanly instead of erroring on the orphaned file.
+        let _ = std::fs::remove_file(vault::vault_path(&app_data, &user_id));
+        return Err(e);
+    }
 
     if unencrypted_path.exists() {
         let msgs = {
@@ -380,6 +462,13 @@ pub fn is_vault_unlocked(local_db: State<'_, LocalDb>) -> Result<bool, String> {
 /// written first via the atomic helper; only if that succeeds do we delete
 /// the old DB / MLS state. A write failure aborts cleanly with the user's
 /// previous state intact.
+///
+/// NOTE: this mints a NEW DEK. If/when this is wired to a UI button, it must
+/// also clear the server backup slot (server `DELETE /sync/all`, i.e.
+/// `delete_all_sync_data`) — otherwise the stale backup, keyed to the old DEK,
+/// keeps squatting the slot and `sync_flush_backup`'s ownership check will
+/// (correctly) refuse to back up the new vault forever. Currently this command
+/// has no frontend caller, so that failure mode isn't reachable yet.
 #[command]
 pub fn discard_and_reset_vault(
     app: AppHandle,
@@ -441,7 +530,9 @@ fn insert_message(conn: &rusqlite::Connection, msg: &LocalMessage) -> Result<(),
 pub fn store_message(db: &LocalDb, msg: &LocalMessage) -> Result<(), String> {
     let guard = db.conn.lock_or_err()?;
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
-    insert_message(conn, msg)
+    insert_message(conn, msg)?;
+    db.mark_dirty();
+    Ok(())
 }
 
 pub fn store_messages(db: &LocalDb, msgs: &[LocalMessage]) -> Result<(), String> {
@@ -449,6 +540,9 @@ pub fn store_messages(db: &LocalDb, msgs: &[LocalMessage]) -> Result<(), String>
     let conn = guard.as_ref().ok_or("Local DB not initialized")?;
     for msg in msgs {
         insert_message(conn, msg)?;
+    }
+    if !msgs.is_empty() {
+        db.mark_dirty();
     }
     Ok(())
 }
