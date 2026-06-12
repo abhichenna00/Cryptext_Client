@@ -69,7 +69,7 @@
   --border-strong: oklch(0.75 0.015 80);
   --fg: oklch(0.14 0.010 80);
   --fg-muted: oklch(0.42 0.012 80);
-  --fg-dim: oklch(0.52 0.012 80);
+  --fg-dim: oklch(0.60 0.012 80);
   --chrome: oklch(0.95 0.010 80);
   --chrome-fg: oklch(0.14 0.010 80);
   --bubble-me: oklch(0.14 0.010 80);
@@ -135,7 +135,7 @@
   --border-strong: oklch(0.40 0.016 80);
   --fg: oklch(0.97 0.006 80);
   --fg-muted: oklch(0.70 0.010 80);
-  --fg-dim: oklch(0.60 0.012 80);
+  --fg-dim: oklch(0.52 0.012 80);
   --chrome: oklch(0.09 0.010 80);
   --chrome-fg: oklch(0.96 0.006 80);
   --bubble-me: oklch(0.97 0.006 80);
@@ -184,7 +184,6 @@
 /* Accent presets. Apply to any ancestor of the region you want re-tinted.
    Default root is ember; add e.g. `accent-indigo` to <html> or <body>
    to theme the whole app. */
-.accent-ember    { --brand: oklch(0.70 0.18 47);  --brand-fg: oklch(0.21 0.02 60); --brand-soft: oklch(0.70 0.18 47 / 0.14); }
 .accent-slate    { --brand: oklch(0.65 0.04 80); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.04 80 / 0.14); }
 .accent-indigo   { --brand: oklch(0.65 0.14 265); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.14 265 / 0.14); }
 .accent-emerald  { --brand: oklch(0.65 0.14 150); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.14 150 / 0.14); }
