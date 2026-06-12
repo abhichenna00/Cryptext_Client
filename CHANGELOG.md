@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The icon rail now has separate Friends and Messages buttons. Friends returns to the home panel, Messages jumps to the most recent conversation, and the active indicator follows the current view.
 - An Appearance section in settings. It offers brand accent presets including a custom color picker, a sidebar tone toggle that either follows the canvas palette or pins the dark chrome, and an opt-in "floating glass" translucency effect for the call picture-in-picture window and the jump-to-bottom pill. Choices apply instantly and persist on the device.
 - Keyboard focus is now visible on controls that previously had no focus styling of their own, using a brand-colored outline.
 - The group chat page gained a collapsible member panel with a name filter, online and offline sections, and per-member status labels. Message text now highlights @mentions.
