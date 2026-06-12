@@ -88,6 +88,21 @@ export default function HomePage({ onSignOut }: HomePageProps) {
     })()
   }, [])
 
+  // Rail view: the /home index is the Friends panel; anything with an open
+  // chat or group counts as Messages.
+  const railView: 'friends' | 'messages' =
+    location.pathname === '/home' ? 'friends' : 'messages'
+
+  const handleSelectDM = () => {
+    const recent = recentChats[0]
+    if (!recent) return
+    if (recent.conversation_type === 'group') {
+      navigate(`/home/group/${recent.conversation_id}`)
+    } else if (recent.other_user_id) {
+      navigate(`/home/chat/${recent.other_user_id}`)
+    }
+  }
+
   const handleOpenChat = (chat: ConversationWithDetails) => {
     if (chat.unread_count > 0) {
       clearUnreadFor(chat.conversation_id)
@@ -122,7 +137,9 @@ export default function HomePage({ onSignOut }: HomePageProps) {
     <div className="grid h-screen grid-cols-[52px_280px_1fr] bg-bg text-fg">
       <IconRail
         theme={theme}
-        onSelectDM={() => navigate('/home')}
+        view={railView}
+        onSelectFriends={() => navigate('/home')}
+        onSelectDM={handleSelectDM}
         onToggleTheme={toggleTheme}
         onOpenSettings={() => setEditProfileOpen(true)}
         onSignOut={onSignOut}

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- The icon rail now has separate Friends and Messages buttons. Friends returns to the home panel, Messages jumps to the most recent conversation, and the active indicator follows the current view.
 - Voice and video calls now connect across restrictive networks. Before each call the desktop client fetches STUN servers and short-lived TURN relay credentials from a new authenticated server endpoint, so a call still completes when both peers are behind symmetric NAT and no direct peer-to-peer path exists. The relay credentials are minted server-side and are never embedded in the client.
 - The desktop client now backs up its encrypted message database and MLS state to the server on a throttled schedule, and can restore them after local data loss. When the local vault files are missing but the device's encryption key is still present in the OS keyring, the client re-downloads and remounts the backup instead of starting with an empty history. A backup is only written to a server slot that is empty or already belongs to the current key, so setting up a fresh vault on a new device cannot overwrite a backup that another device might still recover.
 
