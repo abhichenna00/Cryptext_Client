@@ -15,6 +15,7 @@ import {
 } from 'lucide-react'
 
 import Avatar from '@/components/Avatar'
+import AppearanceSection from '@/components/settings/AppearanceSection'
 import AudioVideoSection from '@/components/settings/AudioVideoSection'
 import { Button } from '@/components/ui/button'
 import { ErrorMessage } from '@/components/ui/ErrorMessage'
@@ -223,6 +224,7 @@ export default function EditProfileDialog({ open, onOpenChange, onSaved }: EditP
 
   const isSaveDisabled = !username.trim() || !nickname.trim() || loading || uploadingImage
   const isProfile = section === 'profile'
+  const isAppearance = section === 'appearance'
   const isAudioVideo = section === 'audio-video'
   const currentSectionLabel = SECTIONS.find((s) => s.id === section)?.label || 'Settings'
 
@@ -280,6 +282,11 @@ export default function EditProfileDialog({ open, onOpenChange, onSaved }: EditP
             {isProfile && (
               <p className="mt-0.5 text-[12.5px] text-fg-muted">
                 How you appear to friends across NShroud.
+              </p>
+            )}
+            {isAppearance && (
+              <p className="mt-0.5 text-[12.5px] text-fg-muted">
+                Pick a preset or fine-tune the mode, accent, and sidebar tone.
               </p>
             )}
           </header>
@@ -394,6 +401,8 @@ export default function EditProfileDialog({ open, onOpenChange, onSaved }: EditP
 
                 <ErrorMessage error={error} />
               </div>
+            ) : isAppearance ? (
+              <AppearanceSection />
             ) : isAudioVideo ? (
               <AudioVideoSection />
             ) : (

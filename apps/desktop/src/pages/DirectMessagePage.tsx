@@ -3,7 +3,6 @@ import { invoke } from '@tauri-apps/api/core'
 import { useNavigate, useParams } from 'react-router-dom'
 import {
   ArrowDown,
-  Lock,
   MoreVertical,
   Paperclip,
   Send,
@@ -81,15 +80,6 @@ function DaySeparator({ timestamp }: { timestamp: number }) {
       </span>
       <div className="h-px flex-1 bg-border" />
     </div>
-  )
-}
-
-function EncryptionChip() {
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-[3px] font-mono text-[10.5px] tracking-[0.04em] text-[var(--ok)]">
-      <Lock size={10} strokeWidth={2} />
-      Encrypted
-    </span>
   )
 }
 
@@ -496,7 +486,6 @@ export default function DirectMessagePage() {
               <CallButton conversationId={conversationId} peerUserId={friendId} mode="video" />
             </>
           )}
-          <EncryptionChip />
           <button
             type="button"
             className="grid size-7 place-items-center rounded-md text-fg-muted transition-colors hover:bg-surface-2 hover:text-fg"
@@ -614,7 +603,7 @@ export default function DirectMessagePage() {
           <button
             onClick={scrollToBottom}
             className={cn(
-              'absolute right-4 bottom-4 flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-[12.5px] text-fg shadow-[var(--shadow-card)]',
+              'jump-pill absolute right-4 bottom-4 flex items-center gap-2 rounded-full border border-border bg-surface px-3 py-1.5 text-[12.5px] text-fg shadow-[var(--shadow-card)]',
               'hover:bg-surface-2 transition-colors',
             )}
           >

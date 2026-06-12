@@ -9,11 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - The icon rail now has separate Friends and Messages buttons. Friends returns to the home panel, Messages jumps to the most recent conversation, and the active indicator follows the current view.
+- An Appearance section in settings. It offers brand accent presets including a custom color picker, a sidebar tone toggle that either follows the canvas palette or pins the dark chrome, and an opt-in "floating glass" translucency effect for the call picture-in-picture window and the jump-to-bottom pill. Choices apply instantly and persist on the device.
+- Keyboard focus is now visible on controls that previously had no focus styling of their own, using a brand-colored outline.
 - The group chat page gained a collapsible member panel with a name filter, online and offline sections, and per-member status labels. Message text now highlights @mentions.
 - Voice and video calls now connect across restrictive networks. Before each call the desktop client fetches STUN servers and short-lived TURN relay credentials from a new authenticated server endpoint, so a call still completes when both peers are behind symmetric NAT and no direct peer-to-peer path exists. The relay credentials are minted server-side and are never embedded in the client.
 - The desktop client now backs up its encrypted message database and MLS state to the server on a throttled schedule, and can restore them after local data loss. When the local vault files are missing but the device's encryption key is still present in the OS keyring, the client re-downloads and remounts the backup instead of starting with an empty history. A backup is only written to a server slot that is empty or already belongs to the current key, so setting up a fresh vault on a new device cannot overwrite a backup that another device might still recover.
 
 ### Changed
+- The desktop theme's neutral and foreground colors shifted from a blue tint to warm grey in both light and dark modes, and the default brand accent changed from slate to the NShroud ember orange.
+- The sign-in page's flickering grid backdrop now renders in the ember accent color.
+- The "Encrypted" chip was removed from the direct-message header.
 - The group chat page was rebuilt on the design tokens shared with the rest of the app, replacing the last legacy stylesheet, which is now removed.
 
 ### Fixed
