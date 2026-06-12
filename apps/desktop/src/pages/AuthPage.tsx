@@ -312,9 +312,9 @@ export default function AuthPage() {
         >
           <FlickeringGrid
             squareSize={2}
-            gridGap={8}
-            color="rgb(140, 160, 220)"
-            maxOpacity={0.5}
+            gridGap={4}
+            color="rgb(255, 123, 0)"
+            maxOpacity={0.81}
             flickerChance={0.35}
             width={windowSize.width}
             height={windowSize.height}

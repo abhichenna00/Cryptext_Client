@@ -215,7 +215,7 @@ export default function FloatingCallWindow() {
         cursor: dragging ? 'grabbing' : 'grab',
         touchAction: 'none',
       }}
-      className="overflow-hidden rounded-lg border border-white/10 bg-black text-white shadow-lg select-none"
+      className="call-pip overflow-hidden rounded-lg border border-white/10 bg-black text-white shadow-lg select-none"
     >
       {isVideo ? (
         <div className="group relative h-full w-full">

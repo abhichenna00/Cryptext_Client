@@ -67,25 +67,25 @@
   --surface-3: oklch(0.92 0.012 80);
   --border: oklch(0.88 0.012 80);
   --border-strong: oklch(0.75 0.015 80);
-  --fg: oklch(0.14 0.010 260);
-  --fg-muted: oklch(0.42 0.012 260);
-  --fg-dim: oklch(0.60 0.012 260);
+  --fg: oklch(0.14 0.010 80);
+  --fg-muted: oklch(0.42 0.012 80);
+  --fg-dim: oklch(0.52 0.012 80);
   --chrome: oklch(0.95 0.010 80);
-  --chrome-fg: oklch(0.14 0.010 260);
-  --bubble-me: oklch(0.14 0.010 260);
+  --chrome-fg: oklch(0.14 0.010 80);
+  --bubble-me: oklch(0.14 0.010 80);
   --bubble-me-fg: oklch(0.98 0.004 80);
   --bubble-them: oklch(1 0 0);
-  --bubble-them-fg: oklch(0.14 0.010 260);
+  --bubble-them-fg: oklch(0.14 0.010 80);
 
   /* Status */
   --ok: oklch(0.65 0.15 150);
   --warn: oklch(0.72 0.16 70);
   --danger: oklch(0.58 0.22 25);
 
-  /* Brand (default accent: slate; override by adding .accent-* to a root) */
-  --brand: oklch(0.65 0.04 260);
-  --brand-fg: oklch(0.985 0 0);
-  --brand-soft: oklch(0.65 0.04 260 / 0.14);
+  /* Brand (default accent: NShroud ember orange; override by adding .accent-* to a root) */
+  --brand: oklch(0.70 0.18 47);
+  --brand-fg: oklch(0.21 0.02 60);
+  --brand-soft: oklch(0.70 0.18 47 / 0.14);
 
   /* ----- shadcn compatibility aliases -----
      Existing shadcn components (button.tsx, dialog.tsx, etc.) reference
@@ -127,20 +127,20 @@
 
 /* ----- Redesign · dark ----- */
 .dark {
-  --bg: oklch(0.125 0.008 260);
-  --surface: oklch(0.155 0.010 260);
-  --surface-2: oklch(0.19 0.012 260);
-  --surface-3: oklch(0.23 0.014 260);
-  --border: oklch(0.27 0.014 260);
-  --border-strong: oklch(0.40 0.016 260);
+  --bg: oklch(0.125 0.008 80);
+  --surface: oklch(0.155 0.010 80);
+  --surface-2: oklch(0.19 0.012 80);
+  --surface-3: oklch(0.23 0.014 80);
+  --border: oklch(0.27 0.014 80);
+  --border-strong: oklch(0.40 0.016 80);
   --fg: oklch(0.97 0.006 80);
   --fg-muted: oklch(0.70 0.010 80);
-  --fg-dim: oklch(0.52 0.012 80);
-  --chrome: oklch(0.09 0.010 260);
+  --fg-dim: oklch(0.60 0.012 80);
+  --chrome: oklch(0.09 0.010 80);
   --chrome-fg: oklch(0.96 0.006 80);
   --bubble-me: oklch(0.97 0.006 80);
-  --bubble-me-fg: oklch(0.14 0.010 260);
-  --bubble-them: oklch(0.205 0.012 260);
+  --bubble-me-fg: oklch(0.14 0.010 80);
+  --bubble-them: oklch(0.205 0.012 80);
   --bubble-them-fg: oklch(0.97 0.006 80);
   --ok: oklch(0.72 0.17 150);
   --warn: oklch(0.80 0.16 75);
@@ -156,14 +156,55 @@
   --chart-5: oklch(0.645 0.246 16.439);
 }
 
+/* `.light` mirrors the :root light palette so a subtree can be re-scoped to
+   light inside a dark app (used by the Appearance theme previews, which render
+   both modes side by side regardless of the active one). */
+.light {
+  --bg: oklch(0.985 0.006 80);
+  --surface: oklch(0.975 0.008 80);
+  --surface-2: oklch(0.95 0.010 80);
+  --surface-3: oklch(0.92 0.012 80);
+  --border: oklch(0.88 0.012 80);
+  --border-strong: oklch(0.75 0.015 80);
+  --fg: oklch(0.14 0.010 80);
+  --fg-muted: oklch(0.42 0.012 80);
+  --fg-dim: oklch(0.52 0.012 80);
+  --chrome: oklch(0.95 0.010 80);
+  --chrome-fg: oklch(0.14 0.010 80);
+  --bubble-me: oklch(0.14 0.010 80);
+  --bubble-me-fg: oklch(0.98 0.004 80);
+  --bubble-them: oklch(1 0 0);
+  --bubble-them-fg: oklch(0.14 0.010 80);
+  --ok: oklch(0.65 0.15 150);
+  --warn: oklch(0.72 0.16 70);
+  --danger: oklch(0.58 0.22 25);
+  --shadow-card: 0 8px 32px -8px oklch(0 0 0 / 0.12);
+}
+
 /* Accent presets. Apply to any ancestor of the region you want re-tinted.
-   Default root is slate; add e.g. `accent-indigo` to <html> or <body>
+   Default root is ember; add e.g. `accent-indigo` to <html> or <body>
    to theme the whole app. */
-.accent-slate    { --brand: oklch(0.65 0.04 260); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.04 260 / 0.14); }
+.accent-ember    { --brand: oklch(0.70 0.18 47);  --brand-fg: oklch(0.21 0.02 60); --brand-soft: oklch(0.70 0.18 47 / 0.14); }
+.accent-slate    { --brand: oklch(0.65 0.04 80); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.04 80 / 0.14); }
 .accent-indigo   { --brand: oklch(0.65 0.14 265); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.14 265 / 0.14); }
 .accent-emerald  { --brand: oklch(0.65 0.14 150); --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.14 150 / 0.14); }
 .accent-amber    { --brand: oklch(0.72 0.14 70);  --brand-fg: oklch(0.15 0 0);  --brand-soft: oklch(0.72 0.14 70 / 0.14); }
 .accent-rose     { --brand: oklch(0.65 0.14 18);  --brand-fg: oklch(0.985 0 0); --brand-soft: oklch(0.65 0.14 18 / 0.14); }
+
+/* Custom accent — `--brand` / `--brand-fg` are injected as inline styles on
+   <html> by useAppearance; the soft wash derives from whatever was set. */
+.accent-custom   { --brand-soft: color-mix(in srgb, var(--brand) 16%, transparent); }
+
+/* ============================================================
+   CHROME TONE — sidebar / icon-rail surface.
+   Default ("match") keeps the chrome in the canvas palette, so light
+   mode is fully light. "Contrast" pins the dark chrome regardless of
+   mode — the dark-sidebar-on-light-canvas look (Ink preset).
+   ============================================================ */
+.chrome-contrast {
+  --chrome: oklch(0.09 0.010 80);
+  --chrome-fg: oklch(0.96 0.006 80);
+}
 
 /* ============================================================
    LAYOUT GUARDS
@@ -305,4 +346,39 @@ body {
 
 .dark [data-slot="dialog-content"] {
   background-color: var(--surface-2);
+}
+
+/* ============================================================
+   ACCESSIBILITY — visible keyboard focus.
+   Element-selector :focus-visible loses to any component that sets its
+   own Tailwind `focus:outline-none` + ring classes (class+pseudo beats
+   element+pseudo), so this only fills the gaps: controls with no focus
+   styling of their own become keyboard-reachable instead of invisible.
+   ============================================================ */
+a:focus-visible, button:focus-visible, input:focus-visible,
+textarea:focus-visible, select:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 2px;
+}
+
+/* ============================================================
+   GLASS — opt-in (Settings ▸ Appearance ▸ Floating glass).
+   Restrained translucency on FLOATING elements only — the call PiP and
+   the jump-to-bottom pill. Never applied to message surfaces, so body
+   text stays fully crisp. Default is OFF.
+   ============================================================ */
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .glass-on .call-pip {
+    background: color-mix(in oklch, var(--surface) 62%, transparent);
+    -webkit-backdrop-filter: blur(18px) saturate(1.3);
+    backdrop-filter: blur(18px) saturate(1.3);
+    border-color: oklch(1 0 0 / 0.14);
+  }
+  .glass-on .jump-pill {
+    background: color-mix(in oklch, var(--surface) 70%, transparent);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    backdrop-filter: blur(10px) saturate(1.2);
+  }
+  /* light canvases read the edge highlight better as a hairline dark */
+  .glass-on:not(.dark) .call-pip { border-color: oklch(0 0 0 / 0.10); }
 }
